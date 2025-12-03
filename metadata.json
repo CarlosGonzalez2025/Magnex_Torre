@@ -1,0 +1,5 @@
+{
+  "name": "FleetCommand Center",
+  "description": "A centralized fleet management dashboard integrating FAGOR and COLTRACK GPS systems. Features real-time tracking, unified status monitoring, and KPI analytics.",
+  "requestFramePermissions": []
+}
