@@ -1,13 +1,13 @@
 import React, { useState } from 'react';
 import { Alert, AlertSeverity, AlertType } from '../types';
-import { AlertTriangle, AlertCircle, Bell, BellRing, Send, CheckCircle, Clock, MapPin, User, Gauge } from 'lucide-react';
+import { AlertTriangle, AlertCircle, Bell, BellRing, Copy, CheckCircle, Clock, MapPin, User, Gauge } from 'lucide-react';
 
 interface AlertPanelProps {
   alerts: Alert[];
-  onSendWhatsApp?: (alert: Alert) => void;
+  onCopyAlert?: (alert: Alert) => void;
 }
 
-export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onSendWhatsApp }) => {
+export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert }) => {
   const [selectedSeverity, setSelectedSeverity] = useState<'ALL' | AlertSeverity>('ALL');
   const [selectedType, setSelectedType] = useState<'ALL' | AlertType>('ALL');
 
@@ -139,32 +139,18 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onSendWhatsApp }
 
                   {/* Acciones */}
                   <div className="flex items-center gap-3 pt-2 border-t border-current border-opacity-20">
-                    {onSendWhatsApp && (
+                    {onCopyAlert && (
                       <button
-                        onClick={() => onSendWhatsApp(alert)}
-                        disabled={alert.sent}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                          alert.sent
-                            ? 'bg-green-100 text-green-700 cursor-not-allowed'
-                            : 'bg-green-600 text-white hover:bg-green-700 active:scale-95'
-                        }`}
+                        onClick={() => onCopyAlert(alert)}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all bg-blue-600 text-white hover:bg-blue-700 active:scale-95"
                       >
-                        {alert.sent ? (
-                          <>
-                            <CheckCircle className="w-4 h-4" />
-                            Enviada
-                          </>
-                        ) : (
-                          <>
-                            <Send className="w-4 h-4" />
-                            Enviar WhatsApp
-                          </>
-                        )}
+                        <Copy className="w-4 h-4" />
+                        Copiar Alerta
                       </button>
                     )}
                     {alert.sent && alert.sentAt && (
                       <span className="text-xs text-slate-500">
-                        Enviada: {new Date(alert.sentAt).toLocaleString()}
+                        Copiada: {new Date(alert.sentAt).toLocaleString()}
                         {alert.sentBy && ` por ${alert.sentBy}`}
                       </span>
                     )}
