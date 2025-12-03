@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { LayoutDashboard, Map as MapIcon, RefreshCw, Search, Server, Wifi, Radio, AlertTriangle, XCircle, CloudOff, CheckCircle, Database } from 'lucide-react';
-import { Vehicle, ApiSource, VehicleStatus, FilterType, StatusFilterType } from './types';
+import { LayoutDashboard, Map as MapIcon, RefreshCw, Search, Server, Wifi, Radio, AlertTriangle, XCircle, CloudOff, CheckCircle, Database, Bell } from 'lucide-react';
+import { Vehicle, ApiSource, VehicleStatus, FilterType, StatusFilterType, Alert } from './types';
 import { KpiCards } from './components/KpiCards';
 import { VehicleTable } from './components/VehicleTable';
 import FleetMap from './components/FleetMap';
+import { AlertPanel } from './components/AlertPanel';
 import { fetchFleetData, FleetResponse } from './services/fleetService';
+import { detectAlerts, saveAlertsToStorage, getAlertsFromStorage, markAlertAsSent, cleanOldAlerts } from './services/alertService';
 
 // Constants
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
@@ -13,11 +15,12 @@ export default function App() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
-  const [activeTab, setActiveTab] = useState<'table' | 'map'>('table');
+  const [activeTab, setActiveTab] = useState<'table' | 'map' | 'alerts'>('table');
   const [dataSource, setDataSource] = useState<'REAL' | 'DIRECT_API' | 'PARTIAL_DIRECT' | 'ERROR' | 'MOCK'>('REAL');
   const [apiStatus, setApiStatus] = useState<FleetResponse['apiStatus']>();
   const [vehicleCounts, setVehicleCounts] = useState<FleetResponse['vehicleCounts']>();
   const [showApiDetails, setShowApiDetails] = useState(false);
+  const [alerts, setAlerts] = useState<Alert[]>([]);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -34,6 +37,32 @@ export default function App() {
 
     // Always set data, even if it is fallback data
     setVehicles(result.data);
+
+    // Detect and process alerts
+    const newAlerts: Alert[] = [];
+    result.data.forEach(vehicle => {
+      const vehicleAlerts = detectAlerts(vehicle);
+      newAlerts.push(...vehicleAlerts);
+    });
+
+    // Combine with existing alerts from storage
+    const existingAlerts = getAlertsFromStorage();
+    const allAlerts = [...newAlerts, ...existingAlerts];
+
+    // Remove duplicates (same vehicle + same type within last 5 minutes)
+    const uniqueAlerts = allAlerts.filter((alert, index, self) => {
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+      return index === self.findIndex(a =>
+        a.vehicleId === alert.vehicleId &&
+        a.type === alert.type &&
+        new Date(a.timestamp) >= fiveMinutesAgo
+      );
+    });
+
+    setAlerts(uniqueAlerts);
+    saveAlertsToStorage(uniqueAlerts);
+    cleanOldAlerts();
+
     setLastUpdate(new Date());
     setLoading(false);
   }, []);
@@ -132,6 +161,36 @@ export default function App() {
     if (dataSource === 'ERROR') return 'Offline';
     return '...';
   };
+
+  // Handle WhatsApp sending (placeholder - will implement in Phase 2)
+  const handleSendWhatsApp = (alert: Alert) => {
+    // TODO: Implement WhatsApp API integration
+    const message = `🚨 *ALERTA DE FLOTA*\n\n` +
+      `Tipo: ${alert.type}\n` +
+      `Vehículo: ${alert.plate}\n` +
+      `Conductor: ${alert.driver}\n` +
+      `Detalles: ${alert.details}\n` +
+      `Velocidad: ${alert.speed} km/h\n` +
+      `Ubicación: ${alert.location}\n` +
+      `Hora: ${new Date(alert.timestamp).toLocaleString()}\n` +
+      (alert.contract ? `\nContrato: ${alert.contract}` : '');
+
+    console.log('WhatsApp message to send:', message);
+
+    // Mark as sent (temporary - will be handled by API in Phase 2)
+    markAlertAsSent(alert.id, 'Usuario'); // Replace 'Usuario' with actual user name
+
+    // Reload alerts to show updated state
+    setAlerts(getAlertsFromStorage());
+
+    // Show user feedback
+    alert('Función de WhatsApp en desarrollo.\n\nEn la Fase 2 se implementará:\n- Envío real por WhatsApp\n- Registro en base de datos\n- Tracking completo');
+  };
+
+  const criticalAlertsCount = useMemo(() =>
+    alerts.filter(a => a.severity === 'critical' && !a.sent).length,
+    [alerts]
+  );
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
@@ -316,6 +375,18 @@ export default function App() {
               <MapIcon className="w-4 h-4" />
               Mapa
             </button>
+            <button
+              onClick={() => setActiveTab('alerts')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'alerts' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+            >
+              <Bell className="w-4 h-4" />
+              Alertas
+              {criticalAlertsCount > 0 && (
+                <span className="bg-red-500 text-white text-xs px-2 py-0.5 rounded-full font-bold">
+                  {criticalAlertsCount}
+                </span>
+              )}
+            </button>
           </div>
 
           {/* Filters Group */}
@@ -458,13 +529,11 @@ export default function App() {
           {/* Render content */}
           {(vehicles.length > 0 || loading) ? (
              <>
-               {activeTab === 'table' ? (
-                  <VehicleTable vehicles={filteredVehicles} />
-                ) : (
-                  <FleetMap vehicles={filteredVehicles} />
-                )}
-                
-                {filteredVehicles.length === 0 && !loading && (
+               {activeTab === 'table' && <VehicleTable vehicles={filteredVehicles} />}
+               {activeTab === 'map' && <FleetMap vehicles={filteredVehicles} />}
+               {activeTab === 'alerts' && <AlertPanel alerts={alerts} onSendWhatsApp={handleSendWhatsApp} />}
+
+                {activeTab !== 'alerts' && filteredVehicles.length === 0 && !loading && (
                   <div className="text-center py-20">
                     <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-slate-100 mb-4">
                       <Search className="w-8 h-8 text-slate-400" />

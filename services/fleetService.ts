@@ -79,31 +79,31 @@ const fetchColtrackViaAPI = async (): Promise<Vehicle[]> => {
     }
 
     return result.data.map((record: any, index: number) => {
-      const speed = parseFloat(record.Velocidad || '0');
-      const ignicion = record.Ignicion === 'ON' || record.Ignicion === '1' || record.Ignicion === true;
+      const speed = parseFloat(record.VELOCIDAD || record.Velocidad || '0');
+      const ignicion = record.IGNICION === 'ON' || record.Ignicion === 'ON' || record.Ignicion === '1' || record.Ignicion === true;
       const status = determineStatus(speed, ignicion);
 
-      // En Coltrack: "Nombre" = placa, "Nombre Conductor" = conductor
-      const plate = record.Nombre || 'UNKNOWN';
-      const driver = record['Nombre Conductor'] || 'Sin Asignar';
+      // Coltrack usa campos en MAYÚSCULAS (según código de referencia)
+      const plate = record.PLACA || record.Placa || 'UNKNOWN';
+      const driver = record.CONDUCTOR || record.Conductor || 'Sin Asignar';
       const contract = determineContract(record, ApiSource.COLTRACK);
 
       return {
         id: `COL-${plate}-${index}`,
         plate: plate,
         source: ApiSource.COLTRACK,
-        latitude: parseFloat(record.Latitud || '0'),
-        longitude: parseFloat(record.Longitud || '0'),
+        latitude: parseFloat(record.LATITUD || record.Latitud || '0'),
+        longitude: parseFloat(record.LONGITUD || record.Longitud || '0'),
         speed: speed,
         status: status,
         driver: driver,
-        fuelLevel: parseInt(record.Combustible || '0', 10),
+        fuelLevel: parseInt(record.COMBUSTIBLE || record.Combustible || '0', 10),
         lastUpdate: new Date().toISOString(),
-        location: record.Ciudad || record.Ubicacion || 'Desconocido',
-        odometer: parseFloat(record.Odometro || '0'),
+        location: record.CIUDAD || record.Ciudad || record.Ubicacion || 'Desconocido',
+        odometer: parseFloat(record.ODOMETRO || record.Odometro || '0'),
         contract: contract,
-        event: record.Evento || record.EVENTO || '',
-        vehicleType: record.Tipo || record.TipoVehiculo || ''
+        event: record.EVENTO || record.Evento || '',
+        vehicleType: record.TIPO || record.Tipo || record.TipoVehiculo || ''
       };
     });
 
