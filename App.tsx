@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { LayoutDashboard, Map as MapIcon, RefreshCw, Search, Server, Wifi, Radio, AlertTriangle, XCircle, CloudOff, CheckCircle, Database, Bell, History, BarChart3 } from 'lucide-react';
+import { LayoutDashboard, Map as MapIcon, RefreshCw, Search, Server, Wifi, Radio, AlertTriangle, XCircle, CloudOff, CheckCircle, Database, Bell, History, BarChart3, ClipboardCheck, Calendar } from 'lucide-react';
 import { Vehicle, ApiSource, VehicleStatus, FilterType, StatusFilterType, Alert } from './types';
 import { KpiCards } from './components/KpiCards';
 import { VehicleTable } from './components/VehicleTable';
@@ -7,8 +7,10 @@ import FleetMap from './components/FleetMap';
 import { AlertPanel } from './components/AlertPanel';
 import { AlertHistory } from './components/AlertHistory';
 import { Analytics } from './components/Analytics';
+import { Inspections } from './components/Inspections';
+import { RouteSchedules } from './components/RouteSchedules';
 import { fetchFleetData, FleetResponse } from './services/fleetService';
-import { detectAlerts, saveAlertsToStorage, getAlertsFromStorage, getUnsavedAlerts, markAlertAsSent, markAlertAsSaved, cleanOldAlerts } from './services/alertService';
+import { detectAlerts, saveAlertsToStorage, getAlertsFromStorage, getUnsavedAlerts, markAlertAsSent, markAlertAsSaved, cleanOldAlerts, processVehiclesForIdleDetection } from './services/alertService';
 import { saveAlertToDatabase } from './services/databaseService';
 
 // Constants
@@ -44,7 +46,7 @@ export default function App() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
-  const [activeTab, setActiveTab] = useState<'table' | 'map' | 'alerts' | 'history' | 'analytics'>('table');
+  const [activeTab, setActiveTab] = useState<'table' | 'map' | 'alerts' | 'history' | 'analytics' | 'inspections' | 'schedules'>('table');
   const [dataSource, setDataSource] = useState<'REAL' | 'DIRECT_API' | 'PARTIAL_DIRECT' | 'ERROR' | 'MOCK'>('REAL');
   const [apiStatus, setApiStatus] = useState<FleetResponse['apiStatus']>();
   const [vehicleCounts, setVehicleCounts] = useState<FleetResponse['vehicleCounts']>();
@@ -69,6 +71,9 @@ export default function App() {
 
     // Always set data, even if it is fallback data
     setVehicles(result.data);
+
+    // Process vehicles for idle detection (tracks ignition and idle time)
+    await processVehiclesForIdleDetection(result.data);
 
     // Detect and process alerts
     const newAlerts: Alert[] = [];
@@ -474,6 +479,20 @@ export default function App() {
               <BarChart3 className="w-4 h-4" />
               Análisis
             </button>
+            <button
+              onClick={() => setActiveTab('inspections')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'inspections' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+            >
+              <ClipboardCheck className="w-4 h-4" />
+              Inspecciones
+            </button>
+            <button
+              onClick={() => setActiveTab('schedules')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'schedules' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+            >
+              <Calendar className="w-4 h-4" />
+              Cronogramas
+            </button>
           </div>
 
           {/* Filters Group */}
@@ -621,8 +640,10 @@ export default function App() {
                {activeTab === 'alerts' && <AlertPanel alerts={alerts} onCopyAlert={handleCopyAlert} onSaveAlert={handleSaveAlert} />}
                {activeTab === 'history' && <AlertHistory onRefresh={fetchData} />}
                {activeTab === 'analytics' && <Analytics vehicles={vehicles} />}
+               {activeTab === 'inspections' && <Inspections />}
+               {activeTab === 'schedules' && <RouteSchedules />}
 
-                {activeTab !== 'alerts' && activeTab !== 'history' && activeTab !== 'analytics' && filteredVehicles.length === 0 && !loading && (
+                {activeTab !== 'alerts' && activeTab !== 'history' && activeTab !== 'analytics' && activeTab !== 'inspections' && activeTab !== 'schedules' && filteredVehicles.length === 0 && !loading && (
                   <div className="text-center py-20">
                     <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-slate-100 mb-4">
                       <Search className="w-8 h-8 text-slate-400" />

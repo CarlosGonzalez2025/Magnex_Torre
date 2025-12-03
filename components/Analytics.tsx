@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { BarChart3, TrendingUp, Users, AlertTriangle, CheckCircle, Activity, FileText, Target } from 'lucide-react';
+import { BarChart3, TrendingUp, Users, AlertTriangle, CheckCircle, Activity, FileText, Target, Clock } from 'lucide-react';
 import { Vehicle } from '../types';
 import { getAllSavedAlerts, getAlertStatistics, SavedAlertWithPlans } from '../services/databaseService';
+import { getIdleTimeByContract, type IdleTimeRecord } from '../services/towerControlService';
+import { getCurrentIdleStats } from '../services/alertService';
 
 interface AnalyticsProps {
   vehicles: Vehicle[];
@@ -29,10 +31,19 @@ interface VehicleAlertStats {
 export const Analytics: React.FC<AnalyticsProps> = ({ vehicles }) => {
   const [savedAlerts, setSavedAlerts] = useState<SavedAlertWithPlans[]>([]);
   const [alertStats, setAlertStats] = useState<any>(null);
+  const [idleRecords, setIdleRecords] = useState<IdleTimeRecord[]>([]);
+  const [currentIdleVehicles, setCurrentIdleVehicles] = useState<Array<{ plate: string; durationMinutes: number; driver?: string; location?: string }>>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     loadAnalytics();
+
+    // Actualizar vehículos en ralentí cada 30 segundos
+    const interval = setInterval(() => {
+      setCurrentIdleVehicles(getCurrentIdleStats());
+    }, 30000);
+
+    return () => clearInterval(interval);
   }, []);
 
   const loadAnalytics = async () => {
@@ -49,6 +60,32 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles }) => {
     if (statsResult.success && statsResult.data) {
       setAlertStats(statsResult.data);
     }
+
+    // Cargar datos de ralentí del último mes
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - 30);
+
+    // Cargar idle records de todos los contratos
+    const contracts = new Set(vehicles.map(v => v.contract).filter(Boolean));
+    const allIdleRecords: IdleTimeRecord[] = [];
+
+    for (const contract of contracts) {
+      const idleResult = await getIdleTimeByContract(
+        contract,
+        startDate.toISOString(),
+        endDate.toISOString()
+      );
+
+      if (idleResult.success && idleResult.data?.records) {
+        allIdleRecords.push(...idleResult.data.records);
+      }
+    }
+
+    setIdleRecords(allIdleRecords);
+
+    // Cargar vehículos actualmente en ralentí
+    setCurrentIdleVehicles(getCurrentIdleStats());
 
     setLoading(false);
   };
@@ -150,6 +187,10 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles }) => {
       ? Math.round((completedPlans / totalPlans) * 100)
       : 0;
 
+    // Ralentí
+    const totalIdleMinutes = idleRecords.reduce((sum, record) => sum + (record.duration_minutes || 0), 0);
+    const totalIdleHours = Math.round((totalIdleMinutes / 60) * 10) / 10;
+
     return {
       totalVehicles,
       totalAlerts,
@@ -160,9 +201,40 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles }) => {
       totalPlans,
       completedPlans,
       resolutionRate,
-      planCompletionRate
+      planCompletionRate,
+      totalIdleHours,
+      totalIdleMinutes,
+      currentIdleVehicles: currentIdleVehicles.length
     };
-  }, [vehicles, savedAlerts]);
+  }, [vehicles, savedAlerts, idleRecords, currentIdleVehicles]);
+
+  // Calcular estadísticas de ralentí por vehículo
+  const idleStatsByVehicle = React.useMemo(() => {
+    const statsMap = new Map<string, { plate: string; totalMinutes: number; count: number; avgMinutes: number; contract?: string; driver?: string }>();
+
+    idleRecords.forEach(record => {
+      if (!statsMap.has(record.plate)) {
+        statsMap.set(record.plate, {
+          plate: record.plate,
+          totalMinutes: 0,
+          count: 0,
+          avgMinutes: 0,
+          contract: record.contract,
+          driver: record.driver
+        });
+      }
+      const stats = statsMap.get(record.plate)!;
+      stats.totalMinutes += record.duration_minutes || 0;
+      stats.count++;
+    });
+
+    // Calcular promedio
+    statsMap.forEach(stats => {
+      stats.avgMinutes = Math.round((stats.totalMinutes / stats.count) * 10) / 10;
+    });
+
+    return Array.from(statsMap.values()).sort((a, b) => b.totalMinutes - a.totalMinutes);
+  }, [idleRecords]);
 
   if (loading) {
     return (
@@ -354,6 +426,110 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles }) => {
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* Sección de Ralentí */}
+      <div className="bg-gradient-to-br from-orange-50 to-orange-100 border border-orange-200 rounded-xl p-6 shadow-sm">
+        <h3 className="text-lg font-bold text-orange-900 mb-4 flex items-center gap-2">
+          <Clock className="w-6 h-6 text-orange-600" />
+          Análisis de Ralentí (Últimos 30 días)
+        </h3>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div className="bg-white rounded-lg p-4 border border-orange-200">
+            <p className="text-sm font-semibold text-orange-700 mb-2">Total Horas Ralentí</p>
+            <p className="text-3xl font-bold text-orange-900">{overallMetrics.totalIdleHours}h</p>
+            <p className="text-xs text-orange-600 mt-1">{Math.round(overallMetrics.totalIdleMinutes)} minutos</p>
+          </div>
+          <div className="bg-white rounded-lg p-4 border border-orange-200">
+            <p className="text-sm font-semibold text-orange-700 mb-2">Eventos de Ralentí</p>
+            <p className="text-3xl font-bold text-orange-900">{idleRecords.length}</p>
+            <p className="text-xs text-orange-600 mt-1">Registros totales</p>
+          </div>
+          <div className="bg-white rounded-lg p-4 border border-orange-200">
+            <p className="text-sm font-semibold text-orange-700 mb-2">Vehículos en Ralentí Ahora</p>
+            <p className="text-3xl font-bold text-orange-900">{overallMetrics.currentIdleVehicles}</p>
+            <p className="text-xs text-orange-600 mt-1">En tiempo real</p>
+          </div>
+        </div>
+
+        {/* Vehículos actualmente en ralentí */}
+        {currentIdleVehicles.length > 0 && (
+          <div className="bg-white rounded-lg p-4 border border-orange-200 mb-4">
+            <h4 className="font-semibold text-orange-900 mb-3">Vehículos en Ralentí AHORA:</h4>
+            <div className="space-y-2">
+              {currentIdleVehicles.slice(0, 5).map((vehicle, index) => (
+                <div key={index} className="flex items-center justify-between p-2 bg-orange-50 rounded">
+                  <div>
+                    <span className="font-semibold text-orange-900">{vehicle.plate}</span>
+                    {vehicle.driver && (
+                      <span className="text-sm text-orange-700 ml-2">- {vehicle.driver}</span>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    <span className="text-lg font-bold text-orange-600">
+                      {Math.round(vehicle.durationMinutes)} min
+                    </span>
+                    {vehicle.location && (
+                      <p className="text-xs text-orange-600">{vehicle.location}</p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Top 10 Vehículos por Ralentí */}
+      <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+        <h3 className="text-lg font-bold text-slate-900 mb-4">Top 10 Vehículos con Más Ralentí</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-slate-200">
+                <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">Placa</th>
+                <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">Conductor</th>
+                <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">Contrato</th>
+                <th className="text-center py-3 px-4 text-sm font-semibold text-slate-700">Total Horas</th>
+                <th className="text-center py-3 px-4 text-sm font-semibold text-slate-700">Eventos</th>
+                <th className="text-center py-3 px-4 text-sm font-semibold text-slate-700">Promedio</th>
+              </tr>
+            </thead>
+            <tbody>
+              {idleStatsByVehicle.slice(0, 10).map((stat, index) => {
+                const totalHours = Math.round((stat.totalMinutes / 60) * 10) / 10;
+                const severity = totalHours >= 50 ? 'high' : totalHours >= 20 ? 'medium' : 'low';
+
+                return (
+                  <tr key={index} className="border-b border-slate-100 hover:bg-slate-50">
+                    <td className="py-3 px-4 font-medium text-slate-900">{stat.plate}</td>
+                    <td className="py-3 px-4 text-slate-700">{stat.driver || '-'}</td>
+                    <td className="py-3 px-4 text-sm text-sky-600 font-semibold">{stat.contract || '-'}</td>
+                    <td className="py-3 px-4 text-center">
+                      <span className={`px-2 py-1 rounded text-sm font-semibold ${
+                        severity === 'high' ? 'bg-red-100 text-red-700' :
+                        severity === 'medium' ? 'bg-orange-100 text-orange-700' :
+                        'bg-yellow-100 text-yellow-700'
+                      }`}>
+                        {totalHours}h
+                      </span>
+                    </td>
+                    <td className="py-3 px-4 text-center text-slate-700">{stat.count}</td>
+                    <td className="py-3 px-4 text-center text-slate-700">{stat.avgMinutes} min</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {idleStatsByVehicle.length === 0 && (
+          <div className="text-center py-8 text-slate-500">
+            <Clock className="w-12 h-12 mx-auto mb-2 opacity-50" />
+            <p>No hay datos de ralentí registrados</p>
+            <p className="text-sm mt-2">Los datos se acumularán a medida que el sistema detecte ralentí</p>
+          </div>
+        )}
       </div>
     </div>
   );

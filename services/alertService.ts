@@ -1,4 +1,5 @@
 import { Vehicle, Alert, AlertType, AlertSeverity, ApiSource } from '../types';
+import { saveIdleTimeRecord, saveIgnitionEvent } from './towerControlService';
 
 // Configuración de umbrales
 const ALERT_THRESHOLDS = {
@@ -6,6 +7,40 @@ const ALERT_THRESHOLDS = {
   IDLE_TIME_MINUTES: 10,
   LOW_FUEL: 15, // porcentaje
 };
+
+// =====================================================
+// VEHICLE STATE TRACKING FOR IDLE DETECTION
+// =====================================================
+
+interface VehicleState {
+  plate: string;
+  speed: number;
+  ignition: boolean;
+  timestamp: string;
+  location?: string;
+  latitude?: number;
+  longitude?: number;
+  driver?: string;
+  contract?: string;
+  source?: string;
+}
+
+interface IdleState {
+  plate: string;
+  startTime: string;
+  startLocation?: string;
+  startLatitude?: number;
+  startLongitude?: number;
+  driver?: string;
+  contract?: string;
+  source?: string;
+}
+
+// Map para rastrear estados de vehículos
+const vehicleStates = new Map<string, VehicleState>();
+
+// Map para rastrear vehículos en ralentí
+const idleStates = new Map<string, IdleState>();
 
 /**
  * Detecta alertas basándose en los datos del vehículo
@@ -279,4 +314,199 @@ export function cleanOldAlerts(retentionHours: number = 24): void {
   } catch (error) {
     console.error('Error cleaning old alerts:', error);
   }
+}
+
+// =====================================================
+// IDLE TIME DETECTION AND IGNITION TRACKING
+// =====================================================
+
+/**
+ * Determina si la ignición está encendida basado en datos del vehículo
+ */
+function isIgnitionOn(vehicle: Vehicle): boolean {
+  const eventUpper = (vehicle.event || '').toUpperCase();
+
+  // Lógica específica por fuente
+  if (vehicle.source === ApiSource.COLTRACK) {
+    // Si tiene campo IGNICION
+    const ignitionField = (vehicle as any).IGNICION || (vehicle as any).ignicion;
+    if (ignitionField !== undefined) {
+      return ignitionField === 'ON' || ignitionField === '1' || ignitionField === 1 || ignitionField === true;
+    }
+  }
+
+  if (vehicle.source === ApiSource.FAGOR) {
+    // Fagor puede tener campo ignition o similar
+    const ignitionField = (vehicle as any).ignition || (vehicle as any).IGNITION;
+    if (ignitionField !== undefined) {
+      return ignitionField === 'ON' || ignitionField === '1' || ignitionField === 1 || ignitionField === true;
+    }
+  }
+
+  // Fallback: Si el vehículo se está moviendo o tiene velocidad > 0, asumimos que está encendido
+  if (vehicle.speed > 0) {
+    return true;
+  }
+
+  // Si tiene evento de ignición ON
+  if (eventUpper.includes('IGNICION ON') || eventUpper.includes('IGNITION ON') || eventUpper.includes('MOTOR ENCENDIDO')) {
+    return true;
+  }
+
+  // Si está detenido pero tuvo actualización reciente (últimos 5 minutos), probablemente está encendido
+  if (vehicle.lastUpdate) {
+    const lastUpdateTime = new Date(vehicle.lastUpdate).getTime();
+    const now = new Date().getTime();
+    const minutesSinceUpdate = (now - lastUpdateTime) / (1000 * 60);
+
+    if (minutesSinceUpdate < 5) {
+      return true; // Asumimos que está encendido si reportó hace menos de 5 minutos
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Procesa un vehículo para detectar ralentí e ignición
+ * Debe llamarse cada vez que se recibe datos actualizados del vehículo
+ */
+export async function processVehicleForIdleDetection(vehicle: Vehicle): Promise<void> {
+  try {
+    const currentIgnition = isIgnitionOn(vehicle);
+    const currentSpeed = vehicle.speed || 0;
+    const currentTime = new Date().toISOString();
+
+    // Obtener estado anterior del vehículo
+    const previousState = vehicleStates.get(vehicle.plate);
+
+    // Detectar cambio de ignición y guardar evento
+    if (previousState && previousState.ignition !== currentIgnition) {
+      await saveIgnitionEvent({
+        plate: vehicle.plate,
+        driver: vehicle.driver,
+        event_type: currentIgnition ? 'ignition_on' : 'ignition_off',
+        event_datetime: currentTime,
+        location: vehicle.location,
+        latitude: vehicle.latitude,
+        longitude: vehicle.longitude,
+        source: vehicle.source
+      });
+    }
+
+    // DETECCIÓN DE RALENTÍ
+    if (currentSpeed === 0 && currentIgnition) {
+      // El vehículo está detenido con motor encendido (ralentí)
+
+      if (!idleStates.has(vehicle.plate)) {
+        // INICIO de ralentí
+        idleStates.set(vehicle.plate, {
+          plate: vehicle.plate,
+          startTime: currentTime,
+          startLocation: vehicle.location,
+          startLatitude: vehicle.latitude,
+          startLongitude: vehicle.longitude,
+          driver: vehicle.driver,
+          contract: vehicle.contract,
+          source: vehicle.source
+        });
+
+        console.log(`[Idle Detection] Vehículo ${vehicle.plate} entró en ralentí`);
+      } else {
+        // El vehículo CONTINÚA en ralentí - calcular duración
+        const idleState = idleStates.get(vehicle.plate)!;
+        const startTime = new Date(idleState.startTime).getTime();
+        const now = new Date(currentTime).getTime();
+        const durationMinutes = (now - startTime) / (1000 * 60);
+
+        // Si supera el umbral, se podría generar alerta (pero esto ya lo hace detectAlerts)
+        if (durationMinutes >= ALERT_THRESHOLDS.IDLE_TIME_MINUTES) {
+          console.log(`[Idle Detection] Vehículo ${vehicle.plate} lleva ${Math.round(durationMinutes)} minutos en ralentí`);
+        }
+      }
+    } else {
+      // El vehículo NO está en ralentí (velocidad > 0 o ignición apagada)
+
+      if (idleStates.has(vehicle.plate)) {
+        // FIN de ralentí - guardar registro
+        const idleState = idleStates.get(vehicle.plate)!;
+        const startTime = new Date(idleState.startTime).getTime();
+        const endTime = new Date(currentTime).getTime();
+        const durationMinutes = (endTime - startTime) / (1000 * 60);
+
+        // Solo guardar si duró al menos 1 minuto
+        if (durationMinutes >= 1) {
+          await saveIdleTimeRecord({
+            plate: vehicle.plate,
+            driver: idleState.driver,
+            contract: idleState.contract,
+            start_datetime: idleState.startTime,
+            end_datetime: currentTime,
+            duration_minutes: Math.round(durationMinutes * 100) / 100,
+            location: idleState.startLocation,
+            latitude: idleState.startLatitude,
+            longitude: idleState.startLongitude,
+            source: idleState.source
+          });
+
+          console.log(`[Idle Detection] Ralentí finalizado para ${vehicle.plate}: ${Math.round(durationMinutes)} minutos`);
+        }
+
+        // Limpiar estado de ralentí
+        idleStates.delete(vehicle.plate);
+      }
+    }
+
+    // Actualizar estado del vehículo
+    vehicleStates.set(vehicle.plate, {
+      plate: vehicle.plate,
+      speed: currentSpeed,
+      ignition: currentIgnition,
+      timestamp: currentTime,
+      location: vehicle.location,
+      latitude: vehicle.latitude,
+      longitude: vehicle.longitude,
+      driver: vehicle.driver,
+      contract: vehicle.contract,
+      source: vehicle.source
+    });
+
+  } catch (error) {
+    console.error(`[Idle Detection] Error processing vehicle ${vehicle.plate}:`, error);
+  }
+}
+
+/**
+ * Procesa todos los vehículos para detectar ralentí
+ */
+export async function processVehiclesForIdleDetection(vehicles: Vehicle[]): Promise<void> {
+  try {
+    // Procesar en paralelo
+    await Promise.all(vehicles.map(vehicle => processVehicleForIdleDetection(vehicle)));
+  } catch (error) {
+    console.error('[Idle Detection] Error processing vehicles:', error);
+  }
+}
+
+/**
+ * Obtiene estadísticas de ralentí de vehículos actualmente en idle
+ */
+export function getCurrentIdleStats(): Array<{ plate: string; durationMinutes: number; driver?: string; location?: string }> {
+  const stats: Array<{ plate: string; durationMinutes: number; driver?: string; location?: string }> = [];
+
+  const now = new Date().getTime();
+
+  idleStates.forEach((idleState, plate) => {
+    const startTime = new Date(idleState.startTime).getTime();
+    const durationMinutes = (now - startTime) / (1000 * 60);
+
+    stats.push({
+      plate,
+      durationMinutes: Math.round(durationMinutes * 100) / 100,
+      driver: idleState.driver,
+      location: idleState.startLocation
+    });
+  });
+
+  return stats.sort((a, b) => b.durationMinutes - a.durationMinutes);
 }
