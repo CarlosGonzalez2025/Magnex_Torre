@@ -43,14 +43,22 @@ const determineStatus = (speed: number, isIgnitionOn: boolean, eventText: string
 
 // Helper to determine contract/client from vehicle data
 const determineContract = (record: any, source: ApiSource): string => {
-  // Coltrack puede tener campo "Grupo" o "Cliente"
+  // Priorizar "Contrato" sobre "Cliente" o "Grupo" según la API de Google Sheets
+  // La API de Google Sheets devuelve: { "Placa": "LHR713", "Contrato": "CAMPO TECA", "Cliente": "SIERRACOL" }
+
   if (source === ApiSource.COLTRACK) {
-    return record.Grupo || record.Cliente || record.Contrato || 'No asignado';
+    // Buscar en este orden: Contrato > Grupo > Cliente
+    return record.CONTRATO || record.Contrato ||
+           record.GRUPO || record.Grupo ||
+           record.CLIENTE || record.Cliente ||
+           'No asignado';
   }
 
-  // Fagor puede tener campo similar en el futuro
   if (source === ApiSource.FAGOR) {
-    return record.Cliente || record.Contrato || 'No asignado';
+    // Buscar en este orden: Contrato > Cliente
+    return record.CONTRATO || record.Contrato ||
+           record.CLIENTE || record.Cliente ||
+           'No asignado';
   }
 
   return 'No asignado';
