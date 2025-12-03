@@ -68,15 +68,19 @@ const fetchColtrackViaAPI = async (): Promise<Vehicle[]> => {
       const ignicion = record.Ignicion === 'ON' || record.Ignicion === '1' || record.Ignicion === true;
       const status = determineStatus(speed, ignicion);
 
+      // En Coltrack: "Nombre" = placa, "Nombre Conductor" = conductor
+      const plate = record.Nombre || 'UNKNOWN';
+      const driver = record['Nombre Conductor'] || 'Sin Asignar';
+
       return {
-        id: `COL-${record.Placa || index}`,
-        plate: record.Placa || 'UNKNOWN',
+        id: `COL-${plate}-${index}`,
+        plate: plate,
         source: ApiSource.COLTRACK,
         latitude: parseFloat(record.Latitud || '0'),
         longitude: parseFloat(record.Longitud || '0'),
         speed: speed,
         status: status,
-        driver: record.Conductor || 'Sin Asignar',
+        driver: driver,
         fuelLevel: parseInt(record.Combustible || '0', 10),
         lastUpdate: new Date().toISOString(),
         location: record.Ciudad || record.Ubicacion || 'Desconocido',
