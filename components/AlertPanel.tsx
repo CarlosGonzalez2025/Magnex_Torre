@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import { Alert, AlertSeverity, AlertType } from '../types';
-import { AlertTriangle, AlertCircle, Bell, BellRing, Copy, CheckCircle, Clock, MapPin, User, Gauge } from 'lucide-react';
+import { AlertTriangle, AlertCircle, Bell, BellRing, Copy, CheckCircle, Clock, MapPin, User, Gauge, Save } from 'lucide-react';
 
 interface AlertPanelProps {
   alerts: Alert[];
   onCopyAlert?: (alert: Alert) => void;
+  onSaveAlert?: (alert: Alert) => void;
 }
 
-export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert }) => {
+export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onSaveAlert }) => {
   const [selectedSeverity, setSelectedSeverity] = useState<'ALL' | AlertSeverity>('ALL');
   const [selectedType, setSelectedType] = useState<'ALL' | AlertType>('ALL');
 
@@ -139,6 +140,15 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert }) =
 
                   {/* Acciones */}
                   <div className="flex items-center gap-3 pt-2 border-t border-current border-opacity-20">
+                    {onSaveAlert && (
+                      <button
+                        onClick={() => onSaveAlert(alert)}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all bg-green-600 text-white hover:bg-green-700 active:scale-95"
+                      >
+                        <Save className="w-4 h-4" />
+                        Guardar Alerta
+                      </button>
+                    )}
                     {onCopyAlert && (
                       <button
                         onClick={() => onCopyAlert(alert)}

@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { LayoutDashboard, Map as MapIcon, RefreshCw, Search, Server, Wifi, Radio, AlertTriangle, XCircle, CloudOff, CheckCircle, Database, Bell } from 'lucide-react';
+import { LayoutDashboard, Map as MapIcon, RefreshCw, Search, Server, Wifi, Radio, AlertTriangle, XCircle, CloudOff, CheckCircle, Database, Bell, History } from 'lucide-react';
 import { Vehicle, ApiSource, VehicleStatus, FilterType, StatusFilterType, Alert } from './types';
 import { KpiCards } from './components/KpiCards';
 import { VehicleTable } from './components/VehicleTable';
 import FleetMap from './components/FleetMap';
 import { AlertPanel } from './components/AlertPanel';
+import { AlertHistory } from './components/AlertHistory';
 import { fetchFleetData, FleetResponse } from './services/fleetService';
 import { detectAlerts, saveAlertsToStorage, getAlertsFromStorage, markAlertAsSent, cleanOldAlerts } from './services/alertService';
+import { saveAlertToDatabase } from './services/databaseService';
 
 // Constants
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
@@ -41,7 +43,7 @@ export default function App() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
-  const [activeTab, setActiveTab] = useState<'table' | 'map' | 'alerts'>('table');
+  const [activeTab, setActiveTab] = useState<'table' | 'map' | 'alerts' | 'history'>('table');
   const [dataSource, setDataSource] = useState<'REAL' | 'DIRECT_API' | 'PARTIAL_DIRECT' | 'ERROR' | 'MOCK'>('REAL');
   const [apiStatus, setApiStatus] = useState<FleetResponse['apiStatus']>();
   const [vehicleCounts, setVehicleCounts] = useState<FleetResponse['vehicleCounts']>();
@@ -218,6 +220,22 @@ export default function App() {
     } catch (error) {
       console.error('Error copying to clipboard:', error);
       alert('❌ Error al copiar la alerta. Por favor, intenta nuevamente.');
+    }
+  };
+
+  // Handle save alert to database
+  const handleSaveAlert = async (alert: Alert) => {
+    try {
+      const result = await saveAlertToDatabase(alert, 'Usuario');
+
+      if (result.success) {
+        alert('✅ Alerta guardada en la base de datos\n\nPuedes verla en la pestaña "Historial" y agregar planes de acción.');
+      } else {
+        alert('❌ Error al guardar la alerta: ' + result.error);
+      }
+    } catch (error: any) {
+      console.error('Error saving alert:', error);
+      alert('❌ Error al guardar la alerta: ' + error.message);
     }
   };
 
@@ -431,6 +449,13 @@ export default function App() {
                 </span>
               )}
             </button>
+            <button
+              onClick={() => setActiveTab('history')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'history' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+            >
+              <History className="w-4 h-4" />
+              Historial
+            </button>
           </div>
 
           {/* Filters Group */}
@@ -575,9 +600,10 @@ export default function App() {
              <>
                {activeTab === 'table' && <VehicleTable vehicles={filteredVehicles} />}
                {activeTab === 'map' && <FleetMap vehicles={filteredVehicles} />}
-               {activeTab === 'alerts' && <AlertPanel alerts={alerts} onCopyAlert={handleCopyAlert} />}
+               {activeTab === 'alerts' && <AlertPanel alerts={alerts} onCopyAlert={handleCopyAlert} onSaveAlert={handleSaveAlert} />}
+               {activeTab === 'history' && <AlertHistory onRefresh={fetchData} />}
 
-                {activeTab !== 'alerts' && filteredVehicles.length === 0 && !loading && (
+                {activeTab !== 'alerts' && activeTab !== 'history' && filteredVehicles.length === 0 && !loading && (
                   <div className="text-center py-20">
                     <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-slate-100 mb-4">
                       <Search className="w-8 h-8 text-slate-400" />
