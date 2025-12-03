@@ -42,27 +42,28 @@ const determineStatus = (speed: number, isIgnitionOn: boolean, eventText: string
 };
 
 /**
- * Attempts to fetch data directly from Coltrack API (Client-side).
+ * Attempts to fetch data from Coltrack via serverless function
  */
-const fetchColtrackDirectly = async (): Promise<Vehicle[]> => {
-  const credentials = btoa(`${COLTRACK_USER}:${COLTRACK_PASS}`);
-  
+const fetchColtrackViaAPI = async (): Promise<Vehicle[]> => {
   try {
-    const response = await fetch(COLTRACK_API_URL, {
+    const response = await fetch('/api/coltrack', {
       method: 'POST',
       headers: {
-        'Authorization': `Basic ${credentials}`,
-      },
+        'Content-Type': 'application/json'
+      }
     });
 
-    if (!response.ok) throw new Error(`Coltrack API returned ${response.status}`);
-
-    const json = await response.json();
-    if (json.status !== 'OK' || !json.message || !json.message.data) {
-      throw new Error('Invalid JSON structure from Coltrack');
+    if (!response.ok) {
+      throw new Error(`Coltrack serverless function returned ${response.status}`);
     }
 
-    return json.message.data.map((record: any, index: number) => {
+    const result = await response.json();
+
+    if (!result.success || !result.data) {
+      throw new Error('Invalid response from Coltrack serverless function');
+    }
+
+    return result.data.map((record: any, index: number) => {
       const speed = parseFloat(record.Velocidad || '0');
       const ignicion = record.Ignicion === 'ON' || record.Ignicion === '1' || record.Ignicion === true;
       const status = determineStatus(speed, ignicion);
@@ -84,93 +85,60 @@ const fetchColtrackDirectly = async (): Promise<Vehicle[]> => {
     });
 
   } catch (error) {
-    console.warn('Direct Coltrack connection failed:', error);
-    return []; // Return empty to allow partial success
+    console.warn('Coltrack serverless function failed:', error);
+    return [];
   }
 };
 
 /**
- * Attempts to fetch data directly from Fagor (FlotasNet) SOAP API.
+ * Attempts to fetch data from Fagor via serverless function
  */
-const fetchFagorDirectly = async (): Promise<Vehicle[]> => {
-  const soapEnvelope = `<?xml version="1.0" encoding="utf-8"?>
-  <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                 xmlns:xsd="http://www.w3.org/2001/XMLSchema"
-                 xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
-    <soap:Header>
-        <AuthHeader xmlns="http://212.8.96.37/webservices/">
-            <Username>${FAGOR_USER}</Username>
-            <Password>${FAGOR_PASS}</Password>
-        </AuthHeader>
-    </soap:Header>
-    <soap:Body>
-        <EstadoActualFlota xmlns="http://212.8.96.37/webservices/">
-            <empresa>masa stork</empresa>
-        </EstadoActualFlota>
-    </soap:Body>
-  </soap:Envelope>`;
-
+const fetchFagorViaAPI = async (): Promise<Vehicle[]> => {
   try {
-    const response = await fetch(FAGOR_API_URL, {
+    const response = await fetch('/api/fagor', {
       method: 'POST',
       headers: {
-        'Content-Type': 'text/xml; charset=utf-8',
-        'SOAPAction': 'http://212.8.96.37/webservices/EstadoActualFlota'
-      },
-      body: soapEnvelope
+        'Content-Type': 'application/json'
+      }
     });
 
-    if (!response.ok) throw new Error(`Fagor API returned ${response.status}`);
-    
-    const xmlText = await response.text();
-    return parseFagorXml(xmlText);
+    if (!response.ok) {
+      throw new Error(`Fagor serverless function returned ${response.status}`);
+    }
+
+    const result = await response.json();
+
+    if (!result.success || !result.data) {
+      throw new Error('Invalid response from Fagor serverless function');
+    }
+
+    return result.data.map((record: any, index: number) => {
+      const plate = record.Matricula;
+      const speed = parseInt(record.Velocidad || '0', 10);
+      const estadoText = record.Estado;
+
+      const status = determineStatus(speed, false, estadoText);
+
+      return {
+        id: `FAG-${plate || index}`,
+        plate: plate || 'UNKNOWN',
+        source: ApiSource.FAGOR,
+        latitude: parseFloat(record.Latitud) || 0,
+        longitude: parseFloat(record.Longitud) || 0,
+        speed: speed,
+        status: status,
+        driver: record.Conductor || 'Sin Asignar',
+        fuelLevel: 0,
+        lastUpdate: new Date().toISOString(),
+        location: record.Localidad || 'Desconocido',
+        odometer: parseFloat(record.Kilometros || '0'),
+      };
+    });
 
   } catch (error) {
-    console.warn('Direct Fagor connection failed:', error);
-    return []; // Return empty to allow partial success
+    console.warn('Fagor serverless function failed:', error);
+    return [];
   }
-};
-
-/**
- * Parses the Fagor SOAP XML response using browser DOMParser.
- */
-const parseFagorXml = (xmlText: string): Vehicle[] => {
-  const parser = new DOMParser();
-  const xmlDoc = parser.parseFromString(xmlText, "text/xml");
-  
-  // Handle namespaces if present, or just select by local name "DatosEstadoVehiculo"
-  const vehicles = xmlDoc.getElementsByTagName("DatosEstadoVehiculo");
-  
-  return Array.from(vehicles).map((node, index) => {
-    const getValue = (tag: string) => {
-      const el = node.getElementsByTagName(tag)[0];
-      return el ? el.textContent || '' : '';
-    };
-
-    const plate = getValue("Matricula");
-    const latStr = getValue("Latitud").replace(',', '.');
-    const lonStr = getValue("Longitud").replace(',', '.');
-    const speed = parseInt(getValue("Velocidad") || '0', 10);
-    const estadoText = getValue("Estado");
-    
-    // Infer status from text provided in XML
-    const status = determineStatus(speed, false, estadoText);
-
-    return {
-      id: `FAG-${plate || index}`,
-      plate: plate || 'UNKNOWN',
-      source: ApiSource.FAGOR,
-      latitude: parseFloat(latStr) || 0,
-      longitude: parseFloat(lonStr) || 0,
-      speed: speed,
-      status: status,
-      driver: getValue("Conductor") || 'Sin Asignar',
-      fuelLevel: 0, // Fagor standard XML doesn't always have fuel in a simple tag
-      lastUpdate: new Date().toISOString(), 
-      location: getValue("Localidad") || 'Desconocido',
-      odometer: parseFloat(getValue("Kilometros").replace(',', '.') || '0'),
-    };
-  });
 };
 
 
@@ -217,12 +185,12 @@ export const fetchFleetData = async (): Promise<FleetResponse> => {
     apiStatus.backend = 'failed';
   }
 
-  // 2. Second, try Direct Connections to BOTH APIs in parallel
-  console.log("Attempting direct API connections to Fagor and Coltrack...");
+  // 2. Second, try Serverless API Functions to BOTH APIs in parallel
+  console.log("Attempting serverless API connections to Fagor and Coltrack...");
 
   const results = await Promise.allSettled([
-    fetchColtrackDirectly(),
-    fetchFagorDirectly()
+    fetchColtrackViaAPI(),
+    fetchFagorViaAPI()
   ]);
 
   const coltrackData = results[0].status === 'fulfilled' ? results[0].value : [];
