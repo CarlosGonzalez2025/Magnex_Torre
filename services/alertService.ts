@@ -14,12 +14,12 @@ export function detectAlerts(vehicle: Vehicle): Alert[] {
   const alerts: Alert[] = [];
   const eventUpper = (vehicle.event || '').toUpperCase();
 
-  // 1. EXCESO DE VELOCIDAD (≥80 km/h)
+  // 1. EXCESO DE VELOCIDAD (≥80 km/h) - CRÍTICO
   if (vehicle.speed >= ALERT_THRESHOLDS.SPEED_LIMIT) {
     alerts.push(createAlert(
       vehicle,
       AlertType.SPEED_VIOLATION,
-      AlertSeverity.HIGH,
+      AlertSeverity.CRITICAL,
       `Velocidad: ${vehicle.speed} km/h (Límite: ${ALERT_THRESHOLDS.SPEED_LIMIT} km/h)`
     ));
   }
@@ -224,17 +224,56 @@ export function markAlertAsSent(alertId: string, sentBy: string): void {
 }
 
 /**
- * Limpia alertas antiguas (más de 7 días)
+ * Marca una alerta como guardada en la base de datos
  */
-export function cleanOldAlerts(): void {
+export function markAlertAsSaved(alertId: string): void {
   try {
     const alerts = getAlertsFromStorage();
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
-    const filtered = alerts.filter(alert =>
-      new Date(alert.timestamp) > sevenDaysAgo
+    const updated = alerts.map(alert =>
+      alert.id === alertId
+        ? { ...alert, savedToDatabase: true, savedAt: new Date().toISOString() }
+        : alert
     );
+    localStorage.setItem('fleet_alerts', JSON.stringify(updated));
+  } catch (error) {
+    console.error('Error marking alert as saved:', error);
+  }
+}
+
+/**
+ * Obtiene solo alertas NO guardadas en la base de datos
+ * Estas son las alertas activas que el usuario aún debe gestionar
+ */
+export function getUnsavedAlerts(): Alert[] {
+  try {
+    const allAlerts = getAlertsFromStorage();
+    return allAlerts.filter(alert => !(alert as any).savedToDatabase);
+  } catch (error) {
+    console.error('Error getting unsaved alerts:', error);
+    return [];
+  }
+}
+
+/**
+ * Limpia alertas antiguas del caché
+ * Por defecto: 24 horas para alertas NO guardadas
+ * Las alertas guardadas se eliminan del caché inmediatamente
+ */
+export function cleanOldAlerts(retentionHours: number = 24): void {
+  try {
+    const alerts = getAlertsFromStorage();
+    const cutoffTime = new Date();
+    cutoffTime.setHours(cutoffTime.getHours() - retentionHours);
+
+    const filtered = alerts.filter(alert => {
+      // Eliminar alertas guardadas en DB (ya están en historial)
+      if ((alert as any).savedToDatabase) {
+        return false;
+      }
+
+      // Mantener alertas recientes
+      return new Date(alert.timestamp) > cutoffTime;
+    });
 
     localStorage.setItem('fleet_alerts', JSON.stringify(filtered));
   } catch (error) {

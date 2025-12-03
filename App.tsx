@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { LayoutDashboard, Map as MapIcon, RefreshCw, Search, Server, Wifi, Radio, AlertTriangle, XCircle, CloudOff, CheckCircle, Database, Bell, History } from 'lucide-react';
+import { LayoutDashboard, Map as MapIcon, RefreshCw, Search, Server, Wifi, Radio, AlertTriangle, XCircle, CloudOff, CheckCircle, Database, Bell, History, BarChart3 } from 'lucide-react';
 import { Vehicle, ApiSource, VehicleStatus, FilterType, StatusFilterType, Alert } from './types';
 import { KpiCards } from './components/KpiCards';
 import { VehicleTable } from './components/VehicleTable';
 import FleetMap from './components/FleetMap';
 import { AlertPanel } from './components/AlertPanel';
 import { AlertHistory } from './components/AlertHistory';
+import { Analytics } from './components/Analytics';
 import { fetchFleetData, FleetResponse } from './services/fleetService';
-import { detectAlerts, saveAlertsToStorage, getAlertsFromStorage, markAlertAsSent, cleanOldAlerts } from './services/alertService';
+import { detectAlerts, saveAlertsToStorage, getAlertsFromStorage, getUnsavedAlerts, markAlertAsSent, markAlertAsSaved, cleanOldAlerts } from './services/alertService';
 import { saveAlertToDatabase } from './services/databaseService';
 
 // Constants
@@ -43,7 +44,7 @@ export default function App() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
-  const [activeTab, setActiveTab] = useState<'table' | 'map' | 'alerts' | 'history'>('table');
+  const [activeTab, setActiveTab] = useState<'table' | 'map' | 'alerts' | 'history' | 'analytics'>('table');
   const [dataSource, setDataSource] = useState<'REAL' | 'DIRECT_API' | 'PARTIAL_DIRECT' | 'ERROR' | 'MOCK'>('REAL');
   const [apiStatus, setApiStatus] = useState<FleetResponse['apiStatus']>();
   const [vehicleCounts, setVehicleCounts] = useState<FleetResponse['vehicleCounts']>();
@@ -224,12 +225,22 @@ export default function App() {
   };
 
   // Handle save alert to database
-  const handleSaveAlert = async (alert: Alert) => {
+  const handleSaveAlert = async (alertToSave: Alert) => {
     try {
-      const result = await saveAlertToDatabase(alert, 'Usuario');
+      const result = await saveAlertToDatabase(alertToSave, 'Usuario');
 
       if (result.success) {
-        alert('✅ Alerta guardada en la base de datos\n\nPuedes verla en la pestaña "Historial" y agregar planes de acción.');
+        // Marcar alerta como guardada en el caché local
+        markAlertAsSaved(alertToSave.id);
+
+        // Limpiar alertas guardadas del caché (se eliminan inmediatamente)
+        cleanOldAlerts(24);
+
+        // Actualizar la lista de alertas (solo mostrar no guardadas)
+        const unsavedAlerts = getUnsavedAlerts();
+        setAlerts(unsavedAlerts);
+
+        alert('✅ Alerta guardada en la base de datos\n\nSe ha movido al "Historial" donde puedes agregar planes de acción.');
       } else {
         alert('❌ Error al guardar la alerta: ' + result.error);
       }
@@ -456,6 +467,13 @@ export default function App() {
               <History className="w-4 h-4" />
               Historial
             </button>
+            <button
+              onClick={() => setActiveTab('analytics')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'analytics' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+            >
+              <BarChart3 className="w-4 h-4" />
+              Análisis
+            </button>
           </div>
 
           {/* Filters Group */}
@@ -602,8 +620,9 @@ export default function App() {
                {activeTab === 'map' && <FleetMap vehicles={filteredVehicles} />}
                {activeTab === 'alerts' && <AlertPanel alerts={alerts} onCopyAlert={handleCopyAlert} onSaveAlert={handleSaveAlert} />}
                {activeTab === 'history' && <AlertHistory onRefresh={fetchData} />}
+               {activeTab === 'analytics' && <Analytics vehicles={vehicles} />}
 
-                {activeTab !== 'alerts' && activeTab !== 'history' && filteredVehicles.length === 0 && !loading && (
+                {activeTab !== 'alerts' && activeTab !== 'history' && activeTab !== 'analytics' && filteredVehicles.length === 0 && !loading && (
                   <div className="text-center py-20">
                     <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-slate-100 mb-4">
                       <Search className="w-8 h-8 text-slate-400" />
