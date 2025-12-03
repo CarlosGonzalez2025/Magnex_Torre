@@ -1,0 +1,379 @@
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { Alert } from '../types';
+
+// Supabase configuration
+const SUPABASE_URL = 'https://ppqlbgpxwcbirarxtgam.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBwcWxiZ3B4d2NiaXJhcnh0Z2FtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ3Nzc2NzMsImV4cCI6MjA4MDM1MzY3M30.Ha6RvnPbFznVTR34LAsIuk8SHO2NIS5KiSdcf_Hgq9Y';
+
+// Create Supabase client
+const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// ==================== TYPES ====================
+
+export interface SavedAlert {
+  id: string;
+  alert_id: string;
+  vehicle_id: string;
+  plate: string;
+  driver: string;
+  type: string;
+  severity: string;
+  timestamp: string;
+  location: string;
+  speed: number;
+  details: string;
+  contract?: string;
+  source: string;
+  status: 'pending' | 'in_progress' | 'resolved';
+  saved_at: string;
+  saved_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ActionPlan {
+  id: string;
+  alert_history_id: string;
+  description: string;
+  responsible: string;
+  status: 'pending' | 'in_progress' | 'completed';
+  observations?: string;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+}
+
+export interface SavedAlertWithPlans extends SavedAlert {
+  action_plans: ActionPlan[];
+}
+
+// ==================== ALERT HISTORY FUNCTIONS ====================
+
+/**
+ * Save an alert to the database
+ */
+export async function saveAlertToDatabase(alert: Alert, savedBy: string = 'Usuario'): Promise<{ success: boolean; data?: SavedAlert; error?: string }> {
+  try {
+    const alertData = {
+      alert_id: alert.id,
+      vehicle_id: alert.vehicleId,
+      plate: alert.plate,
+      driver: alert.driver,
+      type: alert.type,
+      severity: alert.severity,
+      timestamp: alert.timestamp,
+      location: alert.location,
+      speed: alert.speed,
+      details: alert.details,
+      contract: alert.contract || null,
+      source: alert.source,
+      status: 'pending' as const,
+      saved_by: savedBy
+    };
+
+    const { data, error } = await supabase
+      .from('alert_history')
+      .insert(alertData)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error saving alert:', error);
+      return { success: false, error: error.message };
+    }
+
+    return { success: true, data };
+  } catch (error: any) {
+    console.error('Exception saving alert:', error);
+    return { success: false, error: error.message || 'Error desconocido' };
+  }
+}
+
+/**
+ * Get all saved alerts with action plans
+ */
+export async function getAllSavedAlerts(): Promise<{ success: boolean; data?: SavedAlertWithPlans[]; error?: string }> {
+  try {
+    const { data, error } = await supabase
+      .from('alert_history')
+      .select(`
+        *,
+        action_plans (*)
+      `)
+      .order('timestamp', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching alerts:', error);
+      return { success: false, error: error.message };
+    }
+
+    return { success: true, data: data as SavedAlertWithPlans[] };
+  } catch (error: any) {
+    console.error('Exception fetching alerts:', error);
+    return { success: false, error: error.message || 'Error desconocido' };
+  }
+}
+
+/**
+ * Get saved alerts with filters
+ */
+export async function getFilteredAlerts(
+  filters: {
+    status?: 'pending' | 'in_progress' | 'resolved';
+    severity?: string;
+    startDate?: string;
+    endDate?: string;
+  }
+): Promise<{ success: boolean; data?: SavedAlertWithPlans[]; error?: string }> {
+  try {
+    let query = supabase
+      .from('alert_history')
+      .select(`
+        *,
+        action_plans (*)
+      `)
+      .order('timestamp', { ascending: false });
+
+    if (filters.status) {
+      query = query.eq('status', filters.status);
+    }
+
+    if (filters.severity) {
+      query = query.eq('severity', filters.severity);
+    }
+
+    if (filters.startDate) {
+      query = query.gte('timestamp', filters.startDate);
+    }
+
+    if (filters.endDate) {
+      query = query.lte('timestamp', filters.endDate);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.error('Error fetching filtered alerts:', error);
+      return { success: false, error: error.message };
+    }
+
+    return { success: true, data: data as SavedAlertWithPlans[] };
+  } catch (error: any) {
+    console.error('Exception fetching filtered alerts:', error);
+    return { success: false, error: error.message || 'Error desconocido' };
+  }
+}
+
+/**
+ * Update alert status
+ */
+export async function updateAlertStatus(
+  alertId: string,
+  status: 'pending' | 'in_progress' | 'resolved'
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { error } = await supabase
+      .from('alert_history')
+      .update({ status })
+      .eq('id', alertId);
+
+    if (error) {
+      console.error('Error updating alert status:', error);
+      return { success: false, error: error.message };
+    }
+
+    return { success: true };
+  } catch (error: any) {
+    console.error('Exception updating alert status:', error);
+    return { success: false, error: error.message || 'Error desconocido' };
+  }
+}
+
+/**
+ * Delete an alert from history
+ */
+export async function deleteAlert(alertId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { error } = await supabase
+      .from('alert_history')
+      .delete()
+      .eq('id', alertId);
+
+    if (error) {
+      console.error('Error deleting alert:', error);
+      return { success: false, error: error.message };
+    }
+
+    return { success: true };
+  } catch (error: any) {
+    console.error('Exception deleting alert:', error);
+    return { success: false, error: error.message || 'Error desconocido' };
+  }
+}
+
+// ==================== ACTION PLANS FUNCTIONS ====================
+
+/**
+ * Add an action plan to an alert
+ */
+export async function addActionPlan(
+  alertHistoryId: string,
+  plan: {
+    description: string;
+    responsible: string;
+    status?: 'pending' | 'in_progress' | 'completed';
+    observations?: string;
+  },
+  createdBy: string = 'Usuario'
+): Promise<{ success: boolean; data?: ActionPlan; error?: string }> {
+  try {
+    const planData = {
+      alert_history_id: alertHistoryId,
+      description: plan.description,
+      responsible: plan.responsible,
+      status: plan.status || 'pending',
+      observations: plan.observations || null,
+      created_by: createdBy
+    };
+
+    const { data, error } = await supabase
+      .from('action_plans')
+      .insert(planData)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error adding action plan:', error);
+      return { success: false, error: error.message };
+    }
+
+    return { success: true, data };
+  } catch (error: any) {
+    console.error('Exception adding action plan:', error);
+    return { success: false, error: error.message || 'Error desconocido' };
+  }
+}
+
+/**
+ * Get all action plans for a specific alert
+ */
+export async function getActionPlans(alertHistoryId: string): Promise<{ success: boolean; data?: ActionPlan[]; error?: string }> {
+  try {
+    const { data, error } = await supabase
+      .from('action_plans')
+      .select('*')
+      .eq('alert_history_id', alertHistoryId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching action plans:', error);
+      return { success: false, error: error.message };
+    }
+
+    return { success: true, data };
+  } catch (error: any) {
+    console.error('Exception fetching action plans:', error);
+    return { success: false, error: error.message || 'Error desconocido' };
+  }
+}
+
+/**
+ * Update an action plan
+ */
+export async function updateActionPlan(
+  planId: string,
+  updates: {
+    description?: string;
+    responsible?: string;
+    status?: 'pending' | 'in_progress' | 'completed';
+    observations?: string;
+  }
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { error } = await supabase
+      .from('action_plans')
+      .update(updates)
+      .eq('id', planId);
+
+    if (error) {
+      console.error('Error updating action plan:', error);
+      return { success: false, error: error.message };
+    }
+
+    return { success: true };
+  } catch (error: any) {
+    console.error('Exception updating action plan:', error);
+    return { success: false, error: error.message || 'Error desconocido' };
+  }
+}
+
+/**
+ * Delete an action plan
+ */
+export async function deleteActionPlan(planId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { error } = await supabase
+      .from('action_plans')
+      .delete()
+      .eq('id', planId);
+
+    if (error) {
+      console.error('Error deleting action plan:', error);
+      return { success: false, error: error.message };
+    }
+
+    return { success: true };
+  } catch (error: any) {
+    console.error('Exception deleting action plan:', error);
+    return { success: false, error: error.message || 'Error desconocido' };
+  }
+}
+
+// ==================== STATISTICS ====================
+
+/**
+ * Get alert statistics
+ */
+export async function getAlertStatistics(): Promise<{
+  success: boolean;
+  data?: {
+    total: number;
+    pending: number;
+    in_progress: number;
+    resolved: number;
+    critical: number;
+    high: number;
+    medium: number;
+    low: number;
+  };
+  error?: string;
+}> {
+  try {
+    const { data, error } = await supabase
+      .from('alert_history')
+      .select('status, severity');
+
+    if (error) {
+      console.error('Error fetching statistics:', error);
+      return { success: false, error: error.message };
+    }
+
+    const stats = {
+      total: data.length,
+      pending: data.filter(a => a.status === 'pending').length,
+      in_progress: data.filter(a => a.status === 'in_progress').length,
+      resolved: data.filter(a => a.status === 'resolved').length,
+      critical: data.filter(a => a.severity === 'critical').length,
+      high: data.filter(a => a.severity === 'high').length,
+      medium: data.filter(a => a.severity === 'medium').length,
+      low: data.filter(a => a.severity === 'low').length,
+    };
+
+    return { success: true, data: stats };
+  } catch (error: any) {
+    console.error('Exception fetching statistics:', error);
+    return { success: false, error: error.message || 'Error desconocido' };
+  }
+}
+
+export { supabase };
