@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { LayoutDashboard, Map as MapIcon, RefreshCw, Search, Server, Wifi, Radio, AlertTriangle, XCircle, CloudOff, CheckCircle, Database, Bell } from 'lucide-react';
 import { Vehicle, ApiSource, VehicleStatus, FilterType, StatusFilterType, Alert } from './types';
 import { KpiCards } from './components/KpiCards';
@@ -10,6 +10,32 @@ import { detectAlerts, saveAlertsToStorage, getAlertsFromStorage, markAlertAsSen
 
 // Constants
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
+
+// Alert sound function using Web Audio API
+function playAlertSound() {
+  try {
+    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+
+    // Create oscillator for beep sound
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+
+    // Configure beep sound (800Hz for 200ms, then 600Hz for 200ms)
+    oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
+    oscillator.frequency.setValueAtTime(600, audioContext.currentTime + 0.2);
+
+    gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.4);
+
+    oscillator.start(audioContext.currentTime);
+    oscillator.stop(audioContext.currentTime + 0.4);
+  } catch (error) {
+    console.error('Error playing alert sound:', error);
+  }
+}
 
 export default function App() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -26,6 +52,9 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [apiFilter, setApiFilter] = useState<FilterType>('ALL');
   const [statusFilter, setStatusFilter] = useState<StatusFilterType>('ALL');
+
+  // Track previous critical alerts count for sound notification
+  const prevCriticalAlertsRef = useRef<number>(0);
 
   // Load Data
   const fetchData = React.useCallback(async () => {
@@ -162,9 +191,8 @@ export default function App() {
     return '...';
   };
 
-  // Handle WhatsApp sending (placeholder - will implement in Phase 2)
-  const handleSendWhatsApp = (alert: Alert) => {
-    // TODO: Implement WhatsApp API integration
+  // Handle alert copy to clipboard
+  const handleCopyAlert = async (alert: Alert) => {
     const message = `🚨 *ALERTA DE FLOTA*\n\n` +
       `Tipo: ${alert.type}\n` +
       `Vehículo: ${alert.plate}\n` +
@@ -173,24 +201,40 @@ export default function App() {
       `Velocidad: ${alert.speed} km/h\n` +
       `Ubicación: ${alert.location}\n` +
       `Hora: ${new Date(alert.timestamp).toLocaleString()}\n` +
-      (alert.contract ? `\nContrato: ${alert.contract}` : '');
+      (alert.contract ? `Contrato: ${alert.contract}\n` : '') +
+      `Fuente: ${alert.source}`;
 
-    console.log('WhatsApp message to send:', message);
+    try {
+      await navigator.clipboard.writeText(message);
 
-    // Mark as sent (temporary - will be handled by API in Phase 2)
-    markAlertAsSent(alert.id, 'Usuario'); // Replace 'Usuario' with actual user name
+      // Mark as sent (copied)
+      markAlertAsSent(alert.id, 'Usuario');
 
-    // Reload alerts to show updated state
-    setAlerts(getAlertsFromStorage());
+      // Reload alerts to show updated state
+      setAlerts(getAlertsFromStorage());
 
-    // Show user feedback
-    alert('Función de WhatsApp en desarrollo.\n\nEn la Fase 2 se implementará:\n- Envío real por WhatsApp\n- Registro en base de datos\n- Tracking completo');
+      // Show user feedback
+      alert('✅ Alerta copiada al portapapeles\n\nYa puedes pegarla en WhatsApp o cualquier otra aplicación.');
+    } catch (error) {
+      console.error('Error copying to clipboard:', error);
+      alert('❌ Error al copiar la alerta. Por favor, intenta nuevamente.');
+    }
   };
 
   const criticalAlertsCount = useMemo(() =>
     alerts.filter(a => a.severity === 'critical' && !a.sent).length,
     [alerts]
   );
+
+  // Play sound when new critical alerts are detected
+  useEffect(() => {
+    // Only play sound if critical alerts increased (not on initial load)
+    if (prevCriticalAlertsRef.current > 0 && criticalAlertsCount > prevCriticalAlertsRef.current) {
+      playAlertSound();
+    }
+    // Update the ref with current count
+    prevCriticalAlertsRef.current = criticalAlertsCount;
+  }, [criticalAlertsCount]);
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
@@ -531,7 +575,7 @@ export default function App() {
              <>
                {activeTab === 'table' && <VehicleTable vehicles={filteredVehicles} />}
                {activeTab === 'map' && <FleetMap vehicles={filteredVehicles} />}
-               {activeTab === 'alerts' && <AlertPanel alerts={alerts} onSendWhatsApp={handleSendWhatsApp} />}
+               {activeTab === 'alerts' && <AlertPanel alerts={alerts} onCopyAlert={handleCopyAlert} />}
 
                 {activeTab !== 'alerts' && filteredVehicles.length === 0 && !loading && (
                   <div className="text-center py-20">
