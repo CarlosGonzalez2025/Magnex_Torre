@@ -18,6 +18,16 @@ export interface FleetResponse {
   data: Vehicle[];
   source: 'REAL' | 'DIRECT_API' | 'PARTIAL_DIRECT' | 'ERROR' | 'MOCK';
   error?: string;
+  apiStatus?: {
+    coltrack: 'connected' | 'failed' | 'not_tested';
+    fagor: 'connected' | 'failed' | 'not_tested';
+    backend: 'connected' | 'failed' | 'not_tested';
+  };
+  vehicleCounts?: {
+    coltrack: number;
+    fagor: number;
+    total: number;
+  };
 }
 
 // Helper to determine status from speed/ignition/event text
@@ -165,6 +175,13 @@ const parseFagorXml = (xmlText: string): Vehicle[] => {
 
 
 export const fetchFleetData = async (): Promise<FleetResponse> => {
+  // Initialize status tracking
+  const apiStatus = {
+    coltrack: 'not_tested' as const,
+    fagor: 'not_tested' as const,
+    backend: 'not_tested' as const
+  };
+
   // 1. First, try the Python Backend
   try {
     const controller = new AbortController();
@@ -178,15 +195,31 @@ export const fetchFleetData = async (): Promise<FleetResponse> => {
 
     if (response.ok) {
       const data = await response.json();
-      return { data, source: 'REAL' };
+      apiStatus.backend = 'connected';
+
+      // Count vehicles by source
+      const coltrackCount = data.filter((v: Vehicle) => v.source === ApiSource.COLTRACK).length;
+      const fagorCount = data.filter((v: Vehicle) => v.source === ApiSource.FAGOR).length;
+
+      return {
+        data,
+        source: 'REAL',
+        apiStatus,
+        vehicleCounts: {
+          coltrack: coltrackCount,
+          fagor: fagorCount,
+          total: data.length
+        }
+      };
     }
+    apiStatus.backend = 'failed';
   } catch (e) {
-    // Backend failed
+    apiStatus.backend = 'failed';
   }
 
   // 2. Second, try Direct Connections to BOTH APIs in parallel
   console.log("Attempting direct API connections to Fagor and Coltrack...");
-  
+
   const results = await Promise.allSettled([
     fetchColtrackDirectly(),
     fetchFagorDirectly()
@@ -194,7 +227,10 @@ export const fetchFleetData = async (): Promise<FleetResponse> => {
 
   const coltrackData = results[0].status === 'fulfilled' ? results[0].value : [];
   const fagorData = results[1].status === 'fulfilled' ? results[1].value : [];
-  
+
+  apiStatus.coltrack = coltrackData.length > 0 ? 'connected' : 'failed';
+  apiStatus.fagor = fagorData.length > 0 ? 'connected' : 'failed';
+
   const combinedData = [...coltrackData, ...fagorData];
 
   if (combinedData.length > 0) {
@@ -204,18 +240,34 @@ export const fetchFleetData = async (): Promise<FleetResponse> => {
 
     return {
       data: combinedData,
-      source: sourceStatus
+      source: sourceStatus,
+      apiStatus,
+      vehicleCounts: {
+        coltrack: coltrackData.length,
+        fagor: fagorData.length,
+        total: combinedData.length
+      }
     };
   }
 
   // 3. Fallback to MOCK
-  // In a pure client-side environment (like a browser), accessing 3rd party APIs 
+  // In a pure client-side environment (like a browser), accessing 3rd party APIs
   // without CORS headers will almost always fail. To prevent the app from appearing "broken",
   // we return fallback data with a MOCK source status.
   console.warn('All connections failed. Falling back to Simulation Mode.');
+  const mockData = generateMockVehicles(25);
+  const mockColtrackCount = mockData.filter(v => v.source === ApiSource.COLTRACK).length;
+  const mockFagorCount = mockData.filter(v => v.source === ApiSource.FAGOR).length;
+
   return {
-    data: generateMockVehicles(25),
+    data: mockData,
     source: 'MOCK',
-    error: 'No se pudo establecer conexión con Fagor ni Coltrack. Mostrando datos de respaldo.'
+    error: 'No se pudo establecer conexión con Fagor ni Coltrack. Mostrando datos de respaldo.',
+    apiStatus,
+    vehicleCounts: {
+      coltrack: mockColtrackCount,
+      fagor: mockFagorCount,
+      total: mockData.length
+    }
   };
 };
