@@ -65,6 +65,70 @@ const determineContract = (record: any, source: ApiSource): string => {
 };
 
 /**
+ * Fetch contract data from Google Sheets (Apps Script)
+ * Returns a Map of plate → contract info
+ */
+const fetchGoogleSheetsData = async (): Promise<Record<string, any>> => {
+  try {
+    console.log('[Google Sheets] Fetching contract data...');
+
+    const response = await fetch('/api/google-sheets', {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Google Sheets API returned ${response.status}`);
+    }
+
+    const result = await response.json();
+
+    if (result.success && result.vehicleMap) {
+      console.log(`[Google Sheets] Successfully loaded ${result.count} vehicle contracts`);
+      return result.vehicleMap;
+    }
+
+    console.warn('[Google Sheets] Invalid response format');
+    return {};
+
+  } catch (error) {
+    console.warn('[Google Sheets] Failed to fetch contract data:', error);
+    return {};
+  }
+};
+
+/**
+ * Enrich vehicles with contract information from Google Sheets
+ * @param vehicles - Array of vehicles from Coltrack/Fagor
+ * @param contractMap - Map of plate → contract data from Google Sheets
+ * @returns Enriched vehicles with correct contracts
+ */
+const enrichVehiclesWithContracts = (
+  vehicles: Vehicle[],
+  contractMap: Record<string, any>
+): Vehicle[] => {
+  return vehicles.map(vehicle => {
+    const contractData = contractMap[vehicle.plate];
+
+    if (contractData) {
+      // Enriquecer vehículo con datos de Google Sheets
+      return {
+        ...vehicle,
+        contract: contractData.contrato || vehicle.contract,
+        // Opcionalmente puedes agregar más campos si los necesitas:
+        // vehicleType: contractData.tipo || vehicle.vehicleType,
+        // driver: contractData.conductor || vehicle.driver,
+      };
+    }
+
+    // Si no hay datos en Google Sheets, mantener los datos originales
+    return vehicle;
+  });
+};
+
+/**
  * Attempts to fetch data from Coltrack via serverless function
  */
 const fetchColtrackViaAPI = async (): Promise<Vehicle[]> => {
@@ -221,20 +285,28 @@ export const fetchFleetData = async (): Promise<FleetResponse> => {
   }
 
   // 2. Second, try Serverless API Functions to BOTH APIs in parallel
-  console.log("Attempting serverless API connections to Fagor and Coltrack...");
+  console.log("Attempting serverless API connections to Fagor, Coltrack, and Google Sheets...");
 
   const results = await Promise.allSettled([
     fetchColtrackViaAPI(),
-    fetchFagorViaAPI()
+    fetchFagorViaAPI(),
+    fetchGoogleSheetsData()
   ]);
 
   const coltrackData = results[0].status === 'fulfilled' ? results[0].value : [];
   const fagorData = results[1].status === 'fulfilled' ? results[1].value : [];
+  const googleSheetsMap = results[2].status === 'fulfilled' ? results[2].value : {};
 
   apiStatus.coltrack = coltrackData.length > 0 ? 'connected' : 'failed';
   apiStatus.fagor = fagorData.length > 0 ? 'connected' : 'failed';
 
-  const combinedData = [...coltrackData, ...fagorData];
+  let combinedData = [...coltrackData, ...fagorData];
+
+  // Enriquecer vehículos con contratos de Google Sheets
+  if (Object.keys(googleSheetsMap).length > 0) {
+    console.log('[Google Sheets] Enriching vehicles with contract data...');
+    combinedData = enrichVehiclesWithContracts(combinedData, googleSheetsMap);
+  }
 
   if (combinedData.length > 0) {
     const hasColtrack = coltrackData.length > 0;
