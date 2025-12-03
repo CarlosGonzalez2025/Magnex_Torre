@@ -45,6 +45,11 @@ export const VehicleTable: React.FC<VehicleTableProps> = ({ vehicles }) => {
                   <span className={`mt-1 inline-flex items-center w-fit px-2 py-0.5 rounded text-xs font-medium border ${getSourceBadge(vehicle.source)}`}>
                     {vehicle.source}
                   </span>
+                  {vehicle.contract && vehicle.contract !== 'No asignado' && (
+                    <span className="mt-1 text-xs text-sky-600 font-semibold">
+                      {vehicle.contract}
+                    </span>
+                  )}
                 </div>
               </td>
               <td className="px-6 py-4">

@@ -23,6 +23,9 @@ export interface Vehicle {
   lastUpdate: string;
   location: string;
   odometer: number;
+  contract?: string; // Contrato/Cliente asignado
+  vehicleType?: string; // Tipo de vehículo (camión, van, etc.)
+  event?: string; // Evento actual del vehículo
 }
 
 export interface FleetStats {

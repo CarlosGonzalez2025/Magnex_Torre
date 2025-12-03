@@ -46,13 +46,20 @@ const FleetMap: React.FC<FleetMapProps> = ({ vehicles }) => {
           >
             <Popup>
               <div className="p-1 min-w-[200px]">
-                <div className="flex justify-between items-center border-b pb-2 mb-2">
-                  <h3 className="font-bold text-lg text-slate-800">{vehicle.plate}</h3>
-                  <span className={`text-xs px-2 py-0.5 rounded-full text-white ${vehicle.source === ApiSource.FAGOR ? 'bg-blue-500' : 'bg-green-500'}`}>
-                    {vehicle.source}
-                  </span>
+                <div className="border-b pb-2 mb-2">
+                  <div className="flex justify-between items-center">
+                    <h3 className="font-bold text-lg text-slate-800">{vehicle.plate}</h3>
+                    <span className={`text-xs px-2 py-0.5 rounded-full text-white ${vehicle.source === ApiSource.FAGOR ? 'bg-blue-500' : 'bg-green-500'}`}>
+                      {vehicle.source}
+                    </span>
+                  </div>
+                  {vehicle.contract && vehicle.contract !== 'No asignado' && (
+                    <div className="text-xs text-sky-600 font-semibold mt-1">
+                      {vehicle.contract}
+                    </div>
+                  )}
                 </div>
-                
+
                 <div className="space-y-2 text-sm text-slate-600">
                   <div className="flex items-center gap-2">
                     <User className="w-4 h-4" />

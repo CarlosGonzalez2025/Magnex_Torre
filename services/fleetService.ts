@@ -36,9 +36,24 @@ const determineStatus = (speed: number, isIgnitionOn: boolean, eventText: string
   // Fagor specific strings often contain these keywords
   if (eventText.includes('Arranque') || eventText.includes('Inicio ralenti') || eventText.includes('ON')) return VehicleStatus.IDLE;
   if (eventText.includes('Parada') || eventText.includes('Fin ralenti') || eventText.includes('OFF')) return VehicleStatus.OFF;
-  
+
   // Fallback
   return isIgnitionOn ? VehicleStatus.IDLE : VehicleStatus.STOPPED;
+};
+
+// Helper to determine contract/client from vehicle data
+const determineContract = (record: any, source: ApiSource): string => {
+  // Coltrack puede tener campo "Grupo" o "Cliente"
+  if (source === ApiSource.COLTRACK) {
+    return record.Grupo || record.Cliente || record.Contrato || 'No asignado';
+  }
+
+  // Fagor puede tener campo similar en el futuro
+  if (source === ApiSource.FAGOR) {
+    return record.Cliente || record.Contrato || 'No asignado';
+  }
+
+  return 'No asignado';
 };
 
 /**
@@ -71,6 +86,7 @@ const fetchColtrackViaAPI = async (): Promise<Vehicle[]> => {
       // En Coltrack: "Nombre" = placa, "Nombre Conductor" = conductor
       const plate = record.Nombre || 'UNKNOWN';
       const driver = record['Nombre Conductor'] || 'Sin Asignar';
+      const contract = determineContract(record, ApiSource.COLTRACK);
 
       return {
         id: `COL-${plate}-${index}`,
@@ -85,6 +101,9 @@ const fetchColtrackViaAPI = async (): Promise<Vehicle[]> => {
         lastUpdate: new Date().toISOString(),
         location: record.Ciudad || record.Ubicacion || 'Desconocido',
         odometer: parseFloat(record.Odometro || '0'),
+        contract: contract,
+        event: record.Evento || record.EVENTO || '',
+        vehicleType: record.Tipo || record.TipoVehiculo || ''
       };
     });
 
@@ -120,6 +139,7 @@ const fetchFagorViaAPI = async (): Promise<Vehicle[]> => {
       const plate = record.Matricula;
       const speed = parseInt(record.Velocidad || '0', 10);
       const estadoText = record.Estado;
+      const contract = determineContract(record, ApiSource.FAGOR);
 
       const status = determineStatus(speed, false, estadoText);
 
@@ -136,6 +156,9 @@ const fetchFagorViaAPI = async (): Promise<Vehicle[]> => {
         lastUpdate: new Date().toISOString(),
         location: record.Localidad || 'Desconocido',
         odometer: parseFloat(record.Kilometros || '0'),
+        contract: contract,
+        event: record.Estado || record.EstadoUsuario || '',
+        vehicleType: record.TipoVehiculo || ''
       };
     });
 
