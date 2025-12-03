@@ -22,8 +22,16 @@ export const Inspections: React.FC<InspectionsProps> = ({ selectedContract }) =>
   const [selectedDate, setSelectedDate] = React.useState<string>(
     new Date().toISOString().split('T')[0]
   );
+  const [selectedMonth, setSelectedMonth] = React.useState<string>(() => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    return `${year}-${month}`;
+  });
   const [filterContract, setFilterContract] = React.useState<string>('');
   const [lastUpdate, setLastUpdate] = React.useState<string>('');
+  const [errorMessage, setErrorMessage] = React.useState<string>('');
+  const [apiStats, setApiStats] = React.useState<{ totalRecords: number; filteredRecords: number }>({ totalRecords: 0, filteredRecords: 0 });
 
   // Cargar datos al montar el componente
   React.useEffect(() => {
@@ -42,24 +50,43 @@ export const Inspections: React.FC<InspectionsProps> = ({ selectedContract }) =>
    */
   const handleUpdateInspections = async () => {
     setLoading(true);
+    setErrorMessage('');
     try {
-      console.log('[Inspections] Fetching data from API...');
+      console.log('[Inspections] Fetching data from API for month:', selectedMonth);
 
-      // Llamar al endpoint que descarga el Excel
-      const response = await fetch('/api/inspections');
+      // Llamar al endpoint que descarga el Excel CON FILTRO DE MES
+      const response = await fetch(`/api/inspections?month=${selectedMonth}&limit=5000`);
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
       const result = await response.json();
 
       if (!result.success) {
-        throw new Error(result.error || 'Error al descargar inspecciones');
+        throw new Error(result.error || result.errorDetails || 'Error al descargar inspecciones');
       }
 
-      console.log(`[Inspections] Downloaded ${result.data.length} inspections`);
+      console.log(`[Inspections] Downloaded ${result.data.length} inspections for ${result.filterMonth}`);
+      console.log(`[Inspections] Total in Excel: ${result.totalRecordsInExcel}, After filter: ${result.recordsAfterFilter}`);
+
+      // Actualizar estadísticas de API
+      setApiStats({
+        totalRecords: result.totalRecordsInExcel || 0,
+        filteredRecords: result.recordsAfterFilter || 0
+      });
+
+      if (result.data.length === 0) {
+        alert(`ℹ️ No se encontraron inspecciones para el mes ${selectedMonth}\n\nEl Excel tiene ${result.totalRecordsInExcel} registros en total, pero ninguno corresponde al mes seleccionado.`);
+        setLastUpdate(new Date().toLocaleString('es-CO'));
+        return;
+      }
 
       // Importar a la base de datos
       const importResult = await importInspectionsToDatabase(result.data);
 
       if (importResult.success) {
-        alert(`✅ Inspecciones actualizadas correctamente\n\nImportadas: ${importResult.imported}`);
+        alert(`✅ Inspecciones actualizadas correctamente\n\nMes: ${selectedMonth}\nImportadas: ${importResult.imported}\nTotal en Excel: ${result.totalRecordsInExcel}`);
         setLastUpdate(new Date().toLocaleString('es-CO'));
         await loadInspections();
       } else {
@@ -67,7 +94,9 @@ export const Inspections: React.FC<InspectionsProps> = ({ selectedContract }) =>
       }
     } catch (error: any) {
       console.error('[Inspections] Error:', error);
-      alert('❌ Error al actualizar inspecciones: ' + error.message);
+      const errorMsg = error.message || 'Error desconocido';
+      setErrorMessage(errorMsg);
+      alert('❌ Error al actualizar inspecciones:\n\n' + errorMsg + '\n\nRevisa la consola del navegador para más detalles.');
     } finally {
       setLoading(false);
     }
@@ -243,10 +272,25 @@ export const Inspections: React.FC<InspectionsProps> = ({ selectedContract }) =>
 
       {/* Filtros */}
       <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-200">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Fecha:
+              Mes para descargar:
+            </label>
+            <input
+              type="month"
+              value={selectedMonth}
+              onChange={(e) => setSelectedMonth(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Solo se descargarán inspecciones de este mes
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Fecha (filtro local):
             </label>
             <input
               type="date"
@@ -284,10 +328,27 @@ export const Inspections: React.FC<InspectionsProps> = ({ selectedContract }) =>
           </div>
         </div>
 
+        {/* Error Message */}
+        {errorMessage && (
+          <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+            <p className="text-sm text-red-800">
+              <strong>Error:</strong> {errorMessage}
+            </p>
+          </div>
+        )}
+
+        {/* Info Message */}
         {lastUpdate && (
-          <p className="text-sm text-gray-500 mt-4">
-            Última actualización: {lastUpdate}
-          </p>
+          <div className="mt-4 flex items-center justify-between">
+            <p className="text-sm text-gray-500">
+              Última actualización: {lastUpdate}
+            </p>
+            {apiStats.totalRecords > 0 && (
+              <p className="text-xs text-blue-600 bg-blue-50 px-3 py-1 rounded-full">
+                📊 Excel: {apiStats.totalRecords.toLocaleString()} registros → Filtrados: {apiStats.filteredRecords.toLocaleString()}
+              </p>
+            )}
+          </div>
         )}
       </div>
 
