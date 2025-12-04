@@ -49,20 +49,25 @@ function parseExcelDate(dateStr: string): Date | null {
 }
 
 /**
- * Obtener mes actual en formato YYYY-MM
+ * Obtener rango de fechas por defecto (últimos 7 días)
  */
-function getCurrentMonth(): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  return `${year}-${month}`;
+function getDefaultDateRange(): { startDate: string; endDate: string } {
+  const endDate = new Date();
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - 7); // 7 días atrás
+
+  return {
+    startDate: startDate.toISOString().split('T')[0], // YYYY-MM-DD
+    endDate: endDate.toISOString().split('T')[0]
+  };
 }
 
 /**
  * Serverless function para descargar y parsear inspecciones preoperacionales
  * Query params:
- * - month: YYYY-MM (default: mes actual)
- * - limit: número máximo de registros (default: 5000, max: 10000)
+ * - startDate: YYYY-MM-DD (default: hoy - 7 días)
+ * - endDate: YYYY-MM-DD (default: hoy)
+ * - limit: número máximo de registros (default: 3000, max: 5000)
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // CORS headers
@@ -77,11 +82,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     // Obtener parámetros de query
-    const targetMonth = (req.query.month as string) || getCurrentMonth();
-    const limitParam = parseInt(req.query.limit as string) || 5000;
-    const limit = Math.min(limitParam, 10000); // Máximo 10k registros
+    const defaultRange = getDefaultDateRange();
+    const startDateParam = (req.query.startDate as string) || defaultRange.startDate;
+    const endDateParam = (req.query.endDate as string) || defaultRange.endDate;
+    const limitParam = parseInt(req.query.limit as string) || 3000;
+    const limit = Math.min(limitParam, 5000); // Máximo 5k registros
 
-    console.log('[Inspections] Target month:', targetMonth);
+    console.log('[Inspections] Date range:', startDateParam, 'to', endDateParam);
     console.log('[Inspections] Limit:', limit);
     console.log('[Inspections] Downloading Excel from:', INSPECTIONS_URL);
 
@@ -149,11 +156,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         contractStats: {},
         message: 'No se encontraron registros en el Excel',
         downloadedAt: new Date().toISOString(),
-        filterMonth: targetMonth
+        filterStartDate: startDateParam,
+        filterEndDate: endDateParam
       });
     }
 
-    // Mapear datos a estructura consistente Y FILTRAR POR MES
+    // Convertir fechas de parámetros a Date objects
+    const startDate = new Date(startDateParam);
+    const endDate = new Date(endDateParam);
+    endDate.setHours(23, 59, 59, 999); // Incluir todo el día final
+
+    // Mapear datos a estructura consistente Y FILTRAR POR RANGO DE FECHAS
     let inspections: InspectionRecord[] = rawData
       .map((row: any) => {
         const fechaStr = row['Fecha'] || row['fecha'] || '';
@@ -174,18 +187,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         };
       })
       .filter((inspection) => {
-        // Filtrar por mes objetivo
+        // Filtrar por rango de fechas
         if (!inspection.fecha) return false;
 
         const inspectionDate = parseExcelDate(inspection.fecha);
         if (!inspectionDate) return false;
 
-        const inspectionMonth = `${inspectionDate.getFullYear()}-${String(inspectionDate.getMonth() + 1).padStart(2, '0')}`;
-        return inspectionMonth === targetMonth;
+        // Verificar si está en el rango
+        return inspectionDate >= startDate && inspectionDate <= endDate;
       })
       .slice(0, limit); // Limitar cantidad
 
-    console.log(`[Inspections] Filtered to ${inspections.length} records for month ${targetMonth}`);
+    console.log(`[Inspections] Filtered to ${inspections.length} records for range ${startDateParam} to ${endDateParam}`);
 
     // Calcular estadísticas
     const stats = {
@@ -221,7 +234,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       stats,
       contractStats,
       downloadedAt: new Date().toISOString(),
-      filterMonth: targetMonth,
+      filterStartDate: startDateParam,
+      filterEndDate: endDateParam,
       totalRecordsInExcel: rawData.length,
       recordsAfterFilter: inspections.length
     });

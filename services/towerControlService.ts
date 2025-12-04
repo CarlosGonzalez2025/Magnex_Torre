@@ -324,6 +324,37 @@ export async function getInspectionsByDate(date: string): Promise<{ success: boo
 }
 
 /**
+ * Get inspections by date range (for week view)
+ */
+export async function getInspectionsByDateRange(startDate: string, endDate: string, contract?: string): Promise<{ success: boolean; data?: PreoperationalInspection[]; error?: string }> {
+  try {
+    let query = supabase
+      .from('preoperational_inspections')
+      .select('*')
+      .gte('inspection_date', startDate)
+      .lte('inspection_date', endDate)
+      .order('inspection_date', { ascending: false })
+      .order('plate', { ascending: true });
+
+    if (contract) {
+      query = query.eq('contract', contract);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.error('[TowerControl] Error fetching inspections by range:', error);
+      return { success: false, error: error.message };
+    }
+
+    return { success: true, data: data || [] };
+  } catch (error: any) {
+    console.error('[TowerControl] Exception fetching inspections by range:', error);
+    return { success: false, error: error.message || 'Error desconocido' };
+  }
+}
+
+/**
  * Get inspections by contract
  */
 export async function getInspectionsByContract(contract: string, startDate?: string, endDate?: string): Promise<{ success: boolean; data?: PreoperationalInspection[]; error?: string }> {
