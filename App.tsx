@@ -274,43 +274,43 @@ export default function App() {
     <div className="min-h-screen bg-slate-50 flex flex-col">
       {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-50 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-lg flex items-center justify-center shadow-md transition-colors ${getStatusColor()}`}>
-              <Server className="text-white w-6 h-6" />
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 min-h-[64px] flex items-center justify-between py-3">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className={`w-8 h-8 sm:w-10 sm:h-10 rounded-lg flex items-center justify-center shadow-md transition-colors ${getStatusColor()}`}>
+              <Server className="text-white w-5 h-5 sm:w-6 sm:h-6" />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-slate-800 leading-none">Sistema Central de Flota</h1>
-              <div className="flex items-center gap-2 mt-1.5">
+              <h1 className="text-base sm:text-xl font-bold text-slate-800 leading-none">Sistema Central de Flota</h1>
+              <div className="flex items-center gap-2 mt-1.5 hidden sm:flex">
                 {getStatusBadge()}
               </div>
             </div>
           </div>
-          
-          <div className="flex items-center gap-4">
-            <div className="hidden md:flex flex-col items-end mr-2">
+
+          <div className="flex items-center gap-2 sm:gap-4">
+            <div className="hidden lg:flex flex-col items-end mr-2">
               <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Última Actualización</span>
               <span className="text-sm font-medium text-slate-800">{lastUpdate.toLocaleTimeString()}</span>
             </div>
-            <button 
+            <button
               onClick={fetchData}
               disabled={loading}
               className={`p-2 rounded-full hover:bg-slate-100 transition-all ${loading ? 'animate-spin text-blue-600' : 'text-slate-600'}`}
               title="Actualizar ahora"
             >
-              <RefreshCw className="w-5 h-5" />
+              <RefreshCw className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
             <div className="h-8 w-px bg-slate-200 mx-2 hidden md:block"></div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 sm:gap-2">
                <span className="relative flex h-3 w-3">
                   <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${getStatusColor().replace('bg-', 'bg-').replace('600', '400').replace('500', '300')}`}></span>
                   <span className={`relative inline-flex rounded-full h-3 w-3 ${getStatusColor()}`}></span>
                 </span>
-                <span className={`text-sm font-medium ${
-                  dataSource === 'REAL' ? 'text-green-700' : 
-                  dataSource === 'DIRECT_API' ? 'text-purple-700' : 
-                  dataSource === 'PARTIAL_DIRECT' ? 'text-orange-700' : 
-                  dataSource === 'MOCK' ? 'text-amber-700' : 
+                <span className={`text-xs sm:text-sm font-medium ${
+                  dataSource === 'REAL' ? 'text-green-700' :
+                  dataSource === 'DIRECT_API' ? 'text-purple-700' :
+                  dataSource === 'PARTIAL_DIRECT' ? 'text-orange-700' :
+                  dataSource === 'MOCK' ? 'text-amber-700' :
                   'text-red-700'
                 }`}>
                   {getStatusText()}
@@ -435,63 +435,63 @@ export default function App() {
         )}
 
         {/* Controls Toolbar */}
-        <div className="flex flex-col lg:flex-row gap-4 justify-between items-start lg:items-center mb-6 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-          
+        <div className="flex flex-col gap-4 mb-6 bg-white p-3 sm:p-4 rounded-xl border border-slate-200 shadow-sm">
+
           {/* View Toggles */}
-          <div className="flex bg-slate-100 p-1 rounded-lg">
+          <div className="flex flex-wrap bg-slate-100 p-1 rounded-lg gap-1">
             <button
               onClick={() => setActiveTab('table')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'table' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-all ${activeTab === 'table' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
               <LayoutDashboard className="w-4 h-4" />
-              Tabla
+              <span className="hidden sm:inline">Tabla</span>
             </button>
             <button
               onClick={() => setActiveTab('map')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'map' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-all ${activeTab === 'map' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
               <MapIcon className="w-4 h-4" />
-              Mapa
+              <span className="hidden sm:inline">Mapa</span>
             </button>
             <button
               onClick={() => setActiveTab('alerts')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'alerts' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-all ${activeTab === 'alerts' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
               <Bell className="w-4 h-4" />
-              Alertas
+              <span className="hidden sm:inline">Alertas</span>
               {criticalAlertsCount > 0 && (
-                <span className="bg-red-500 text-white text-xs px-2 py-0.5 rounded-full font-bold">
+                <span className="bg-red-500 text-white text-xs px-1.5 sm:px-2 py-0.5 rounded-full font-bold">
                   {criticalAlertsCount}
                 </span>
               )}
             </button>
             <button
               onClick={() => setActiveTab('history')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'history' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-all ${activeTab === 'history' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
               <History className="w-4 h-4" />
-              Historial
+              <span className="hidden sm:inline">Historial</span>
             </button>
             <button
               onClick={() => setActiveTab('analytics')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'analytics' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-all ${activeTab === 'analytics' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
               <BarChart3 className="w-4 h-4" />
-              Análisis
+              <span className="hidden sm:inline">Análisis</span>
             </button>
             <button
               onClick={() => setActiveTab('inspections')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'inspections' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-all ${activeTab === 'inspections' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
               <ClipboardCheck className="w-4 h-4" />
-              Inspecciones
+              <span className="hidden sm:inline">Inspecciones</span>
             </button>
             <button
               onClick={() => setActiveTab('schedules')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'schedules' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-all ${activeTab === 'schedules' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
               <Calendar className="w-4 h-4" />
-              Cronogramas
+              <span className="hidden sm:inline">Cronogramas</span>
             </button>
           </div>
 

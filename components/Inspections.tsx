@@ -2,7 +2,7 @@ import React from 'react';
 import { ClipboardCheck, RefreshCw, AlertTriangle, CheckCircle, Clock, Download } from 'lucide-react';
 import {
   importInspectionsToDatabase,
-  getInspectionsByDate,
+  getInspectionsByDateRange,
   getInspectionSummary,
   crossInspectionsWithIgnition,
   type PreoperationalInspection,
@@ -16,27 +16,40 @@ interface InspectionsProps {
 
 export const Inspections: React.FC<InspectionsProps> = ({ selectedContract }) => {
   const [loading, setLoading] = React.useState(false);
+  const [downloading, setDownloading] = React.useState(false);
   const [inspections, setInspections] = React.useState<PreoperationalInspection[]>([]);
   const [summary, setSummary] = React.useState<InspectionSummary[]>([]);
   const [crossCheck, setCrossCheck] = React.useState<InspectionCrossCheck[]>([]);
-  const [selectedDate, setSelectedDate] = React.useState<string>(
+
+  // Rango de fechas para descargar desde Excel (por defecto: última semana)
+  const [downloadStartDate, setDownloadStartDate] = React.useState<string>(() => {
+    const date = new Date();
+    date.setDate(date.getDate() - 7);
+    return date.toISOString().split('T')[0];
+  });
+  const [downloadEndDate, setDownloadEndDate] = React.useState<string>(
     new Date().toISOString().split('T')[0]
   );
-  const [selectedMonth, setSelectedMonth] = React.useState<string>(() => {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    return `${year}-${month}`;
+
+  // Rango de fechas para visualización desde Supabase
+  const [viewStartDate, setViewStartDate] = React.useState<string>(() => {
+    const date = new Date();
+    date.setDate(date.getDate() - 7);
+    return date.toISOString().split('T')[0];
   });
+  const [viewEndDate, setViewEndDate] = React.useState<string>(
+    new Date().toISOString().split('T')[0]
+  );
+
   const [filterContract, setFilterContract] = React.useState<string>('');
   const [lastUpdate, setLastUpdate] = React.useState<string>('');
   const [errorMessage, setErrorMessage] = React.useState<string>('');
   const [apiStats, setApiStats] = React.useState<{ totalRecords: number; filteredRecords: number }>({ totalRecords: 0, filteredRecords: 0 });
 
-  // Cargar datos al montar el componente
+  // Cargar datos DESDE SUPABASE cuando cambien los filtros
   React.useEffect(() => {
     loadInspections();
-  }, [selectedDate, filterContract]);
+  }, [viewStartDate, viewEndDate, filterContract]);
 
   // Auto-aplicar filtro de contrato si viene desde props
   React.useEffect(() => {
@@ -46,16 +59,18 @@ export const Inspections: React.FC<InspectionsProps> = ({ selectedContract }) =>
   }, [selectedContract]);
 
   /**
-   * Descarga Excel y actualiza base de datos
+   * Descarga Excel y actualiza base de datos (NUEVA ARQUITECTURA: Excel → Supabase → UI)
    */
   const handleUpdateInspections = async () => {
-    setLoading(true);
+    setDownloading(true);
     setErrorMessage('');
     try {
-      console.log('[Inspections] Fetching data from API for month:', selectedMonth);
+      console.log('[Inspections] Fetching from API:', downloadStartDate, 'to', downloadEndDate);
 
-      // Llamar al endpoint que descarga el Excel CON FILTRO DE MES
-      const response = await fetch(`/api/inspections?month=${selectedMonth}&limit=5000`);
+      // Llamar al endpoint que descarga el Excel CON RANGO DE FECHAS
+      const response = await fetch(
+        `/api/inspections?startDate=${downloadStartDate}&endDate=${downloadEndDate}&limit=3000`
+      );
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -67,7 +82,7 @@ export const Inspections: React.FC<InspectionsProps> = ({ selectedContract }) =>
         throw new Error(result.error || result.errorDetails || 'Error al descargar inspecciones');
       }
 
-      console.log(`[Inspections] Downloaded ${result.data.length} inspections for ${result.filterMonth}`);
+      console.log(`[Inspections] Downloaded ${result.data.length} inspections`);
       console.log(`[Inspections] Total in Excel: ${result.totalRecordsInExcel}, After filter: ${result.recordsAfterFilter}`);
 
       // Actualizar estadísticas de API
@@ -77,20 +92,39 @@ export const Inspections: React.FC<InspectionsProps> = ({ selectedContract }) =>
       });
 
       if (result.data.length === 0) {
-        alert(`ℹ️ No se encontraron inspecciones para el mes ${selectedMonth}\n\nEl Excel tiene ${result.totalRecordsInExcel} registros en total, pero ninguno corresponde al mes seleccionado.`);
+        alert(
+          `ℹ️ No se encontraron inspecciones\n\n` +
+          `Rango: ${downloadStartDate} a ${downloadEndDate}\n` +
+          `El Excel tiene ${result.totalRecordsInExcel} registros en total, pero ninguno en este rango.`
+        );
         setLastUpdate(new Date().toLocaleString('es-CO'));
         return;
       }
 
-      // Importar a la base de datos
+      // Importar a Supabase
       const importResult = await importInspectionsToDatabase(result.data);
 
       if (importResult.success) {
-        alert(`✅ Inspecciones actualizadas correctamente\n\nMes: ${selectedMonth}\nImportadas: ${importResult.imported}\nTotal en Excel: ${result.totalRecordsInExcel}`);
+        alert(
+          `✅ Semana descargada y guardada en Supabase\n\n` +
+          `Rango: ${downloadStartDate} a ${downloadEndDate}\n` +
+          `Importadas: ${importResult.imported}\n` +
+          `Total en Excel: ${result.totalRecordsInExcel}`
+        );
         setLastUpdate(new Date().toLocaleString('es-CO'));
+
+        // Actualizar fechas de visualización para mostrar lo recién descargado
+        setViewStartDate(downloadStartDate);
+        setViewEndDate(downloadEndDate);
+
         await loadInspections();
       } else {
-        alert(`⚠️ Importación parcial\n\nImportadas: ${importResult.imported}\nErrores: ${importResult.errors.length}\n\n${importResult.errors.slice(0, 5).join('\n')}`);
+        alert(
+          `⚠️ Importación parcial\n\n` +
+          `Importadas: ${importResult.imported}\n` +
+          `Errores: ${importResult.errors.length}\n\n` +
+          `${importResult.errors.slice(0, 5).join('\n')}`
+        );
       }
     } catch (error: any) {
       console.error('[Inspections] Error:', error);
@@ -98,33 +132,33 @@ export const Inspections: React.FC<InspectionsProps> = ({ selectedContract }) =>
       setErrorMessage(errorMsg);
       alert('❌ Error al actualizar inspecciones:\n\n' + errorMsg + '\n\nRevisa la consola del navegador para más detalles.');
     } finally {
-      setLoading(false);
+      setDownloading(false);
     }
   };
 
   /**
-   * Carga inspecciones desde la base de datos
+   * Carga inspecciones desde Supabase (NO desde Excel)
    */
   const loadInspections = async () => {
     setLoading(true);
     try {
-      // Cargar inspecciones del día
-      const inspectionsResult = await getInspectionsByDate(selectedDate);
+      console.log('[Inspections] Loading from Supabase:', viewStartDate, 'to', viewEndDate);
+
+      // Cargar inspecciones por rango de fechas desde Supabase
+      const inspectionsResult = await getInspectionsByDateRange(
+        viewStartDate,
+        viewEndDate,
+        filterContract || undefined
+      );
+
       if (inspectionsResult.success && inspectionsResult.data) {
-        let filtered = inspectionsResult.data;
-
-        // Filtrar por contrato si está seleccionado
-        if (filterContract) {
-          filtered = filtered.filter(i => i.contract === filterContract);
-        }
-
-        setInspections(filtered);
+        setInspections(inspectionsResult.data);
       }
 
-      // Cargar resumen
+      // Cargar resumen por rango
       const summaryResult = await getInspectionSummary({
-        startDate: selectedDate,
-        endDate: selectedDate,
+        startDate: viewStartDate,
+        endDate: viewEndDate,
         contract: filterContract || undefined
       });
 
@@ -132,8 +166,8 @@ export const Inspections: React.FC<InspectionsProps> = ({ selectedContract }) =>
         setSummary(summaryResult.data);
       }
 
-      // Cargar cruce con ignición
-      const crossCheckResult = await crossInspectionsWithIgnition(selectedDate);
+      // Cargar cruce con ignición (solo para el primer día del rango)
+      const crossCheckResult = await crossInspectionsWithIgnition(viewStartDate);
       if (crossCheckResult.success && crossCheckResult.data) {
         let filteredCross = crossCheckResult.data;
 
@@ -146,7 +180,7 @@ export const Inspections: React.FC<InspectionsProps> = ({ selectedContract }) =>
       }
 
     } catch (error: any) {
-      console.error('[Inspections] Error loading:', error);
+      console.error('[Inspections] Error loading from Supabase:', error);
     } finally {
       setLoading(false);
     }
@@ -229,7 +263,7 @@ export const Inspections: React.FC<InspectionsProps> = ({ selectedContract }) =>
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = `inspecciones_${selectedDate}_${filterContract || 'todas'}.csv`;
+    link.download = `inspecciones_${viewStartDate}_${viewEndDate}_${filterContract || 'todas'}.csv`;
     link.click();
   };
 
@@ -249,12 +283,12 @@ export const Inspections: React.FC<InspectionsProps> = ({ selectedContract }) =>
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <ClipboardCheck className="w-8 h-8 text-blue-600" />
           <div>
-            <h2 className="text-2xl font-bold text-gray-900">Inspecciones Preoperacionales</h2>
-            <p className="text-sm text-gray-600">
+            <h2 className="text-xl sm:text-2xl font-bold text-gray-900">Inspecciones Preoperacionales</h2>
+            <p className="text-xs sm:text-sm text-gray-600">
               Seguimiento y control de inspecciones diarias
             </p>
           </div>
@@ -262,69 +296,115 @@ export const Inspections: React.FC<InspectionsProps> = ({ selectedContract }) =>
 
         <button
           onClick={handleUpdateInspections}
-          disabled={loading}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          disabled={downloading}
+          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors w-full sm:w-auto justify-center"
         >
-          <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
-          {loading ? 'Actualizando...' : 'Actualizar Inspecciones'}
+          <RefreshCw className={`w-5 h-5 ${downloading ? 'animate-spin' : ''}`} />
+          {downloading ? 'Descargando...' : 'Descargar Semana'}
         </button>
       </div>
 
       {/* Filtros */}
       <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-200">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Mes para descargar:
-            </label>
-            <input
-              type="month"
-              value={selectedMonth}
-              onChange={(e) => setSelectedMonth(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            />
-            <p className="text-xs text-gray-500 mt-1">
-              Solo se descargarán inspecciones de este mes
-            </p>
-          </div>
+        {/* Sección: Descargar desde Excel */}
+        <div className="mb-6 pb-6 border-b border-gray-200">
+          <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+            <Download className="w-4 h-4 text-blue-600" />
+            Descargar desde Excel
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Fecha Inicio:
+              </label>
+              <input
+                type="date"
+                value={downloadStartDate}
+                onChange={(e) => setDownloadStartDate(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Fecha (filtro local):
-            </label>
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            />
-          </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Fecha Fin:
+              </label>
+              <input
+                type="date"
+                value={downloadEndDate}
+                onChange={(e) => setDownloadEndDate(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Contrato:
-            </label>
-            <select
-              value={filterContract}
-              onChange={(e) => setFilterContract(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            >
-              <option value="">Todos los contratos</option>
-              {contracts.map(contract => (
-                <option key={contract} value={contract}>{contract}</option>
-              ))}
-            </select>
+            <div className="flex items-end">
+              <p className="text-xs text-gray-500">
+                Rango seleccionado: {downloadStartDate} a {downloadEndDate}
+                <br />
+                (~7 días recomendado)
+              </p>
+            </div>
           </div>
+        </div>
 
-          <div className="flex items-end">
-            <button
-              onClick={handleExportCSV}
-              disabled={inspections.length === 0}
-              className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors w-full justify-center"
-            >
-              <Download className="w-5 h-5" />
-              Exportar CSV
-            </button>
+        {/* Sección: Visualizar desde Supabase */}
+        <div>
+          <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+            <ClipboardCheck className="w-4 h-4 text-green-600" />
+            Visualizar desde Base de Datos
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Desde:
+              </label>
+              <input
+                type="date"
+                value={viewStartDate}
+                onChange={(e) => setViewStartDate(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Hasta:
+              </label>
+              <input
+                type="date"
+                value={viewEndDate}
+                onChange={(e) => setViewEndDate(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Contrato:
+              </label>
+              <select
+                value={filterContract}
+                onChange={(e) => setFilterContract(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500"
+              >
+                <option value="">Todos los contratos</option>
+                {contracts.map(contract => (
+                  <option key={contract} value={contract}>{contract}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-end">
+              <button
+                onClick={handleExportCSV}
+                disabled={inspections.length === 0}
+                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors w-full justify-center"
+              >
+                <Download className="w-5 h-5" />
+                <span className="hidden sm:inline">Exportar CSV</span>
+                <span className="sm:hidden">CSV</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -354,7 +434,9 @@ export const Inspections: React.FC<InspectionsProps> = ({ selectedContract }) =>
 
       {/* Resumen */}
       <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-200">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Resumen del Día</h3>
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">
+          Resumen ({viewStartDate} a {viewEndDate})
+        </h3>
 
         <div className="overflow-x-auto">
           <table className="w-full">
@@ -404,7 +486,7 @@ export const Inspections: React.FC<InspectionsProps> = ({ selectedContract }) =>
       </div>
 
       {/* Tabla Detallada */}
-      <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-200">
+      <div className="bg-white rounded-xl p-4 sm:p-6 shadow-sm border border-gray-200">
         <h3 className="text-lg font-semibold text-gray-900 mb-4">
           Detalle de Inspecciones ({inspections.length})
         </h3>
@@ -417,12 +499,12 @@ export const Inspections: React.FC<InspectionsProps> = ({ selectedContract }) =>
         ) : inspections.length === 0 ? (
           <div className="text-center py-8 text-gray-500">
             <ClipboardCheck className="w-12 h-12 mx-auto mb-2 opacity-50" />
-            <p>No hay inspecciones para la fecha y filtros seleccionados</p>
-            <p className="text-sm mt-2">Haz clic en "Actualizar Inspecciones" para descargar datos</p>
+            <p>No hay inspecciones para el rango seleccionado</p>
+            <p className="text-sm mt-2">Haz clic en "Descargar Semana" para importar datos del Excel</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+          <div className="overflow-x-auto -mx-4 sm:mx-0">
+            <table className="w-full text-xs sm:text-sm min-w-max">
               <thead>
                 <tr className="border-b border-gray-200 bg-gray-50">
                   <th className="text-left py-3 px-2 font-semibold text-gray-700">Llave</th>
@@ -484,16 +566,16 @@ export const Inspections: React.FC<InspectionsProps> = ({ selectedContract }) =>
 
       {/* Cruce con Ignición */}
       {crossCheck.length > 0 && (
-        <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-200">
+        <div className="bg-white rounded-xl p-4 sm:p-6 shadow-sm border border-gray-200">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">
             Cruce con Eventos de Ignición
           </h3>
-          <p className="text-sm text-gray-600 mb-4">
+          <p className="text-xs sm:text-sm text-gray-600 mb-4">
             Vehículos que encendieron motor y su estado de inspección
           </p>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+          <div className="overflow-x-auto -mx-4 sm:mx-0">
+            <table className="w-full text-xs sm:text-sm min-w-max">
               <thead>
                 <tr className="border-b border-gray-200 bg-gray-50">
                   <th className="text-left py-3 px-2 font-semibold text-gray-700">Placa</th>
