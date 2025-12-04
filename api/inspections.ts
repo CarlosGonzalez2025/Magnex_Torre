@@ -1,5 +1,3 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
-
 // ============================================================================
 // CONFIGURACIÓN - Google Apps Script API
 // ============================================================================
