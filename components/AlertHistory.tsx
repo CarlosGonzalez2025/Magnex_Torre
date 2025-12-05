@@ -11,6 +11,8 @@ import {
   SavedAlertWithPlans,
   ActionPlan
 } from '../services/databaseService';
+import { usePagination } from '../hooks/usePagination';
+import { PaginationControls } from './PaginationControls';
 
 interface AlertHistoryProps {
   onRefresh?: () => void;
@@ -32,6 +34,12 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
     responsible: '',
     status: 'pending' as const,
     observations: ''
+  });
+
+  // Hook de paginación
+  const pagination = usePagination(alerts, {
+    initialPageSize: 20,
+    pageSizeOptions: [10, 20, 50, 100]
   });
 
   useEffect(() => {
@@ -207,7 +215,7 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
         </div>
       </div>
 
-      {/* Lista de Alertas */}
+      {/* Tabla de Alertas */}
       {loading ? (
         <div className="text-center py-12 bg-white rounded-xl border border-slate-200">
           <p className="text-slate-600">Cargando alertas...</p>
@@ -219,133 +227,164 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
           <p className="text-slate-400 text-sm mt-1">Las alertas guardadas aparecerán aquí</p>
         </div>
       ) : (
-        <div className="space-y-3">
-          {alerts.map((alert) => (
-            <div
-              key={alert.id}
-              className={`p-4 rounded-xl border-2 ${getSeverityColor(alert.severity)} shadow-sm hover:shadow-md transition-all`}
-            >
-              <div className="flex items-start gap-4">
-                {/* Icono */}
-                <div className="flex-shrink-0 mt-1">
-                  {getSeverityIcon(alert.severity)}
-                </div>
-
-                {/* Contenido */}
-                <div className="flex-1 space-y-3">
-                  {/* Header */}
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <h4 className="font-bold text-lg text-slate-900">{alert.type}</h4>
-                      <p className="text-sm font-semibold text-slate-700 mt-1">
-                        {alert.plate}
-                        {alert.contract && alert.contract !== 'No asignado' && (
-                          <span className="ml-2 text-sky-600">· {alert.contract}</span>
-                        )}
-                      </p>
-                    </div>
+        <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm bg-white">
+          <table className="w-full text-sm">
+            <thead className="bg-gradient-to-r from-slate-700 to-slate-600 text-white">
+              <tr>
+                <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Tipo</th>
+                <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Placa/Contrato</th>
+                <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Estado</th>
+                <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Severidad</th>
+                <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Detalles</th>
+                <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Conductor</th>
+                <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Velocidad</th>
+                <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Ubicación</th>
+                <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Fecha</th>
+                <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Planes</th>
+                <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Acciones</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {pagination.paginatedData.map((alert, index) => (
+                <tr
+                  key={alert.id}
+                  className={`${index % 2 === 0 ? 'bg-white' : 'bg-slate-50'} hover:bg-blue-50 transition-colors`}
+                >
+                  {/* Tipo */}
+                  <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
-                      {getStatusBadge(alert.status)}
-                      <span className="text-xs font-medium px-2 py-1 rounded-full bg-white border border-current uppercase">
-                        {alert.severity}
-                      </span>
+                      {getSeverityIcon(alert.severity)}
+                      <span className="font-semibold text-slate-900">{alert.type}</span>
                     </div>
-                  </div>
+                  </td>
 
-                  {/* Detalles */}
-                  <p className="text-sm text-slate-700">{alert.details}</p>
+                  {/* Placa/Contrato */}
+                  <td className="px-4 py-3">
+                    <div className="font-bold text-slate-900">{alert.plate}</div>
+                    {alert.contract && alert.contract !== 'No asignado' && (
+                      <div className="text-xs text-sky-600 font-medium">{alert.contract}</div>
+                    )}
+                  </td>
 
-                  {/* Información adicional */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs text-slate-600">
-                    <div className="flex items-center gap-1">
-                      <User className="w-3 h-3" />
-                      <span>{alert.driver}</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Gauge className="w-3 h-3" />
-                      <span>{alert.speed} km/h</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <MapPin className="w-3 h-3" />
-                      <span className="truncate">{alert.location}</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
-                      <span>{new Date(alert.timestamp).toLocaleString()}</span>
-                    </div>
-                  </div>
-
-                  {/* Planes de Acción */}
-                  {alert.action_plans && alert.action_plans.length > 0 && (
-                    <div className="bg-white bg-opacity-50 rounded-lg p-3 space-y-2">
-                      <h5 className="text-xs font-bold text-slate-700 uppercase">Planes de Acción ({alert.action_plans.length})</h5>
-                      {alert.action_plans.map((plan) => (
-                        <div key={plan.id} className="flex items-start justify-between gap-2 text-xs bg-white p-2 rounded border border-slate-200">
-                          <div className="flex-1">
-                            <p className="font-medium text-slate-800">{plan.description}</p>
-                            <p className="text-slate-600 mt-1">Responsable: {plan.responsible}</p>
-                            {plan.observations && (
-                              <p className="text-slate-500 mt-1 italic">{plan.observations}</p>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <select
-                              value={plan.status}
-                              onChange={(e) => handleUpdateActionPlanStatus(plan.id, e.target.value as any)}
-                              className="px-2 py-1 text-xs border rounded"
-                            >
-                              <option value="pending">Pendiente</option>
-                              <option value="in_progress">En Proceso</option>
-                              <option value="completed">Completado</option>
-                            </select>
-                            <button
-                              onClick={() => handleDeleteActionPlan(plan.id)}
-                              className="p-1 text-red-600 hover:bg-red-50 rounded"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Acciones */}
-                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-current border-opacity-20">
+                  {/* Estado */}
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
                     <select
                       value={alert.status}
                       onChange={(e) => handleStatusChange(alert.id, e.target.value as any)}
-                      className="px-3 py-1.5 text-xs font-medium border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+                      className="px-2 py-1 text-xs font-medium border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
                     >
                       <option value="pending">Pendiente</option>
                       <option value="in_progress">En Proceso</option>
                       <option value="resolved">Resuelta</option>
                     </select>
+                  </td>
 
-                    <button
-                      onClick={() => handleOpenActionModal(alert)}
-                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-sky-600 text-white hover:bg-sky-700 transition-all"
-                    >
-                      <Plus className="w-3 h-3" />
-                      Plan de Acción
-                    </button>
-
-                    <button
-                      onClick={() => handleDeleteAlert(alert.id)}
-                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-red-100 text-red-700 hover:bg-red-200 transition-all"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                      Eliminar
-                    </button>
-
-                    <span className="ml-auto text-xs text-slate-500">
-                      Guardada: {new Date(alert.saved_at).toLocaleString()}
+                  {/* Severidad */}
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
+                    <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${getSeverityColor(alert.severity)}`}>
+                      {alert.severity}
                     </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))}
+                  </td>
+
+                  {/* Detalles */}
+                  <td className="px-4 py-3">
+                    <span className="text-sm text-slate-700">{alert.details}</span>
+                  </td>
+
+                  {/* Conductor */}
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-1 text-sm text-slate-700">
+                      <User className="w-3 h-3" />
+                      <span>{alert.driver}</span>
+                    </div>
+                  </td>
+
+                  {/* Velocidad */}
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
+                    <div className="flex items-center justify-center gap-1">
+                      <Gauge className="w-3 h-3 text-slate-600" />
+                      <span className="font-semibold text-slate-900">{alert.speed}</span>
+                      <span className="text-xs text-slate-500">km/h</span>
+                    </div>
+                  </td>
+
+                  {/* Ubicación */}
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-1 text-sm text-slate-700 max-w-xs">
+                      <MapPin className="w-3 h-3 flex-shrink-0 text-blue-600" />
+                      <span className="truncate">{alert.location}</span>
+                    </div>
+                  </td>
+
+                  {/* Fecha */}
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
+                    <div className="text-sm text-slate-700">
+                      {new Date(alert.timestamp).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' })}
+                    </div>
+                    <div className="text-xs text-slate-500">
+                      {new Date(alert.timestamp).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}
+                    </div>
+                  </td>
+
+                  {/* Planes de Acción */}
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
+                    {alert.action_plans && alert.action_plans.length > 0 ? (
+                      <div className="text-xs">
+                        <span className="font-semibold text-slate-900">{alert.action_plans.length}</span>
+                        <span className="text-slate-600"> plan{alert.action_plans.length !== 1 ? 'es' : ''}</span>
+                        <div className="text-xs text-slate-500 mt-1">
+                          {alert.action_plans.filter(p => p.status === 'completed').length} completado{alert.action_plans.filter(p => p.status === 'completed').length !== 1 ? 's' : ''}
+                        </div>
+                      </div>
+                    ) : (
+                      <span className="text-xs text-slate-400">-</span>
+                    )}
+                  </td>
+
+                  {/* Acciones */}
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
+                    <div className="flex items-center justify-center gap-1">
+                      <button
+                        onClick={() => handleOpenActionModal(alert)}
+                        className="p-2 rounded-lg text-white bg-sky-600 hover:bg-sky-700 transition-colors"
+                        title="Gestionar Planes de Acción"
+                      >
+                        <Plus className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteAlert(alert.id)}
+                        className="p-2 rounded-lg text-white bg-red-600 hover:bg-red-700 transition-colors"
+                        title="Eliminar Alerta"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <div className="text-xs text-slate-500 mt-1">
+                      {new Date(alert.saved_at).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' })}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {/* Controles de paginación */}
+          <PaginationControls
+            currentPage={pagination.currentPage}
+            totalPages={pagination.totalPages}
+            pageSize={pagination.pageSize}
+            pageSizeOptions={pagination.pageSizeOptions}
+            recordInfo={pagination.recordInfo}
+            visiblePages={pagination.visiblePages}
+            canGoNext={pagination.canGoNext}
+            canGoPrevious={pagination.canGoPrevious}
+            onPageChange={pagination.goToPage}
+            onPageSizeChange={pagination.changePageSize}
+            onFirstPage={pagination.goToFirstPage}
+            onLastPage={pagination.goToLastPage}
+            onNextPage={pagination.goToNextPage}
+            onPreviousPage={pagination.goToPreviousPage}
+          />
         </div>
       )}
 

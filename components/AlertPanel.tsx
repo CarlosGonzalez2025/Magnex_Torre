@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Alert, AlertSeverity, AlertType } from '../types';
 import { AlertTriangle, AlertCircle, Bell, BellRing, Copy, CheckCircle, Clock, MapPin, User, Gauge, Save } from 'lucide-react';
+import { usePagination } from '../hooks/usePagination';
+import { PaginationControls } from './PaginationControls';
 
 interface AlertPanelProps {
   alerts: Alert[];
@@ -38,6 +40,12 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
   });
 
   const alertTypes = Array.from(new Set(alerts.map(a => a.type)));
+
+  // Hook de paginación
+  const pagination = usePagination(filteredAlerts, {
+    initialPageSize: 20,
+    pageSizeOptions: [10, 20, 50, 100]
+  });
 
   return (
     <div className="space-y-4">
@@ -77,100 +85,151 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
         </div>
       </div>
 
-      {/* Lista de Alertas */}
-      <div className="space-y-3">
-        {filteredAlerts.length === 0 ? (
-          <div className="text-center py-12 bg-white rounded-xl border border-slate-200">
-            <CheckCircle className="w-16 h-16 text-green-500 mx-auto mb-4" />
-            <p className="text-slate-600 font-medium">No hay alertas activas</p>
-            <p className="text-slate-400 text-sm mt-1">El sistema está funcionando normalmente</p>
-          </div>
-        ) : (
-          filteredAlerts.map((alert) => (
-            <div
-              key={alert.id}
-              className={`p-4 rounded-xl border-2 ${getSeverityColor(alert.severity)} shadow-sm hover:shadow-md transition-all`}
-            >
-              <div className="flex items-start gap-4">
-                {/* Icono */}
-                <div className="flex-shrink-0 mt-1">
-                  {getSeverityIcon(alert.severity)}
-                </div>
-
-                {/* Contenido */}
-                <div className="flex-1 space-y-2">
-                  {/* Header */}
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <h4 className="font-bold text-lg text-slate-900">{alert.type}</h4>
-                      <p className="text-sm font-semibold text-slate-700 mt-1">
-                        {alert.plate}
-                        {alert.contract && alert.contract !== 'No asignado' && (
-                          <span className="ml-2 text-sky-600">· {alert.contract}</span>
-                        )}
-                      </p>
+      {/* Tabla de Alertas */}
+      {filteredAlerts.length === 0 ? (
+        <div className="text-center py-12 bg-white rounded-xl border border-slate-200">
+          <CheckCircle className="w-16 h-16 text-green-500 mx-auto mb-4" />
+          <p className="text-slate-600 font-medium">No hay alertas activas</p>
+          <p className="text-slate-400 text-sm mt-1">El sistema está funcionando normalmente</p>
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm bg-white">
+          <table className="w-full text-sm">
+            <thead className="bg-gradient-to-r from-slate-700 to-slate-600 text-white">
+              <tr>
+                <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Tipo</th>
+                <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Placa/Contrato</th>
+                <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Severidad</th>
+                <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Detalles</th>
+                <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Conductor</th>
+                <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Velocidad</th>
+                <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Ubicación</th>
+                <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Hora</th>
+                <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Acciones</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {pagination.paginatedData.map((alert, index) => (
+                <tr
+                  key={alert.id}
+                  className={`${index % 2 === 0 ? 'bg-white' : 'bg-slate-50'} hover:bg-blue-50 transition-colors`}
+                >
+                  {/* Tipo */}
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      {getSeverityIcon(alert.severity)}
+                      <span className="font-semibold text-slate-900">{alert.type}</span>
                     </div>
-                    <span className="text-xs font-medium px-2 py-1 rounded-full bg-white border border-current uppercase">
+                  </td>
+
+                  {/* Placa/Contrato */}
+                  <td className="px-4 py-3">
+                    <div className="font-bold text-slate-900">{alert.plate}</div>
+                    {alert.contract && alert.contract !== 'No asignado' && (
+                      <div className="text-xs text-sky-600 font-medium">{alert.contract}</div>
+                    )}
+                  </td>
+
+                  {/* Severidad */}
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
+                    <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${getSeverityColor(alert.severity)}`}>
                       {alert.severity}
                     </span>
-                  </div>
+                  </td>
 
                   {/* Detalles */}
-                  <p className="text-sm text-slate-700">{alert.details}</p>
+                  <td className="px-4 py-3">
+                    <span className="text-sm text-slate-700">{alert.details}</span>
+                  </td>
 
-                  {/* Información adicional */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs text-slate-600">
-                    <div className="flex items-center gap-1">
+                  {/* Conductor */}
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-1 text-sm text-slate-700">
                       <User className="w-3 h-3" />
                       <span>{alert.driver}</span>
                     </div>
-                    <div className="flex items-center gap-1">
-                      <Gauge className="w-3 h-3" />
-                      <span>{alert.speed} km/h</span>
+                  </td>
+
+                  {/* Velocidad */}
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
+                    <div className="flex items-center justify-center gap-1">
+                      <Gauge className="w-3 h-3 text-slate-600" />
+                      <span className="font-semibold text-slate-900">{alert.speed}</span>
+                      <span className="text-xs text-slate-500">km/h</span>
                     </div>
-                    <div className="flex items-center gap-1">
-                      <MapPin className="w-3 h-3" />
+                  </td>
+
+                  {/* Ubicación */}
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-1 text-sm text-slate-700 max-w-xs">
+                      <MapPin className="w-3 h-3 flex-shrink-0 text-blue-600" />
                       <span className="truncate">{alert.location}</span>
                     </div>
-                    <div className="flex items-center gap-1">
+                  </td>
+
+                  {/* Hora */}
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
+                    <div className="flex items-center justify-center gap-1 text-sm text-slate-700">
                       <Clock className="w-3 h-3" />
-                      <span>{new Date(alert.timestamp).toLocaleTimeString()}</span>
+                      <span>{new Date(alert.timestamp).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}</span>
                     </div>
-                  </div>
+                    <div className="text-xs text-slate-500">
+                      {new Date(alert.timestamp).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' })}
+                    </div>
+                  </td>
 
                   {/* Acciones */}
-                  <div className="flex items-center gap-3 pt-2 border-t border-current border-opacity-20">
-                    {onSaveAlert && (
-                      <button
-                        onClick={() => onSaveAlert(alert)}
-                        className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all bg-green-600 text-white hover:bg-green-700 active:scale-95"
-                      >
-                        <Save className="w-4 h-4" />
-                        Guardar Alerta
-                      </button>
-                    )}
-                    {onCopyAlert && (
-                      <button
-                        onClick={() => onCopyAlert(alert)}
-                        className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all bg-blue-600 text-white hover:bg-blue-700 active:scale-95"
-                      >
-                        <Copy className="w-4 h-4" />
-                        Copiar Alerta
-                      </button>
-                    )}
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
+                    <div className="flex items-center justify-center gap-2">
+                      {onSaveAlert && (
+                        <button
+                          onClick={() => onSaveAlert(alert)}
+                          className="p-2 rounded-lg text-white bg-green-600 hover:bg-green-700 transition-colors"
+                          title="Guardar Alerta"
+                        >
+                          <Save className="w-4 h-4" />
+                        </button>
+                      )}
+                      {onCopyAlert && (
+                        <button
+                          onClick={() => onCopyAlert(alert)}
+                          className="p-2 rounded-lg text-white bg-blue-600 hover:bg-blue-700 transition-colors"
+                          title="Copiar Alerta"
+                        >
+                          <Copy className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
                     {alert.sent && alert.sentAt && (
-                      <span className="text-xs text-slate-500">
-                        Copiada: {new Date(alert.sentAt).toLocaleString()}
-                        {alert.sentBy && ` por ${alert.sentBy}`}
-                      </span>
+                      <div className="text-xs text-slate-500 mt-1">
+                        Copiada: {new Date(alert.sentAt).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}
+                      </div>
                     )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))
-        )}
-      </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {/* Controles de paginación */}
+          <PaginationControls
+            currentPage={pagination.currentPage}
+            totalPages={pagination.totalPages}
+            pageSize={pagination.pageSize}
+            pageSizeOptions={pagination.pageSizeOptions}
+            recordInfo={pagination.recordInfo}
+            visiblePages={pagination.visiblePages}
+            canGoNext={pagination.canGoNext}
+            canGoPrevious={pagination.canGoPrevious}
+            onPageChange={pagination.goToPage}
+            onPageSizeChange={pagination.changePageSize}
+            onFirstPage={pagination.goToFirstPage}
+            onLastPage={pagination.goToLastPage}
+            onNextPage={pagination.goToNextPage}
+            onPreviousPage={pagination.goToPreviousPage}
+          />
+        </div>
+      )}
     </div>
   );
 };
