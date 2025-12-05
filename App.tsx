@@ -201,12 +201,17 @@ export default function App() {
 
   // Handle alert copy to clipboard
   const handleCopyAlert = async (alert: Alert) => {
+    // Determinar si es exceso de velocidad
+    const isSpeedingAlert = alert.type.toLowerCase().includes('velocidad') ||
+                            alert.type.toLowerCase().includes('speeding');
+
+    // Formato con markdown para WhatsApp
     const message = `🚨 *ALERTA DE FLOTA*\n\n` +
-      `Tipo: ${alert.type}\n` +
-      `Vehículo: ${alert.plate}\n` +
-      `Conductor: ${alert.driver}\n` +
+      `*Tipo:* ${alert.type}\n` +
+      `*Vehículo:* ${alert.plate}\n` +
+      `*Conductor:* ${alert.driver}\n` +
       `Detalles: ${alert.details}\n` +
-      `Velocidad: ${alert.speed} km/h\n` +
+      (isSpeedingAlert ? `*Velocidad:* ${alert.speed} km/h ⚠️\n` : `Velocidad: ${alert.speed} km/h\n`) +
       `Ubicación: ${alert.location}\n` +
       `Hora: ${new Date(alert.timestamp).toLocaleString()}\n` +
       (alert.contract ? `Contrato: ${alert.contract}\n` : '') +
