@@ -4,6 +4,7 @@ import { Battery, Signal, MapPin, FileDown, Search } from 'lucide-react';
 import { usePagination } from '../hooks/usePagination';
 import { PaginationControls } from './PaginationControls';
 import { useExportToExcel } from '../hooks/useExportToExcel';
+import { VehicleDetailModal } from './VehicleDetailModal';
 
 interface VehicleTableProps {
   vehicles: Vehicle[];
@@ -13,7 +14,19 @@ export const VehicleTable: React.FC<VehicleTableProps> = ({ vehicles }) => {
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState<'ALL' | VehicleStatus>('ALL');
   const [sourceFilter, setSourceFilter] = useState<'ALL' | ApiSource>('ALL');
+  const [selectedVehicle, setSelectedVehicle] = useState<Vehicle | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const { exportToExcel } = useExportToExcel();
+
+  const handleRowClick = (vehicle: Vehicle) => {
+    setSelectedVehicle(vehicle);
+    setIsModalOpen(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setSelectedVehicle(null);
+  };
 
   // Filtrado
   const filteredVehicles = vehicles.filter(vehicle => {
@@ -167,7 +180,8 @@ export const VehicleTable: React.FC<VehicleTableProps> = ({ vehicles }) => {
           {pagination.paginatedData.map((vehicle, index) => (
             <tr
               key={vehicle.id}
-              className={`${index % 2 === 0 ? 'bg-white' : 'bg-slate-50'} hover:bg-blue-50 transition-colors`}
+              onClick={() => handleRowClick(vehicle)}
+              className={`${index % 2 === 0 ? 'bg-white' : 'bg-slate-50'} hover:bg-blue-50 transition-colors cursor-pointer`}
             >
               {/* Placa */}
               <td className="px-4 py-3 whitespace-nowrap">
@@ -272,6 +286,13 @@ export const VehicleTable: React.FC<VehicleTableProps> = ({ vehicles }) => {
           onPreviousPage={pagination.goToPreviousPage}
         />
       </div>
+
+      {/* Modal de Detalle */}
+      <VehicleDetailModal
+        vehicle={selectedVehicle}
+        isOpen={isModalOpen}
+        onClose={handleCloseModal}
+      />
     </div>
   );
 };

@@ -4,6 +4,7 @@ import { AlertTriangle, AlertCircle, Bell, BellRing, Copy, CheckCircle, Clock, M
 import { usePagination } from '../hooks/usePagination';
 import { PaginationControls } from './PaginationControls';
 import { useExportToExcel } from '../hooks/useExportToExcel';
+import { AlertDetailModal } from './AlertDetailModal';
 
 interface AlertPanelProps {
   alerts: Alert[];
@@ -15,7 +16,19 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
   const [selectedSeverity, setSelectedSeverity] = useState<'ALL' | AlertSeverity>('ALL');
   const [selectedType, setSelectedType] = useState<'ALL' | AlertType>('ALL');
   const [searchText, setSearchText] = useState('');
+  const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const { exportToExcel } = useExportToExcel();
+
+  const handleRowClick = (alert: Alert) => {
+    setSelectedAlert(alert);
+    setIsModalOpen(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setSelectedAlert(null);
+  };
 
   const getSeverityColor = (severity: AlertSeverity) => {
     switch (severity) {
@@ -174,6 +187,7 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
               {pagination.paginatedData.map((alert, index) => (
                 <tr
                   key={alert.id}
+                  onClick={() => handleRowClick(alert)}
                   className={`${index % 2 === 0 ? 'bg-white' : 'bg-slate-50'} hover:bg-blue-50 transition-colors cursor-pointer`}
                 >
                   {/* Acciones */}
@@ -298,6 +312,15 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
           />
         </div>
       )}
+
+      {/* Modal de Detalle */}
+      <AlertDetailModal
+        alert={selectedAlert}
+        isOpen={isModalOpen}
+        onClose={handleCloseModal}
+        onSaveAlert={onSaveAlert}
+        onCopyAlert={onCopyAlert}
+      />
     </div>
   );
 };

@@ -362,6 +362,7 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
               {pagination.paginatedData.map((alert, index) => (
                 <tr
                   key={alert.id}
+                  onClick={() => handleOpenActionModal(alert)}
                   className={`${index % 2 === 0 ? 'bg-white' : 'bg-slate-50'} hover:bg-blue-50 transition-colors cursor-pointer`}
                 >
                   {/* Acciones */}
