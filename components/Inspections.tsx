@@ -1,5 +1,5 @@
 import React from 'react';
-import { ClipboardCheck, RefreshCw, AlertTriangle, CheckCircle, Clock, Download } from 'lucide-react';
+import { ClipboardCheck, RefreshCw, AlertTriangle, CheckCircle, Clock, Download, Upload, FileSpreadsheet } from 'lucide-react';
 import {
   importInspectionsToDatabase,
   getInspectionsByDateRange,
@@ -9,6 +9,7 @@ import {
   type InspectionSummary,
   type InspectionCrossCheck
 } from '../services/towerControlService';
+import { useManualInspectionUpload } from '../hooks/useManualInspectionUpload';
 
 interface InspectionsProps {
   selectedContract?: string;
@@ -46,6 +47,10 @@ export const Inspections: React.FC<InspectionsProps> = ({ selectedContract }) =>
   const [errorMessage, setErrorMessage] = React.useState<string>('');
   const [apiStats, setApiStats] = React.useState<{ totalRecords: number; filteredRecords: number }>({ totalRecords: 0, filteredRecords: 0 });
 
+  // Hook para carga manual
+  const { loading: uploading, processFile, progress } = useManualInspectionUpload();
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
   // Cargar datos DESDE SUPABASE cuando cambien los filtros
   React.useEffect(() => {
     loadInspections();
@@ -57,6 +62,69 @@ export const Inspections: React.FC<InspectionsProps> = ({ selectedContract }) =>
       setFilterContract(selectedContract);
     }
   }, [selectedContract]);
+
+  /**
+   * Manejar carga manual de archivo Excel
+   */
+  const handleManualUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setDownloading(true);
+    setErrorMessage('');
+
+    try {
+      console.log('[Inspections] Processing manual upload:', file.name);
+
+      // Procesar archivo con el hook
+      const inspections = await processFile(file, downloadStartDate, downloadEndDate, 3000);
+
+      console.log(`[Inspections] Processed ${inspections.length} inspections from file`);
+
+      // Actualizar estadísticas
+      setApiStats({
+        totalRecords: inspections.length,
+        filteredRecords: inspections.length
+      });
+
+      // Importar a Supabase
+      const importResult = await importInspectionsToDatabase(inspections);
+
+      if (importResult.success) {
+        alert(
+          `✅ Archivo cargado y guardado en Supabase\n\n` +
+          `Archivo: ${file.name}\n` +
+          `Rango: ${downloadStartDate} a ${downloadEndDate}\n` +
+          `Importadas: ${importResult.imported} inspecciones`
+        );
+        setLastUpdate(new Date().toLocaleString('es-CO'));
+
+        // Actualizar fechas de visualización
+        setViewStartDate(downloadStartDate);
+        setViewEndDate(downloadEndDate);
+
+        await loadInspections();
+      } else {
+        alert(
+          `⚠️ Importación parcial\n\n` +
+          `Importadas: ${importResult.imported}\n` +
+          `Errores: ${importResult.errors.length}\n\n` +
+          `${importResult.errors.slice(0, 5).join('\n')}`
+        );
+      }
+    } catch (error: any) {
+      console.error('[Inspections] Error:', error);
+      const errorMsg = error.message || 'Error desconocido';
+      setErrorMessage(errorMsg);
+      alert('❌ Error al cargar el archivo:\n\n' + errorMsg);
+    } finally {
+      setDownloading(false);
+      // Limpiar input para permitir subir el mismo archivo de nuevo
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
 
   /**
    * Descarga Excel y actualiza base de datos (NUEVA ARQUITECTURA: Excel → Supabase → UI)
@@ -294,24 +362,48 @@ export const Inspections: React.FC<InspectionsProps> = ({ selectedContract }) =>
           </div>
         </div>
 
-        <button
-          onClick={handleUpdateInspections}
-          disabled={downloading}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors w-full sm:w-auto justify-center"
-        >
-          <RefreshCw className={`w-5 h-5 ${downloading ? 'animate-spin' : ''}`} />
-          {downloading ? 'Descargando...' : 'Descargar Semana'}
-        </button>
+        <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+          {/* Botón de carga manual */}
+          <label
+            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 cursor-pointer transition-colors w-full sm:w-auto justify-center"
+          >
+            <Upload className="w-5 h-5" />
+            <span>Cargar Excel Manual</span>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx,.xls"
+              onChange={handleManualUpload}
+              disabled={downloading || uploading}
+              className="hidden"
+            />
+          </label>
+
+          {/* Botón de descarga automática (Apps Script) - Deshabilitado temporalmente */}
+          <button
+            onClick={handleUpdateInspections}
+            disabled={true} // Deshabilitado porque Apps Script tiene error 403
+            className="flex items-center gap-2 px-4 py-2 bg-gray-400 text-white rounded-lg cursor-not-allowed transition-colors w-full sm:w-auto justify-center"
+            title="Deshabilitado: El servidor bloquea la descarga automática. Usa 'Cargar Excel Manual'"
+          >
+            <RefreshCw className="w-5 h-5" />
+            <span className="hidden sm:inline">Descarga Automática</span>
+            <span className="sm:hidden">Auto</span>
+          </button>
+        </div>
       </div>
 
       {/* Filtros */}
       <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-200">
-        {/* Sección: Descargar desde Excel */}
+        {/* Sección: Configurar Rango de Fechas */}
         <div className="mb-6 pb-6 border-b border-gray-200">
           <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-            <Download className="w-4 h-4 text-blue-600" />
-            Descargar desde Excel
+            <FileSpreadsheet className="w-4 h-4 text-green-600" />
+            Configurar Rango para Carga Manual
           </h3>
+          <p className="text-xs text-gray-500 mb-3">
+            Selecciona el rango de fechas, luego haz clic en "Cargar Excel Manual" arriba y sube el archivo.
+          </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">

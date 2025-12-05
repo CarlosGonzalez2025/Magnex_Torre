@@ -1,10 +1,8 @@
 // ============================================================================
 // CONFIGURACIÓN - Google Apps Script API
 // ============================================================================
-// IMPORTANTE: Reemplaza esta URL con la que obtienes al deployar el Apps Script
-// Ejemplo: https://script.google.com/macros/s/AKfycbxXXXXXXX/exec
-//
-// Instrucciones completas en: /docs/GOOGLE_SHEETS_SETUP.m
+// URL de Apps Script deployado como Web App
+// Instrucciones completas en: /docs/GOOGLE_SHEETS_SETUP.md
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbx-TjIIneq8C6FLTBNPq6_Asdd273nYmvw8r5QVRl8YxIM7Y8klA31HiUJfErK340KYpg/exec';
 
 // ============================================================================
