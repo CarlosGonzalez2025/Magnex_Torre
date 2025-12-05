@@ -1,12 +1,20 @@
 import React from 'react';
 import { Vehicle, ApiSource, VehicleStatus } from '../types';
 import { Battery, Signal, MapPin } from 'lucide-react';
+import { usePagination } from '../hooks/usePagination';
+import { PaginationControls } from './PaginationControls';
 
 interface VehicleTableProps {
   vehicles: Vehicle[];
 }
 
 export const VehicleTable: React.FC<VehicleTableProps> = ({ vehicles }) => {
+  // Hook de paginación
+  const pagination = usePagination(vehicles, {
+    initialPageSize: 20,
+    pageSizeOptions: [10, 20, 50, 100]
+  });
+
   const getStatusColor = (status: VehicleStatus) => {
     switch (status) {
       case VehicleStatus.MOVING: return 'text-green-600 bg-green-100';
@@ -18,8 +26,8 @@ export const VehicleTable: React.FC<VehicleTableProps> = ({ vehicles }) => {
   };
 
   const getSourceBadge = (source: ApiSource) => {
-    return source === ApiSource.FAGOR 
-      ? 'bg-blue-100 text-blue-800 border-blue-200' 
+    return source === ApiSource.FAGOR
+      ? 'bg-blue-100 text-blue-800 border-blue-200'
       : 'bg-green-100 text-green-800 border-green-200';
   };
 
@@ -41,7 +49,7 @@ export const VehicleTable: React.FC<VehicleTableProps> = ({ vehicles }) => {
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
-          {vehicles.map((vehicle, index) => (
+          {pagination.paginatedData.map((vehicle, index) => (
             <tr
               key={vehicle.id}
               className={`${index % 2 === 0 ? 'bg-white' : 'bg-slate-50'} hover:bg-blue-50 transition-colors`}
@@ -130,6 +138,24 @@ export const VehicleTable: React.FC<VehicleTableProps> = ({ vehicles }) => {
           ))}
         </tbody>
       </table>
+
+      {/* Controles de paginación */}
+      <PaginationControls
+        currentPage={pagination.currentPage}
+        totalPages={pagination.totalPages}
+        pageSize={pagination.pageSize}
+        pageSizeOptions={pagination.pageSizeOptions}
+        recordInfo={pagination.recordInfo}
+        visiblePages={pagination.visiblePages}
+        canGoNext={pagination.canGoNext}
+        canGoPrevious={pagination.canGoPrevious}
+        onPageChange={pagination.goToPage}
+        onPageSizeChange={pagination.changePageSize}
+        onFirstPage={pagination.goToFirstPage}
+        onLastPage={pagination.goToLastPage}
+        onNextPage={pagination.goToNextPage}
+        onPreviousPage={pagination.goToPreviousPage}
+      />
     </div>
   );
 };
