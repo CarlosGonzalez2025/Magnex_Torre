@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { AlertTriangle, AlertCircle, Bell, BellRing, CheckCircle, Clock, MapPin, User, Gauge, FileText, Plus, Trash2, Edit, X } from 'lucide-react';
+import { AlertTriangle, AlertCircle, Bell, BellRing, CheckCircle, Clock, MapPin, User, Gauge, FileText, Plus, Trash2, Edit, X, FileDown, Search, Calendar } from 'lucide-react';
 import {
   getAllSavedAlerts,
   getFilteredAlerts,
@@ -13,6 +13,7 @@ import {
 } from '../services/databaseService';
 import { usePagination } from '../hooks/usePagination';
 import { PaginationControls } from './PaginationControls';
+import { useExportToExcel } from '../hooks/useExportToExcel';
 
 interface AlertHistoryProps {
   onRefresh?: () => void;
@@ -27,6 +28,10 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
   // Filters
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'pending' | 'in_progress' | 'resolved'>('ALL');
   const [severityFilter, setSeverityFilter] = useState<'ALL' | 'critical' | 'high' | 'medium' | 'low'>('ALL');
+  const [searchText, setSearchText] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const { exportToExcel } = useExportToExcel();
 
   // Action Plan Form
   const [newActionPlan, setNewActionPlan] = useState({
@@ -36,11 +41,66 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
     observations: ''
   });
 
+  // Filtrado adicional del lado del cliente (búsqueda y fechas)
+  const filteredAndSearchedAlerts = alerts.filter(alert => {
+    // Búsqueda de texto
+    if (searchText) {
+      const search = searchText.toLowerCase();
+      const matchesSearch =
+        alert.plate.toLowerCase().includes(search) ||
+        alert.driver.toLowerCase().includes(search) ||
+        alert.type.toLowerCase().includes(search) ||
+        alert.details.toLowerCase().includes(search) ||
+        (alert.contract && alert.contract.toLowerCase().includes(search)) ||
+        alert.location.toLowerCase().includes(search);
+
+      if (!matchesSearch) return false;
+    }
+
+    // Filtro de fecha inicial
+    if (startDate) {
+      const alertDate = new Date(alert.timestamp);
+      const filterStart = new Date(startDate);
+      if (alertDate < filterStart) return false;
+    }
+
+    // Filtro de fecha final
+    if (endDate) {
+      const alertDate = new Date(alert.timestamp);
+      const filterEnd = new Date(endDate);
+      filterEnd.setHours(23, 59, 59, 999); // Incluir todo el día
+      if (alertDate > filterEnd) return false;
+    }
+
+    return true;
+  });
+
   // Hook de paginación
-  const pagination = usePagination(alerts, {
+  const pagination = usePagination(filteredAndSearchedAlerts, {
     initialPageSize: 20,
     pageSizeOptions: [10, 20, 50, 100]
   });
+
+  // Función para exportar a Excel
+  const handleExport = () => {
+    exportToExcel(
+      filteredAndSearchedAlerts,
+      [
+        { header: 'Tipo', key: 'type', width: 20 },
+        { header: 'Placa', key: 'plate', width: 12 },
+        { header: 'Contrato', key: 'contract', width: 15 },
+        { header: 'Estado', key: 'status', width: 12 },
+        { header: 'Severidad', key: 'severity', width: 12 },
+        { header: 'Detalles', key: 'details', width: 40 },
+        { header: 'Conductor', key: 'driver', width: 25 },
+        { header: 'Velocidad', key: 'speed', width: 12 },
+        { header: 'Ubicación', key: 'location', width: 40 },
+        { header: 'Fecha', key: 'timestamp', width: 20 },
+        { header: 'Guardada', key: 'saved_at', width: 20 },
+      ],
+      `Historial_Alertas_${new Date().toLocaleDateString('es-CO').replace(/\//g, '-')}`
+    );
+  };
 
   useEffect(() => {
     loadAlerts();
@@ -179,39 +239,93 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
 
   return (
     <div className="space-y-4">
-      {/* Filtros */}
-      <div className="flex flex-wrap gap-4 items-center bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-        <div className="flex items-center gap-2">
-          <label className="text-sm font-semibold text-slate-600">Estado:</label>
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as any)}
-            className="px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
-          >
-            <option value="ALL">Todos</option>
-            <option value="pending">Pendientes</option>
-            <option value="in_progress">En Proceso</option>
-            <option value="resolved">Resueltas</option>
-          </select>
+      {/* Filtros y Búsqueda */}
+      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-4">
+        {/* Primera fila: Búsqueda */}
+        <div className="flex flex-wrap gap-4 items-center">
+          <div className="flex items-center gap-2 flex-1 min-w-[250px]">
+            <Search className="w-4 h-4 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Buscar por placa, conductor, tipo, contrato..."
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              className="flex-1 px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+            />
+          </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <label className="text-sm font-semibold text-slate-600">Severidad:</label>
-          <select
-            value={severityFilter}
-            onChange={(e) => setSeverityFilter(e.target.value as any)}
-            className="px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
-          >
-            <option value="ALL">Todas</option>
-            <option value="critical">Críticas</option>
-            <option value="high">Altas</option>
-            <option value="medium">Medias</option>
-            <option value="low">Bajas</option>
-          </select>
-        </div>
+        {/* Segunda fila: Filtros */}
+        <div className="flex flex-wrap gap-4 items-center">
+          {/* Estado */}
+          <div className="flex items-center gap-2">
+            <label className="text-sm font-semibold text-slate-600">Estado:</label>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as any)}
+              className="px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+            >
+              <option value="ALL">Todos</option>
+              <option value="pending">Pendientes</option>
+              <option value="in_progress">En Proceso</option>
+              <option value="resolved">Resueltas</option>
+            </select>
+          </div>
 
-        <div className="ml-auto text-sm font-semibold text-slate-600">
-          {alerts.length} alerta{alerts.length !== 1 ? 's' : ''} guardada{alerts.length !== 1 ? 's' : ''}
+          {/* Severidad */}
+          <div className="flex items-center gap-2">
+            <label className="text-sm font-semibold text-slate-600">Severidad:</label>
+            <select
+              value={severityFilter}
+              onChange={(e) => setSeverityFilter(e.target.value as any)}
+              className="px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+            >
+              <option value="ALL">Todas</option>
+              <option value="critical">Críticas</option>
+              <option value="high">Altas</option>
+              <option value="medium">Medias</option>
+              <option value="low">Bajas</option>
+            </select>
+          </div>
+
+          {/* Fecha Inicio */}
+          <div className="flex items-center gap-2">
+            <Calendar className="w-4 h-4 text-slate-400" />
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+              placeholder="Desde"
+            />
+          </div>
+
+          {/* Fecha Fin */}
+          <div className="flex items-center gap-2">
+            <Calendar className="w-4 h-4 text-slate-400" />
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+              placeholder="Hasta"
+            />
+          </div>
+
+          {/* Botón Exportar */}
+          <button
+            onClick={handleExport}
+            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium"
+            title="Exportar a Excel"
+          >
+            <FileDown className="w-4 h-4" />
+            Excel
+          </button>
+
+          {/* Contador */}
+          <div className="ml-auto text-sm font-semibold text-slate-600">
+            {filteredAndSearchedAlerts.length} alerta{filteredAndSearchedAlerts.length !== 1 ? 's' : ''}
+          </div>
         </div>
       </div>
 
@@ -231,6 +345,7 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
           <table className="w-full text-sm">
             <thead className="bg-gradient-to-r from-slate-700 to-slate-600 text-white">
               <tr>
+                <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Acciones</th>
                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Tipo</th>
                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Placa/Contrato</th>
                 <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Estado</th>
@@ -241,15 +356,43 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Ubicación</th>
                 <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Fecha</th>
                 <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Planes</th>
-                <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Acciones</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {pagination.paginatedData.map((alert, index) => (
                 <tr
                   key={alert.id}
-                  className={`${index % 2 === 0 ? 'bg-white' : 'bg-slate-50'} hover:bg-blue-50 transition-colors`}
+                  className={`${index % 2 === 0 ? 'bg-white' : 'bg-slate-50'} hover:bg-blue-50 transition-colors cursor-pointer`}
                 >
+                  {/* Acciones */}
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
+                    <div className="flex items-center justify-center gap-1">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenActionModal(alert);
+                        }}
+                        className="p-2 rounded-lg text-white bg-sky-600 hover:bg-sky-700 transition-colors"
+                        title="Gestionar Planes de Acción"
+                      >
+                        <Plus className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteAlert(alert.id);
+                        }}
+                        className="p-2 rounded-lg text-white bg-red-600 hover:bg-red-700 transition-colors"
+                        title="Eliminar Alerta"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <div className="text-xs text-slate-500 mt-1">
+                      {new Date(alert.saved_at).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' })}
+                    </div>
+                  </td>
+
                   {/* Tipo */}
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
@@ -270,7 +413,10 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
                   <td className="px-4 py-3 text-center whitespace-nowrap">
                     <select
                       value={alert.status}
-                      onChange={(e) => handleStatusChange(alert.id, e.target.value as any)}
+                      onChange={(e) => {
+                        e.stopPropagation();
+                        handleStatusChange(alert.id, e.target.value as any);
+                      }}
                       className="px-2 py-1 text-xs font-medium border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
                     >
                       <option value="pending">Pendiente</option>
@@ -339,29 +485,6 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
                     ) : (
                       <span className="text-xs text-slate-400">-</span>
                     )}
-                  </td>
-
-                  {/* Acciones */}
-                  <td className="px-4 py-3 text-center whitespace-nowrap">
-                    <div className="flex items-center justify-center gap-1">
-                      <button
-                        onClick={() => handleOpenActionModal(alert)}
-                        className="p-2 rounded-lg text-white bg-sky-600 hover:bg-sky-700 transition-colors"
-                        title="Gestionar Planes de Acción"
-                      >
-                        <Plus className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteAlert(alert.id)}
-                        className="p-2 rounded-lg text-white bg-red-600 hover:bg-red-700 transition-colors"
-                        title="Eliminar Alerta"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                    <div className="text-xs text-slate-500 mt-1">
-                      {new Date(alert.saved_at).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' })}
-                    </div>
                   </td>
                 </tr>
               ))}

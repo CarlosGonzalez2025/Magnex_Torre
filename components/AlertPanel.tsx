@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { Alert, AlertSeverity, AlertType } from '../types';
-import { AlertTriangle, AlertCircle, Bell, BellRing, Copy, CheckCircle, Clock, MapPin, User, Gauge, Save } from 'lucide-react';
+import { AlertTriangle, AlertCircle, Bell, BellRing, Copy, CheckCircle, Clock, MapPin, User, Gauge, Save, FileDown, Search } from 'lucide-react';
 import { usePagination } from '../hooks/usePagination';
 import { PaginationControls } from './PaginationControls';
+import { useExportToExcel } from '../hooks/useExportToExcel';
 
 interface AlertPanelProps {
   alerts: Alert[];
@@ -13,6 +14,8 @@ interface AlertPanelProps {
 export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onSaveAlert }) => {
   const [selectedSeverity, setSelectedSeverity] = useState<'ALL' | AlertSeverity>('ALL');
   const [selectedType, setSelectedType] = useState<'ALL' | AlertType>('ALL');
+  const [searchText, setSearchText] = useState('');
+  const { exportToExcel } = useExportToExcel();
 
   const getSeverityColor = (severity: AlertSeverity) => {
     switch (severity) {
@@ -36,6 +39,21 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
   const filteredAlerts = alerts.filter(alert => {
     if (selectedSeverity !== 'ALL' && alert.severity !== selectedSeverity) return false;
     if (selectedType !== 'ALL' && alert.type !== selectedType) return false;
+
+    // Búsqueda de texto en múltiples campos
+    if (searchText) {
+      const search = searchText.toLowerCase();
+      const matchesSearch =
+        alert.plate.toLowerCase().includes(search) ||
+        alert.driver.toLowerCase().includes(search) ||
+        alert.type.toLowerCase().includes(search) ||
+        alert.details.toLowerCase().includes(search) ||
+        (alert.contract && alert.contract.toLowerCase().includes(search)) ||
+        alert.location.toLowerCase().includes(search);
+
+      if (!matchesSearch) return false;
+    }
+
     return true;
   });
 
@@ -47,10 +65,42 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
     pageSizeOptions: [10, 20, 50, 100]
   });
 
+  // Función para exportar a Excel
+  const handleExport = () => {
+    exportToExcel(
+      filteredAlerts,
+      [
+        { header: 'Tipo', key: 'type', width: 20 },
+        { header: 'Placa', key: 'plate', width: 12 },
+        { header: 'Contrato', key: 'contract', width: 15 },
+        { header: 'Severidad', key: 'severity', width: 12 },
+        { header: 'Detalles', key: 'details', width: 40 },
+        { header: 'Conductor', key: 'driver', width: 25 },
+        { header: 'Velocidad', key: 'speed', width: 12 },
+        { header: 'Ubicación', key: 'location', width: 40 },
+        { header: 'Fecha', key: 'timestamp', width: 20 },
+      ],
+      `Alertas_${new Date().toLocaleDateString('es-CO').replace(/\//g, '-')}`
+    );
+  };
+
   return (
     <div className="space-y-4">
-      {/* Filtros */}
+      {/* Filtros y Búsqueda */}
       <div className="flex flex-wrap gap-4 items-center bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+        {/* Búsqueda */}
+        <div className="flex items-center gap-2 flex-1 min-w-[250px]">
+          <Search className="w-4 h-4 text-slate-400" />
+          <input
+            type="text"
+            placeholder="Buscar por placa, conductor, tipo, contrato..."
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            className="flex-1 px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+          />
+        </div>
+
+        {/* Filtro Severidad */}
         <div className="flex items-center gap-2">
           <label className="text-sm font-semibold text-slate-600">Severidad:</label>
           <select
@@ -66,6 +116,7 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
           </select>
         </div>
 
+        {/* Filtro Tipo */}
         <div className="flex items-center gap-2">
           <label className="text-sm font-semibold text-slate-600">Tipo:</label>
           <select
@@ -73,14 +124,25 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
             onChange={(e) => setSelectedType(e.target.value as any)}
             className="px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
           >
-            <option value="ALL">Todos los tipos</option>
+            <option value="ALL">Todos</option>
             {alertTypes.map(type => (
               <option key={type} value={type}>{type}</option>
             ))}
           </select>
         </div>
 
-        <div className="ml-auto text-sm font-semibold text-slate-600">
+        {/* Botón Exportar */}
+        <button
+          onClick={handleExport}
+          className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium"
+          title="Exportar a Excel"
+        >
+          <FileDown className="w-4 h-4" />
+          Excel
+        </button>
+
+        {/* Contador */}
+        <div className="text-sm font-semibold text-slate-600">
           {filteredAlerts.length} alerta{filteredAlerts.length !== 1 ? 's' : ''}
         </div>
       </div>
@@ -97,6 +159,7 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
           <table className="w-full text-sm">
             <thead className="bg-gradient-to-r from-slate-700 to-slate-600 text-white">
               <tr>
+                <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Acciones</th>
                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Tipo</th>
                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Placa/Contrato</th>
                 <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Severidad</th>
@@ -105,15 +168,49 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
                 <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Velocidad</th>
                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Ubicación</th>
                 <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Hora</th>
-                <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Acciones</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {pagination.paginatedData.map((alert, index) => (
                 <tr
                   key={alert.id}
-                  className={`${index % 2 === 0 ? 'bg-white' : 'bg-slate-50'} hover:bg-blue-50 transition-colors`}
+                  className={`${index % 2 === 0 ? 'bg-white' : 'bg-slate-50'} hover:bg-blue-50 transition-colors cursor-pointer`}
                 >
+                  {/* Acciones */}
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
+                    <div className="flex items-center justify-center gap-2">
+                      {onSaveAlert && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onSaveAlert(alert);
+                          }}
+                          className="p-2 rounded-lg text-white bg-green-600 hover:bg-green-700 transition-colors"
+                          title="Guardar Alerta"
+                        >
+                          <Save className="w-4 h-4" />
+                        </button>
+                      )}
+                      {onCopyAlert && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onCopyAlert(alert);
+                          }}
+                          className="p-2 rounded-lg text-white bg-blue-600 hover:bg-blue-700 transition-colors"
+                          title="Copiar Alerta"
+                        >
+                          <Copy className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                    {alert.sent && alert.sentAt && (
+                      <div className="text-xs text-slate-500 mt-1">
+                        {new Date(alert.sentAt).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}
+                      </div>
+                    )}
+                  </td>
+
                   {/* Tipo */}
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
@@ -176,35 +273,6 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
                     <div className="text-xs text-slate-500">
                       {new Date(alert.timestamp).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' })}
                     </div>
-                  </td>
-
-                  {/* Acciones */}
-                  <td className="px-4 py-3 text-center whitespace-nowrap">
-                    <div className="flex items-center justify-center gap-2">
-                      {onSaveAlert && (
-                        <button
-                          onClick={() => onSaveAlert(alert)}
-                          className="p-2 rounded-lg text-white bg-green-600 hover:bg-green-700 transition-colors"
-                          title="Guardar Alerta"
-                        >
-                          <Save className="w-4 h-4" />
-                        </button>
-                      )}
-                      {onCopyAlert && (
-                        <button
-                          onClick={() => onCopyAlert(alert)}
-                          className="p-2 rounded-lg text-white bg-blue-600 hover:bg-blue-700 transition-colors"
-                          title="Copiar Alerta"
-                        >
-                          <Copy className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                    {alert.sent && alert.sentAt && (
-                      <div className="text-xs text-slate-500 mt-1">
-                        Copiada: {new Date(alert.sentAt).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}
-                      </div>
-                    )}
                   </td>
                 </tr>
               ))}
