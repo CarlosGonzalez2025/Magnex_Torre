@@ -16,7 +16,13 @@ export interface CleanupStatus {
  * Hook para ejecutar limpieza automática de datos
  *
  * Este hook se ejecuta al iniciar la aplicación y verifica si es necesario
- * ejecutar una limpieza automática según las políticas configuradas.
+ * ejecutar una limpieza automática cada 7 días según las políticas configuradas.
+ *
+ * La limpieza elimina:
+ * - Alertas resueltas con más de 7 días
+ * - Alertas activas con más de 30 días
+ * - Inspecciones con más de 7 días
+ * - Planes de acción completados con más de 30 días
  */
 export function useAutoCleanup() {
   const [status, setStatus] = useState<CleanupStatus>({
@@ -112,7 +118,10 @@ export function useAutoCleanup() {
   };
 
   return {
-    status,
-    runManualCleanup
+    isCleaningUp: status.isRunning,
+    lastCleanup: status.lastRun,
+    lastResult: status.lastResult,
+    runCleanup: runManualCleanup,
+    status
   };
 }

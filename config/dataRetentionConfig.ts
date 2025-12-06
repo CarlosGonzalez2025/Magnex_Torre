@@ -47,9 +47,11 @@ export const DATA_RETENTION_CONFIG = {
   autoCleanup: {
     /** Si la limpieza automática está habilitada */
     enabled: true,
+    /** Intervalo de días entre limpiezas automáticas */
+    cleanupIntervalDays: 7, // Ejecutar cada 7 días
     /** Hora del día para ejecutar limpieza (0-23) */
     cleanupHour: 2, // 2 AM
-    /** Ejecutar limpieza al iniciar la aplicación si no se ha ejecutado hoy */
+    /** Ejecutar limpieza al iniciar la aplicación si no se ha ejecutado en el intervalo */
     runOnStartup: true
   },
 
@@ -113,9 +115,10 @@ export function getRetentionCutoffDate(retentionDays: number): Date {
 
 /**
  * Verifica si es hora de ejecutar la limpieza automática
+ * Se ejecuta cada 7 días según la configuración
  */
 export function shouldRunAutoCleanup(lastCleanupDate: Date | null): boolean {
-  const { enabled, cleanupHour } = DATA_RETENTION_CONFIG.autoCleanup;
+  const { enabled, cleanupIntervalDays, cleanupHour } = DATA_RETENTION_CONFIG.autoCleanup;
 
   if (!enabled) return false;
 
@@ -125,9 +128,11 @@ export function shouldRunAutoCleanup(lastCleanupDate: Date | null): boolean {
   // Si nunca se ha ejecutado, ejecutar
   if (!lastCleanupDate) return true;
 
-  // Si fue hace más de 24 horas, ejecutar
-  const hoursSinceLastCleanup = (now.getTime() - lastCleanupDate.getTime()) / (1000 * 60 * 60);
-  if (hoursSinceLastCleanup >= 24) {
+  // Calcular días desde la última limpieza
+  const daysSinceLastCleanup = (now.getTime() - lastCleanupDate.getTime()) / (1000 * 60 * 60 * 24);
+
+  // Si han pasado los días configurados (por defecto 7 días), ejecutar
+  if (daysSinceLastCleanup >= cleanupIntervalDays) {
     // Solo ejecutar si es la hora configurada o después
     return currentHour >= cleanupHour;
   }
