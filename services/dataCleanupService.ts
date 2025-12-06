@@ -271,9 +271,10 @@ export class DataCleanupService {
 
   /**
    * Verifica si un registro ya existe (evitar duplicados)
+   * Soporta: saved_alerts, alert_history, inspections
    */
   static async checkDuplicate(
-    table: 'saved_alerts' | 'inspections',
+    table: 'saved_alerts' | 'alert_history' | 'inspections',
     uniqueFields: Record<string, any>
   ): Promise<boolean> {
     try {

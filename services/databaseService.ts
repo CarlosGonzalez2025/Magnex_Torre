@@ -41,16 +41,73 @@ export interface SavedAlertWithPlans extends SavedAlert {
   action_plans: ActionPlan[];
 }
 
-// ==================== ALERT HISTORY FUNCTIONS ====================
+// ==================== SAVED_ALERTS FUNCTIONS (Guardado Automático) ====================
 
 /**
- * Save an alert to the database
- * Verifica duplicados antes de guardar para evitar consumo innecesario de espacio
+ * Guarda una alerta AUTOMÁTICAMENTE en saved_alerts
+ * Esta tabla almacena TODAS las alertas detectadas para análisis y reportes
+ * Las alertas se limpian automáticamente cada 7-30 días
+ */
+export async function autoSaveAlert(alert: Alert): Promise<{ success: boolean; data?: SavedAlert; error?: string }> {
+  try {
+    // Verificar duplicados en saved_alerts
+    const isDuplicate = await DataCleanupService.checkDuplicate('saved_alerts', {
+      plate: alert.plate,
+      timestamp: alert.timestamp,
+      type: alert.type
+    });
+
+    if (isDuplicate) {
+      // No es error, simplemente ya existe
+      return { success: true };
+    }
+
+    const alertData = {
+      alert_id: alert.id,
+      vehicle_id: alert.vehicleId,
+      plate: alert.plate,
+      driver: alert.driver,
+      type: alert.type,
+      severity: alert.severity,
+      timestamp: alert.timestamp,
+      location: alert.location,
+      speed: alert.speed,
+      details: alert.details,
+      contract: alert.contract || null,
+      source: alert.source,
+      status: 'pending' as const,
+      saved_by: 'Sistema (Auto)'
+    };
+
+    const { data, error } = await supabase
+      .from('saved_alerts')
+      .insert(alertData)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error auto-saving alert to saved_alerts:', error);
+      return { success: false, error: error.message };
+    }
+
+    return { success: true, data };
+  } catch (error: any) {
+    console.error('Exception auto-saving alert:', error);
+    return { success: false, error: error.message || 'Error desconocido' };
+  }
+}
+
+// ==================== ALERT_HISTORY FUNCTIONS (Guardado Manual para Seguimiento) ====================
+
+/**
+ * Guarda una alerta MANUALMENTE en alert_history para SEGUIMIENTO/GESTIÓN
+ * Esta tabla almacena solo alertas que requieren seguimiento con planes de acción
+ * Las alertas NO se eliminan con la limpieza automática
  */
 export async function saveAlertToDatabase(alert: Alert, savedBy: string = 'Usuario'): Promise<{ success: boolean; data?: SavedAlert; error?: string }> {
   try {
-    // Verificar si ya existe una alerta con los mismos datos clave
-    const isDuplicate = await DataCleanupService.checkDuplicate('saved_alerts', {
+    // Verificar si ya existe en alert_history
+    const isDuplicate = await DataCleanupService.checkDuplicate('alert_history', {
       plate: alert.plate,
       timestamp: alert.timestamp,
       type: alert.type
@@ -59,11 +116,21 @@ export async function saveAlertToDatabase(alert: Alert, savedBy: string = 'Usuar
     if (isDuplicate) {
       return {
         success: false,
-        error: 'Esta alerta ya fue guardada anteriormente'
+        error: 'Esta alerta ya está en el historial de seguimiento'
       };
     }
 
+    // Primero, buscar si existe en saved_alerts para obtener el ID
+    const { data: savedAlert } = await supabase
+      .from('saved_alerts')
+      .select('id')
+      .eq('alert_id', alert.id)
+      .eq('plate', alert.plate)
+      .eq('timestamp', alert.timestamp)
+      .maybeSingle();
+
     const alertData = {
+      saved_alert_id: savedAlert?.id || null, // Referencia a saved_alerts
       alert_id: alert.id,
       vehicle_id: alert.vehicleId,
       plate: alert.plate,
@@ -81,19 +148,19 @@ export async function saveAlertToDatabase(alert: Alert, savedBy: string = 'Usuar
     };
 
     const { data, error } = await supabase
-      .from('saved_alerts')
+      .from('alert_history')
       .insert(alertData)
       .select()
       .single();
 
     if (error) {
-      console.error('Error saving alert:', error);
+      console.error('Error saving alert to alert_history:', error);
       return { success: false, error: error.message };
     }
 
     return { success: true, data };
   } catch (error: any) {
-    console.error('Exception saving alert:', error);
+    console.error('Exception saving alert to history:', error);
     return { success: false, error: error.message || 'Error desconocido' };
   }
 }
