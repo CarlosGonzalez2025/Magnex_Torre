@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { LayoutDashboard, Map as MapIcon, RefreshCw, Search, Server, Wifi, Radio, AlertTriangle, XCircle, CloudOff, CheckCircle, Database, Bell, History, BarChart3, ClipboardCheck, Calendar } from 'lucide-react';
+import { LayoutDashboard, Map as MapIcon, RefreshCw, Search, Server, Wifi, Radio, AlertTriangle, XCircle, CloudOff, CheckCircle, Database, Bell, History, BarChart3, ClipboardCheck, Calendar, Settings } from 'lucide-react';
 import { Vehicle, ApiSource, VehicleStatus, FilterType, StatusFilterType, Alert } from './types';
 import { KpiCards } from './components/KpiCards';
 import { VehicleTable } from './components/VehicleTable';
@@ -9,9 +9,11 @@ import { AlertHistory } from './components/AlertHistory';
 import { Analytics } from './components/Analytics';
 import { Inspections } from './components/Inspections';
 import { RouteSchedules } from './components/RouteSchedules';
+import { MaintenancePanel } from './components/MaintenancePanel';
 import { fetchFleetData, FleetResponse } from './services/fleetService';
 import { detectAlerts, saveAlertsToStorage, getAlertsFromStorage, getUnsavedAlerts, markAlertAsSent, markAlertAsSaved, cleanOldAlerts, processVehiclesForIdleDetection } from './services/alertService';
 import { saveAlertToDatabase } from './services/databaseService';
+import { useAutoCleanup } from './hooks/useAutoCleanup';
 
 // Constants
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
@@ -46,7 +48,7 @@ export default function App() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
-  const [activeTab, setActiveTab] = useState<'table' | 'map' | 'alerts' | 'history' | 'analytics' | 'inspections' | 'schedules'>('table');
+  const [activeTab, setActiveTab] = useState<'table' | 'map' | 'alerts' | 'history' | 'analytics' | 'inspections' | 'schedules' | 'maintenance'>('table');
   const [dataSource, setDataSource] = useState<'REAL' | 'DIRECT_API' | 'PARTIAL_DIRECT' | 'ERROR' | 'MOCK'>('REAL');
   const [apiStatus, setApiStatus] = useState<FleetResponse['apiStatus']>();
   const [vehicleCounts, setVehicleCounts] = useState<FleetResponse['vehicleCounts']>();
@@ -60,6 +62,9 @@ export default function App() {
 
   // Track previous critical alerts count for sound notification
   const prevCriticalAlertsRef = useRef<number>(0);
+
+  // Auto-cleanup hook for data retention
+  const { isCleaningUp, lastCleanup, runCleanup } = useAutoCleanup();
 
   // Load Data
   const fetchData = React.useCallback(async () => {
@@ -498,6 +503,13 @@ export default function App() {
               <Calendar className="w-4 h-4" />
               <span className="hidden sm:inline">Cronogramas</span>
             </button>
+            <button
+              onClick={() => setActiveTab('maintenance')}
+              className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-all ${activeTab === 'maintenance' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+            >
+              <Settings className="w-4 h-4" />
+              <span className="hidden sm:inline">Mantenimiento</span>
+            </button>
           </div>
 
           {/* Filters Group */}
@@ -647,8 +659,9 @@ export default function App() {
                {activeTab === 'analytics' && <Analytics vehicles={vehicles} />}
                {activeTab === 'inspections' && <Inspections />}
                {activeTab === 'schedules' && <RouteSchedules />}
+               {activeTab === 'maintenance' && <MaintenancePanel />}
 
-                {activeTab !== 'alerts' && activeTab !== 'history' && activeTab !== 'analytics' && activeTab !== 'inspections' && activeTab !== 'schedules' && filteredVehicles.length === 0 && !loading && (
+                {activeTab !== 'alerts' && activeTab !== 'history' && activeTab !== 'analytics' && activeTab !== 'inspections' && activeTab !== 'schedules' && activeTab !== 'maintenance' && filteredVehicles.length === 0 && !loading && (
                   <div className="text-center py-20">
                     <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-slate-100 mb-4">
                       <Search className="w-8 h-8 text-slate-400" />
