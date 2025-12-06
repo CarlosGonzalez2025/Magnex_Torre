@@ -184,6 +184,8 @@ export function detectAlerts(vehicle: Vehicle): Alert[] {
 
 /**
  * Crea un objeto de alerta
+ * IMPORTANTE: Usa vehicle.lastUpdate como timestamp para mantener la hora real del evento
+ * y evitar que las alertas cambien de hora con cada actualización del sistema
  */
 function createAlert(
   vehicle: Vehicle,
@@ -191,14 +193,17 @@ function createAlert(
   severity: AlertSeverity,
   details: string
 ): Alert {
-  const timestamp = new Date().toISOString();
+  // Usar el timestamp del vehículo (hora del evento) en lugar de la hora actual
+  // Esto garantiza que el historial refleje la hora REAL del evento
+  const timestamp = vehicle.lastUpdate;
+
   return {
     id: `${vehicle.id}-${type}-${timestamp}`,
     vehicleId: vehicle.id,
     plate: vehicle.plate,
     type,
     severity,
-    timestamp,
+    timestamp, // Timestamp del evento del vehículo, NO de la detección
     location: vehicle.location,
     latitude: vehicle.latitude,
     longitude: vehicle.longitude,
