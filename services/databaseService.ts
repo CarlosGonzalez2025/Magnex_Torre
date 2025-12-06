@@ -1,12 +1,6 @@
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Alert } from '../types';
-
-// Supabase configuration
-const SUPABASE_URL = 'https://ppqlbgpxwcbirarxtgam.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBwcWxiZ3B4d2NiaXJhcnh0Z2FtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ3Nzc2NzMsImV4cCI6MjA4MDM1MzY3M30.Ha6RvnPbFznVTR34LAsIuk8SHO2NIS5KiSdcf_Hgq9Y';
-
-// Create Supabase client
-const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+import { DataCleanupService } from './dataCleanupService';
+import { supabase } from './supabaseClient';
 
 // ==================== TYPES ====================
 
@@ -51,9 +45,24 @@ export interface SavedAlertWithPlans extends SavedAlert {
 
 /**
  * Save an alert to the database
+ * Verifica duplicados antes de guardar para evitar consumo innecesario de espacio
  */
 export async function saveAlertToDatabase(alert: Alert, savedBy: string = 'Usuario'): Promise<{ success: boolean; data?: SavedAlert; error?: string }> {
   try {
+    // Verificar si ya existe una alerta con los mismos datos clave
+    const isDuplicate = await DataCleanupService.checkDuplicate('saved_alerts', {
+      plate: alert.plate,
+      timestamp: alert.timestamp,
+      type: alert.type
+    });
+
+    if (isDuplicate) {
+      return {
+        success: false,
+        error: 'Esta alerta ya fue guardada anteriormente'
+      };
+    }
+
     const alertData = {
       alert_id: alert.id,
       vehicle_id: alert.vehicleId,
@@ -72,7 +81,7 @@ export async function saveAlertToDatabase(alert: Alert, savedBy: string = 'Usuar
     };
 
     const { data, error } = await supabase
-      .from('alert_history')
+      .from('saved_alerts')
       .insert(alertData)
       .select()
       .single();
@@ -375,5 +384,3 @@ export async function getAlertStatistics(): Promise<{
     return { success: false, error: error.message || 'Error desconocido' };
   }
 }
-
-export { supabase };
