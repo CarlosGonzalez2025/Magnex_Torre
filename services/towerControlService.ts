@@ -1,4 +1,4 @@
-import { supabase } from './databaseService';
+import { supabase } from './supabaseClient';
 
 // =====================================================
 // TYPES
