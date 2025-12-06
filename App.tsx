@@ -12,7 +12,7 @@ import { RouteSchedules } from './components/RouteSchedules';
 import { MaintenancePanel } from './components/MaintenancePanel';
 import { fetchFleetData, FleetResponse } from './services/fleetService';
 import { detectAlerts, saveAlertsToStorage, getAlertsFromStorage, getUnsavedAlerts, markAlertAsSent, markAlertAsSaved, cleanOldAlerts, processVehiclesForIdleDetection } from './services/alertService';
-import { saveAlertToDatabase } from './services/databaseService';
+import { saveAlertToDatabase, autoSaveAlert } from './services/databaseService';
 import { useAutoCleanup } from './hooks/useAutoCleanup';
 
 // Constants
@@ -104,6 +104,16 @@ export default function App() {
     setAlerts(uniqueAlerts);
     saveAlertsToStorage(uniqueAlerts);
     cleanOldAlerts();
+
+    // 🆕 GUARDADO AUTOMÁTICO: Guardar TODAS las alertas nuevas en saved_alerts
+    // Esto se hace en segundo plano sin bloquear la UI
+    if (newAlerts.length > 0) {
+      Promise.all(
+        newAlerts.map(alert => autoSaveAlert(alert))
+      ).catch(error => {
+        console.error('Error auto-guardando alertas en saved_alerts:', error);
+      });
+    }
 
     setLastUpdate(new Date());
     setLoading(false);
