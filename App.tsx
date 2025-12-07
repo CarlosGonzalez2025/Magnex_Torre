@@ -6,6 +6,7 @@ import { VehicleTable } from './components/VehicleTable';
 import FleetMap from './components/FleetMap';
 import { AlertPanel } from './components/AlertPanel';
 import { AlertHistory } from './components/AlertHistory';
+import { SavedAlertsPanel } from './components/SavedAlertsPanel';
 import { Analytics } from './components/Analytics';
 import { Inspections } from './components/Inspections';
 import { RouteSchedules } from './components/RouteSchedules';
@@ -48,7 +49,7 @@ export default function App() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
-  const [activeTab, setActiveTab] = useState<'table' | 'map' | 'alerts' | 'history' | 'analytics' | 'inspections' | 'schedules' | 'maintenance'>('table');
+  const [activeTab, setActiveTab] = useState<'table' | 'map' | 'alerts' | 'history' | 'saved' | 'analytics' | 'inspections' | 'schedules' | 'maintenance'>('table');
   const [dataSource, setDataSource] = useState<'REAL' | 'DIRECT_API' | 'PARTIAL_DIRECT' | 'ERROR' | 'MOCK'>('REAL');
   const [apiStatus, setApiStatus] = useState<FleetResponse['apiStatus']>();
   const [vehicleCounts, setVehicleCounts] = useState<FleetResponse['vehicleCounts']>();
@@ -493,6 +494,13 @@ export default function App() {
               <span className="hidden sm:inline">Historial</span>
             </button>
             <button
+              onClick={() => setActiveTab('saved')}
+              className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-all ${activeTab === 'saved' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+            >
+              <Database className="w-4 h-4" />
+              <span className="hidden sm:inline">Auto-Guardadas</span>
+            </button>
+            <button
               onClick={() => setActiveTab('analytics')}
               className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-all ${activeTab === 'analytics' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
             >
@@ -666,12 +674,13 @@ export default function App() {
                {activeTab === 'map' && <FleetMap vehicles={filteredVehicles} />}
                {activeTab === 'alerts' && <AlertPanel alerts={alerts} onCopyAlert={handleCopyAlert} onSaveAlert={handleSaveAlert} />}
                {activeTab === 'history' && <AlertHistory onRefresh={fetchData} />}
+               {activeTab === 'saved' && <SavedAlertsPanel onRefresh={fetchData} />}
                {activeTab === 'analytics' && <Analytics vehicles={vehicles} />}
                {activeTab === 'inspections' && <Inspections />}
                {activeTab === 'schedules' && <RouteSchedules />}
                {activeTab === 'maintenance' && <MaintenancePanel />}
 
-                {activeTab !== 'alerts' && activeTab !== 'history' && activeTab !== 'analytics' && activeTab !== 'inspections' && activeTab !== 'schedules' && activeTab !== 'maintenance' && filteredVehicles.length === 0 && !loading && (
+                {activeTab !== 'alerts' && activeTab !== 'history' && activeTab !== 'saved' && activeTab !== 'analytics' && activeTab !== 'inspections' && activeTab !== 'schedules' && activeTab !== 'maintenance' && filteredVehicles.length === 0 && !loading && (
                   <div className="text-center py-20">
                     <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-slate-100 mb-4">
                       <Search className="w-8 h-8 text-slate-400" />

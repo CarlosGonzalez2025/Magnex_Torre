@@ -97,6 +97,75 @@ export async function autoSaveAlert(alert: Alert): Promise<{ success: boolean; d
   }
 }
 
+/**
+ * Obtener todas las alertas guardadas automáticamente de saved_alerts
+ */
+export async function getAllAutoSavedAlerts(): Promise<{ success: boolean; data?: SavedAlert[]; error?: string }> {
+  try {
+    const { data, error } = await supabase
+      .from('saved_alerts')
+      .select('*')
+      .order('timestamp', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching auto-saved alerts:', error);
+      return { success: false, error: error.message };
+    }
+
+    return { success: true, data: data as SavedAlert[] };
+  } catch (error: any) {
+    console.error('Exception fetching auto-saved alerts:', error);
+    return { success: false, error: error.message || 'Error desconocido' };
+  }
+}
+
+/**
+ * Obtener alertas filtradas de saved_alerts
+ */
+export async function getFilteredAutoSavedAlerts(
+  filters: {
+    status?: 'pending' | 'in_progress' | 'resolved';
+    severity?: string;
+    startDate?: string;
+    endDate?: string;
+  }
+): Promise<{ success: boolean; data?: SavedAlert[]; error?: string }> {
+  try {
+    let query = supabase
+      .from('saved_alerts')
+      .select('*')
+      .order('timestamp', { ascending: false });
+
+    if (filters.status) {
+      query = query.eq('status', filters.status);
+    }
+
+    if (filters.severity) {
+      query = query.eq('severity', filters.severity);
+    }
+
+    if (filters.startDate) {
+      query = query.gte('timestamp', filters.startDate);
+    }
+
+    if (filters.endDate) {
+      query = query.lte('timestamp', filters.endDate);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.error('Error fetching filtered auto-saved alerts:', error);
+      return { success: false, error: error.message };
+    }
+
+    return { success: true, data: data as SavedAlert[] };
+  } catch (error: any) {
+    console.error('Exception fetching filtered auto-saved alerts:', error);
+    return { success: false, error: error.message || 'Error desconocido' };
+  }
+}
+
 // ==================== ALERT_HISTORY FUNCTIONS (Guardado Manual para Seguimiento) ====================
 
 /**
