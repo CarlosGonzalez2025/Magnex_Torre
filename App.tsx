@@ -11,10 +11,12 @@ import { Analytics } from './components/Analytics';
 import { Inspections } from './components/Inspections';
 import { RouteSchedules } from './components/RouteSchedules';
 import { MaintenancePanel } from './components/MaintenancePanel';
+import { TTSToggleButton } from './components/TTSSettings';
 import { fetchFleetData, FleetResponse } from './services/fleetService';
 import { detectAlerts, saveAlertsToStorage, getAlertsFromStorage, getUnsavedAlerts, markAlertAsSent, markAlertAsSaved, cleanOldAlerts, processVehiclesForIdleDetection } from './services/alertService';
 import { saveAlertToDatabase, autoSaveAlert } from './services/databaseService';
 import { useAutoCleanup } from './hooks/useAutoCleanup';
+import ttsEngine from './services/ttsService';
 
 // Constants
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
@@ -113,6 +115,21 @@ export default function App() {
         newAlerts.map(alert => autoSaveAlert(alert))
       ).catch(error => {
         console.error('Error auto-guardando alertas en saved_alerts:', error);
+      });
+
+      // 🔊 NARRACIÓN: Narrar alertas críticas automáticamente
+      newAlerts.forEach(alert => {
+        if (alert.severity === 'critical') {
+          // Narrar alertas críticas con alta prioridad
+          ttsEngine.narrateAlert(alert, 'high').catch(error => {
+            console.error('Error narrando alerta:', error);
+          });
+        } else if (alert.severity === 'high') {
+          // Narrar alertas altas con prioridad normal
+          ttsEngine.narrateAlertShort(alert, 'normal').catch(error => {
+            console.error('Error narrando alerta:', error);
+          });
+        }
       });
     }
 
@@ -321,6 +338,7 @@ export default function App() {
             >
               <RefreshCw className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
+            <TTSToggleButton />
             <div className="h-8 w-px bg-slate-200 mx-2 hidden md:block"></div>
             <div className="flex items-center gap-1 sm:gap-2">
                <span className="relative flex h-3 w-3">
