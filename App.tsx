@@ -111,6 +111,14 @@ export default function App() {
     // 🆕 GUARDADO AUTOMÁTICO: Guardar TODAS las alertas nuevas en saved_alerts
     // Esto se hace en segundo plano sin bloquear la UI
     if (newAlerts.length > 0) {
+      // 🔍 LOG DE DIAGNÓSTICO: Contar alertas críticas detectadas
+      const criticalAlerts = newAlerts.filter(a => a.severity === 'critical');
+      if (criticalAlerts.length > 0) {
+        console.log(`🚨 [DIAGNÓSTICO] Detectadas ${criticalAlerts.length} alertas CRÍTICAS de ${newAlerts.length} totales:`,
+          criticalAlerts.map(a => ({ plate: a.plate, type: a.type, severity: a.severity }))
+        );
+      }
+
       Promise.all(
         newAlerts.map(alert => autoSaveAlert(alert))
       ).catch(error => {
