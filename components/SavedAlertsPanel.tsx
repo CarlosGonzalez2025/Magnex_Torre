@@ -28,33 +28,52 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh })
 
   // Filtrado adicional del lado del cliente (búsqueda y fechas)
   const filteredAndSearchedAlerts = alerts.filter(alert => {
-    // Búsqueda de texto
-    if (searchText) {
-      const search = searchText.toLowerCase();
+    // 🔍 BÚSQUEDA DE TEXTO - Mejorada con manejo de null/undefined
+    if (searchText && searchText.trim()) {
+      const search = searchText.toLowerCase().trim();
       const matchesSearch =
-        alert.plate.toLowerCase().includes(search) ||
-        alert.driver.toLowerCase().includes(search) ||
-        alert.type.toLowerCase().includes(search) ||
-        alert.details.toLowerCase().includes(search) ||
-        (alert.contract && alert.contract.toLowerCase().includes(search)) ||
-        alert.location.toLowerCase().includes(search);
+        (alert.plate || '').toLowerCase().includes(search) ||
+        (alert.driver || '').toLowerCase().includes(search) ||
+        (alert.type || '').toLowerCase().includes(search) ||
+        (alert.details || '').toLowerCase().includes(search) ||
+        (alert.contract || '').toLowerCase().includes(search) ||
+        (alert.location || '').toLowerCase().includes(search);
 
       if (!matchesSearch) return false;
     }
 
-    // Filtro de fecha inicial
+    // 📅 FILTRO DE FECHA INICIAL - Mejorado con comparación correcta
     if (startDate) {
-      const alertDate = new Date(alert.timestamp);
-      const filterStart = new Date(startDate);
-      if (alertDate < filterStart) return false;
+      try {
+        const alertDate = new Date(alert.timestamp);
+        const filterStart = new Date(startDate);
+        filterStart.setHours(0, 0, 0, 0); // Inicio del día
+
+        // Comparar solo fechas (sin hora)
+        const alertDateOnly = new Date(alertDate.getFullYear(), alertDate.getMonth(), alertDate.getDate());
+        const filterStartOnly = new Date(filterStart.getFullYear(), filterStart.getMonth(), filterStart.getDate());
+
+        if (alertDateOnly < filterStartOnly) return false;
+      } catch (error) {
+        console.error('Error comparando fecha inicial:', error);
+      }
     }
 
-    // Filtro de fecha final
+    // 📅 FILTRO DE FECHA FINAL - Mejorado con comparación correcta
     if (endDate) {
-      const alertDate = new Date(alert.timestamp);
-      const filterEnd = new Date(endDate);
-      filterEnd.setHours(23, 59, 59, 999); // Incluir todo el día
-      if (alertDate > filterEnd) return false;
+      try {
+        const alertDate = new Date(alert.timestamp);
+        const filterEnd = new Date(endDate);
+        filterEnd.setHours(23, 59, 59, 999); // Fin del día
+
+        // Comparar solo fechas (sin hora)
+        const alertDateOnly = new Date(alertDate.getFullYear(), alertDate.getMonth(), alertDate.getDate());
+        const filterEndOnly = new Date(filterEnd.getFullYear(), filterEnd.getMonth(), filterEnd.getDate());
+
+        if (alertDateOnly > filterEndOnly) return false;
+      } catch (error) {
+        console.error('Error comparando fecha final:', error);
+      }
     }
 
     return true;
@@ -143,16 +162,16 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh })
       resolved: 'Resuelta'
     };
     return (
-      <span className={`px-2 py-1 rounded-md text-xs font-semibold border ${styles[status as keyof typeof styles]}`}>
+      <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border ${styles[status as keyof typeof styles]}`}>
         {labels[status as keyof typeof labels]}
       </span>
     );
   };
 
   return (
-    <div className="space-y-4">
-      {/* Info Banner */}
-      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+    <div className="space-y-3">
+      {/* Info Banner - Compacto */}
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
         <div className="flex items-start gap-3">
           <Database className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
           <div className="flex-1">
@@ -185,91 +204,80 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh })
         </div>
       </div>
 
-      {/* Filtros y Búsqueda */}
-      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-4">
-        {/* Primera fila: Búsqueda */}
-        <div className="flex flex-wrap gap-4 items-center">
-          <div className="flex items-center gap-2 flex-1 min-w-[250px]">
+      {/* Filtros y Búsqueda - Optimizado */}
+      <div className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm">
+        <div className="flex flex-wrap gap-2 items-center">
+          {/* Búsqueda */}
+          <div className="flex items-center gap-2 flex-1 min-w-[200px] max-w-[400px]">
             <Search className="w-4 h-4 text-slate-400" />
             <input
               type="text"
-              placeholder="Buscar por placa, conductor, tipo, contrato..."
+              placeholder="Buscar por placa, conductor, tipo..."
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
-              className="flex-1 px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+              className="flex-1 px-2 py-1.5 text-sm border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-sky-500"
             />
           </div>
-        </div>
 
-        {/* Segunda fila: Filtros */}
-        <div className="flex flex-wrap gap-4 items-center">
           {/* Estado */}
-          <div className="flex items-center gap-2">
-            <label className="text-sm font-semibold text-slate-600">Estado:</label>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as any)}
-              className="px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
-            >
-              <option value="ALL">Todos</option>
-              <option value="pending">Pendientes</option>
-              <option value="in_progress">En Proceso</option>
-              <option value="resolved">Resueltas</option>
-            </select>
-          </div>
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as any)}
+            className="px-2 py-1.5 text-xs border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-sky-500"
+          >
+            <option value="ALL">📋 Todos</option>
+            <option value="pending">⏳ Pendientes</option>
+            <option value="in_progress">🔄 En Proceso</option>
+            <option value="resolved">✅ Resueltas</option>
+          </select>
 
           {/* Severidad */}
-          <div className="flex items-center gap-2">
-            <label className="text-sm font-semibold text-slate-600">Severidad:</label>
-            <select
-              value={severityFilter}
-              onChange={(e) => setSeverityFilter(e.target.value as any)}
-              className="px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
-            >
-              <option value="ALL">Todas</option>
-              <option value="critical">Críticas</option>
-              <option value="high">Altas</option>
-              <option value="medium">Medias</option>
-              <option value="low">Bajas</option>
-            </select>
-          </div>
+          <select
+            value={severityFilter}
+            onChange={(e) => setSeverityFilter(e.target.value as any)}
+            className="px-2 py-1.5 text-xs border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-sky-500"
+          >
+            <option value="ALL">🔔 Todas</option>
+            <option value="critical">🚨 Críticas</option>
+            <option value="high">⚠️ Altas</option>
+            <option value="medium">📢 Medias</option>
+            <option value="low">ℹ️ Bajas</option>
+          </select>
 
           {/* Fecha Inicio */}
-          <div className="flex items-center gap-2">
-            <Calendar className="w-4 h-4 text-slate-400" />
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-slate-600">Desde:</span>
             <input
               type="date"
               value={startDate}
               onChange={(e) => setStartDate(e.target.value)}
-              className="px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
-              placeholder="Desde"
+              className="px-2 py-1.5 text-xs border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-sky-500"
             />
           </div>
 
           {/* Fecha Fin */}
-          <div className="flex items-center gap-2">
-            <Calendar className="w-4 h-4 text-slate-400" />
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-slate-600">Hasta:</span>
             <input
               type="date"
               value={endDate}
               onChange={(e) => setEndDate(e.target.value)}
-              className="px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
-              placeholder="Hasta"
+              className="px-2 py-1.5 text-xs border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-sky-500"
             />
           </div>
 
           {/* Botón Exportar */}
           <button
             onClick={handleExport}
-            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 text-white rounded hover:bg-green-700 transition-colors text-xs font-medium"
             title="Exportar a Excel"
           >
-            <FileDown className="w-4 h-4" />
+            <FileDown className="w-3.5 h-3.5" />
             Excel
           </button>
 
           {/* Contador */}
-          <div className="ml-auto text-sm font-semibold text-slate-600">
+          <div className="ml-auto text-xs font-bold text-slate-700 bg-slate-100 px-3 py-1.5 rounded">
             {filteredAndSearchedAlerts.length} alerta{filteredAndSearchedAlerts.length !== 1 ? 's' : ''}
           </div>
         </div>
@@ -287,20 +295,20 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh })
           <p className="text-slate-400 text-sm mt-1">Las alertas se guardarán automáticamente cada 5 minutos</p>
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm bg-white">
-          <table className="w-full text-sm">
-            <thead className="bg-gradient-to-r from-blue-700 to-blue-600 text-white">
+        <div className="overflow-x-auto rounded-lg border border-slate-200 shadow-sm bg-white">
+          <table className="w-full text-xs">
+            <thead className="bg-gradient-to-r from-blue-700 to-blue-600 text-white sticky top-0">
               <tr>
-                <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Tipo</th>
-                <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Placa/Contrato</th>
-                <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Estado</th>
-                <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Severidad</th>
-                <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Detalles</th>
-                <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Conductor</th>
-                <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Velocidad</th>
-                <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Ubicación</th>
-                <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Fecha</th>
-                <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Guardado</th>
+                <th className="px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">Tipo</th>
+                <th className="px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">Placa/Contrato</th>
+                <th className="px-2 py-2 text-center text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">Estado</th>
+                <th className="px-2 py-2 text-center text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">Severidad</th>
+                <th className="px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wider">Detalles</th>
+                <th className="px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">Conductor</th>
+                <th className="px-2 py-2 text-center text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">Vel.</th>
+                <th className="px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wider">Ubicación</th>
+                <th className="px-2 py-2 text-center text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">Fecha</th>
+                <th className="px-2 py-2 text-center text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">Guardado</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -310,77 +318,76 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh })
                   className={`${index % 2 === 0 ? 'bg-white' : 'bg-slate-50'} hover:bg-blue-50 transition-colors`}
                 >
                   {/* Tipo */}
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
+                  <td className="px-2 py-1.5">
+                    <div className="flex items-center gap-1.5">
                       {getSeverityIcon(alert.severity)}
-                      <span className="font-semibold text-slate-900">{alert.type}</span>
+                      <span className="font-semibold text-slate-900 text-[11px]">{alert.type}</span>
                     </div>
                   </td>
 
                   {/* Placa/Contrato */}
-                  <td className="px-4 py-3">
-                    <div className="font-bold text-slate-900">{alert.plate}</div>
+                  <td className="px-2 py-1.5">
+                    <div className="font-bold text-slate-900 text-[11px]">{alert.plate}</div>
                     {alert.contract && alert.contract !== 'No asignado' && (
-                      <div className="text-xs text-sky-600 font-medium">{alert.contract}</div>
+                      <div className="text-[10px] text-sky-600 font-medium">{alert.contract}</div>
                     )}
                   </td>
 
                   {/* Estado */}
-                  <td className="px-4 py-3 text-center whitespace-nowrap">
+                  <td className="px-2 py-1.5 text-center whitespace-nowrap">
                     {getStatusBadge(alert.status)}
                   </td>
 
                   {/* Severidad */}
-                  <td className="px-4 py-3 text-center whitespace-nowrap">
-                    <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${getSeverityColor(alert.severity)}`}>
+                  <td className="px-2 py-1.5 text-center whitespace-nowrap">
+                    <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${getSeverityColor(alert.severity)}`}>
                       {alert.severity}
                     </span>
                   </td>
 
                   {/* Detalles */}
-                  <td className="px-4 py-3">
-                    <span className="text-sm text-slate-700">{alert.details}</span>
+                  <td className="px-2 py-1.5 max-w-[200px]">
+                    <span className="text-[11px] text-slate-700 line-clamp-2">{alert.details}</span>
                   </td>
 
                   {/* Conductor */}
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-1 text-sm text-slate-700">
+                  <td className="px-2 py-1.5">
+                    <div className="flex items-center gap-1 text-[11px] text-slate-700">
                       <User className="w-3 h-3" />
-                      <span>{alert.driver}</span>
+                      <span className="truncate max-w-[120px]">{alert.driver}</span>
                     </div>
                   </td>
 
                   {/* Velocidad */}
-                  <td className="px-4 py-3 text-center whitespace-nowrap">
-                    <div className="flex items-center justify-center gap-1">
+                  <td className="px-2 py-1.5 text-center whitespace-nowrap">
+                    <div className="flex items-center justify-center gap-0.5">
                       <Gauge className="w-3 h-3 text-slate-600" />
-                      <span className="font-semibold text-slate-900">{alert.speed}</span>
-                      <span className="text-xs text-slate-500">km/h</span>
+                      <span className="font-semibold text-slate-900 text-[11px]">{alert.speed}</span>
                     </div>
                   </td>
 
                   {/* Ubicación */}
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-1 text-sm text-slate-700 max-w-xs">
+                  <td className="px-2 py-1.5 max-w-[180px]">
+                    <div className="flex items-center gap-1 text-[11px] text-slate-700">
                       <MapPin className="w-3 h-3 flex-shrink-0 text-blue-600" />
                       <span className="truncate">{alert.location}</span>
                     </div>
                   </td>
 
                   {/* Fecha Evento */}
-                  <td className="px-4 py-3 text-center whitespace-nowrap">
-                    <div className="text-sm text-slate-700">
+                  <td className="px-2 py-1.5 text-center whitespace-nowrap">
+                    <div className="text-[11px] text-slate-700">
                       {new Date(alert.timestamp).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' })}
                     </div>
-                    <div className="text-xs text-slate-500">
+                    <div className="text-[10px] text-slate-500">
                       {new Date(alert.timestamp).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}
                     </div>
                   </td>
 
                   {/* Guardado */}
-                  <td className="px-4 py-3 text-center whitespace-nowrap">
-                    <div className="text-xs text-slate-600 font-medium">{alert.saved_by}</div>
-                    <div className="text-xs text-slate-500">
+                  <td className="px-2 py-1.5 text-center whitespace-nowrap">
+                    <div className="text-[10px] text-slate-600 font-medium">{alert.saved_by}</div>
+                    <div className="text-[10px] text-slate-500">
                       {new Date(alert.saved_at).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' })}
                     </div>
                   </td>
