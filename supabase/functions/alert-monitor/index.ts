@@ -5,12 +5,16 @@
  * sin necesidad de que haya usuarios conectados al frontend.
  *
  * Funciones:
- * 1. Consulta APIs de Coltrack y Fagor
+ * 1. Consulta APIs de Coltrack y Fagor a través de Vercel serverless functions
  * 2. Detecta alertas automáticamente
  * 3. Guarda alertas en saved_alerts
  * 4. Procesa detección de ralentí y registros
  *
- * Trigger: Cron Job cada 5 minutos
+ * Arquitectura:
+ * - Supabase Edge Function → Vercel Serverless Functions → Coltrack/Fagor APIs
+ * - Esto evita problemas de CORS y bloqueos de IP de las APIs externas
+ *
+ * Trigger: Cron Job cada 5 minutos (vía cron-job.org)
  * Endpoint: https://[project-ref].supabase.co/functions/v1/alert-monitor
  */
 
@@ -19,13 +23,11 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 // ==================== CONFIGURATION ====================
 
-const COLTRACK_API_URL = 'https://gps.coltrack.com/gps/api.jsp';
-const COLTRACK_USER = 'WebSMagnex';
-const COLTRACK_PASS = ']0zSKl549!9%';
-
-const FAGOR_API_URL = 'https://www.flotasnet.com/servicios/EstadoVehiculo.asmx';
-const FAGOR_USER = 'WebMasa2024';
-const FAGOR_PASS = 'Weblog24*';
+// Usar las serverless functions de Vercel en lugar de llamar directamente a las APIs
+// Esto evita problemas de CORS y bloqueos de las APIs
+const VERCEL_APP_URL = 'https://magnex-torre.vercel.app';
+const COLTRACK_API_URL = `${VERCEL_APP_URL}/api/coltrack`;
+const FAGOR_API_URL = `${VERCEL_APP_URL}/api/fagor`;
 
 const ALERT_THRESHOLDS = {
   SPEED_LIMIT: 80,
@@ -71,38 +73,40 @@ interface Alert {
 
 async function fetchColtrackData(): Promise<Vehicle[]> {
   try {
-    console.log('[Coltrack] Fetching data...');
+    console.log('[Coltrack] Fetching data via Vercel serverless function...');
 
-    const response = await fetch(
-      `${COLTRACK_API_URL}?user=${COLTRACK_USER}&pass=${COLTRACK_PASS}&consulta=LastPosition&json=1`,
-      {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' }
-      }
-    );
+    const response = await fetch(COLTRACK_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
 
     if (!response.ok) {
-      throw new Error(`Coltrack API error: ${response.status}`);
+      throw new Error(`Coltrack serverless function error: ${response.status}`);
     }
 
-    const data = await response.json();
+    const result = await response.json();
+
+    if (!result.success || !result.data) {
+      throw new Error('Invalid response from Coltrack serverless function');
+    }
+
     const vehicles: Vehicle[] = [];
 
-    if (data && Array.isArray(data)) {
-      for (const record of data) {
+    if (result.data && Array.isArray(result.data)) {
+      for (const record of result.data) {
         vehicles.push({
-          id: record.IMEI || record.imei || `coltrack-${record.PATENTE}`,
-          plate: record.PATENTE || record.patente || 'DESCONOCIDO',
-          driver: record.CONDUCTOR || record.conductor || 'Sin asignar',
-          speed: parseFloat(record.VELOCIDAD || record.velocidad || '0'),
-          location: record.DIRECCION || record.direccion || 'Ubicación desconocida',
-          latitude: parseFloat(record.LATITUD || record.latitud || '0'),
-          longitude: parseFloat(record.LONGITUD || record.longitud || '0'),
-          status: record.ESTADO || 'UNKNOWN',
-          lastUpdate: record.FECHA_GPS || new Date().toISOString(),
+          id: record.IMEI || record.imei || `coltrack-${record.PLACA || record.PATENTE}`,
+          plate: record.PLACA || record.PATENTE || record.patente || 'DESCONOCIDO',
+          driver: record.CONDUCTOR || record.Conductor || record.conductor || 'Sin asignar',
+          speed: parseFloat(record.VELOCIDAD || record.Velocidad || record.velocidad || '0'),
+          location: record.CIUDAD || record.Ciudad || record.DIRECCION || record.Ubicacion || 'Ubicación desconocida',
+          latitude: parseFloat(record.LATITUD || record.Latitud || record.latitud || '0'),
+          longitude: parseFloat(record.LONGITUD || record.Longitud || record.longitud || '0'),
+          status: record.ESTADO || record.Estado || 'UNKNOWN',
+          lastUpdate: record.FECHA_GPS || record.lastUpdate || new Date().toISOString(),
           source: 'COLTRACK',
-          contract: record.CONTRATO || record.CLIENTE || 'No asignado',
-          event: record.EVENTO || ''
+          contract: record.CONTRATO || record.Contrato || record.CLIENTE || record.Cliente || 'No asignado',
+          event: record.EVENTO || record.Evento || ''
         });
       }
     }
@@ -117,62 +121,46 @@ async function fetchColtrackData(): Promise<Vehicle[]> {
 
 async function fetchFagorData(): Promise<Vehicle[]> {
   try {
-    console.log('[Fagor] Fetching data...');
-
-    const soapBody = `<?xml version="1.0" encoding="utf-8"?>
-<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
-  <soap:Body>
-    <EstadoVehiculos xmlns="http://tempuri.org/">
-      <Usuario>${FAGOR_USER}</Usuario>
-      <Password>${FAGOR_PASS}</Password>
-    </EstadoVehiculos>
-  </soap:Body>
-</soap:Envelope>`;
+    console.log('[Fagor] Fetching data via Vercel serverless function...');
 
     const response = await fetch(FAGOR_API_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'text/xml; charset=utf-8',
-        'SOAPAction': 'http://tempuri.org/EstadoVehiculos'
-      },
-      body: soapBody
+      headers: { 'Content-Type': 'application/json' }
     });
 
     if (!response.ok) {
-      throw new Error(`Fagor API error: ${response.status}`);
+      throw new Error(`Fagor serverless function error: ${response.status}`);
     }
 
-    const xmlText = await response.text();
+    const result = await response.json();
+
+    if (!result.success || !result.data) {
+      throw new Error('Invalid response from Fagor serverless function');
+    }
+
     const vehicles: Vehicle[] = [];
 
-    // Parse XML simple (en producción usar un parser XML real)
-    const vehicleMatches = xmlText.matchAll(/<Vehiculo>(.*?)<\/Vehiculo>/gs);
+    if (result.data && Array.isArray(result.data)) {
+      for (const record of result.data) {
+        const plate = record.Matricula || 'DESCONOCIDO';
+        const speed = parseFloat(record.Velocidad || '0');
+        const estadoText = record.Estado || record.EstadoUsuario || '';
 
-    for (const match of vehicleMatches) {
-      const vehicleXml = match[1];
-
-      const plate = vehicleXml.match(/<Patente>(.*?)<\/Patente>/)?.[1] || 'DESCONOCIDO';
-      const driver = vehicleXml.match(/<Conductor>(.*?)<\/Conductor>/)?.[1] || 'Sin asignar';
-      const speed = parseFloat(vehicleXml.match(/<Velocidad>(.*?)<\/Velocidad>/)?.[1] || '0');
-      const location = vehicleXml.match(/<Ubicacion>(.*?)<\/Ubicacion>/)?.[1] || 'Ubicación desconocida';
-      const latitude = parseFloat(vehicleXml.match(/<Latitud>(.*?)<\/Latitud>/)?.[1] || '0');
-      const longitude = parseFloat(vehicleXml.match(/<Longitud>(.*?)<\/Longitud>/)?.[1] || '0');
-      const event = vehicleXml.match(/<Evento>(.*?)<\/Evento>/)?.[1] || '';
-
-      vehicles.push({
-        id: `fagor-${plate}`,
-        plate,
-        driver,
-        speed,
-        location,
-        latitude,
-        longitude,
-        status: speed > 0 ? 'MOVING' : 'STOPPED',
-        lastUpdate: new Date().toISOString(),
-        source: 'FAGOR',
-        contract: 'No asignado',
-        event
-      });
+        vehicles.push({
+          id: `fagor-${plate}`,
+          plate,
+          driver: record.Conductor || 'Sin asignar',
+          speed,
+          location: record.Localidad || 'Ubicación desconocida',
+          latitude: parseFloat(record.Latitud || '0'),
+          longitude: parseFloat(record.Longitud || '0'),
+          status: speed > 0 ? 'MOVING' : 'STOPPED',
+          lastUpdate: new Date().toISOString(),
+          source: 'FAGOR',
+          contract: record.CONTRATO || record.Contrato || 'No asignado',
+          event: estadoText
+        });
+      }
     }
 
     console.log(`[Fagor] Fetched ${vehicles.length} vehicles`);
