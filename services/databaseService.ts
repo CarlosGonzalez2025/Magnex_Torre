@@ -79,6 +79,17 @@ export async function autoSaveAlert(alert: Alert): Promise<{ success: boolean; d
       saved_by: 'Sistema (Auto)'
     };
 
+    // 🔍 LOG DE DIAGNÓSTICO: Verificar datos de alertas críticas
+    if (alert.severity === 'critical') {
+      console.log('🚨 [DIAGNÓSTICO] Guardando alerta CRÍTICA:', {
+        plate: alert.plate,
+        type: alert.type,
+        severity: alert.severity,
+        timestamp: alert.timestamp,
+        details: alert.details
+      });
+    }
+
     const { data, error } = await supabase
       .from('saved_alerts')
       .insert(alertData)
@@ -86,13 +97,26 @@ export async function autoSaveAlert(alert: Alert): Promise<{ success: boolean; d
       .single();
 
     if (error) {
-      console.error('Error auto-saving alert to saved_alerts:', error);
+      console.error('❌ Error auto-saving alert to saved_alerts:', error);
+      if (alert.severity === 'critical') {
+        console.error('🚨 [DIAGNÓSTICO] ERROR al guardar alerta CRÍTICA:', {
+          error: error.message,
+          alertData
+        });
+      }
       return { success: false, error: error.message };
+    }
+
+    if (alert.severity === 'critical') {
+      console.log('✅ [DIAGNÓSTICO] Alerta CRÍTICA guardada exitosamente:', data);
     }
 
     return { success: true, data };
   } catch (error: any) {
     console.error('Exception auto-saving alert:', error);
+    if (alert.severity === 'critical') {
+      console.error('🚨 [DIAGNÓSTICO] EXCEPCIÓN al guardar alerta CRÍTICA:', error);
+    }
     return { success: false, error: error.message || 'Error desconocido' };
   }
 }
@@ -102,17 +126,38 @@ export async function autoSaveAlert(alert: Alert): Promise<{ success: boolean; d
  */
 export async function getAllAutoSavedAlerts(): Promise<{ success: boolean; data?: SavedAlert[]; error?: string }> {
   try {
-    const { data, error } = await supabase
-      .from('saved_alerts')
-      .select('*')
-      .order('timestamp', { ascending: false });
+    // 🔧 SOLUCIÓN: Obtener TODOS los registros usando paginación automática
+    // Supabase tiene límite de 1000 por defecto, así que hacemos múltiples consultas
+    let allData: SavedAlert[] = [];
+    let from = 0;
+    const pageSize = 1000;
+    let hasMore = true;
 
-    if (error) {
-      console.error('Error fetching auto-saved alerts:', error);
-      return { success: false, error: error.message };
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from('saved_alerts')
+        .select('*')
+        .order('timestamp', { ascending: false })
+        .range(from, from + pageSize - 1);
+
+      if (error) {
+        console.error('Error fetching auto-saved alerts:', error);
+        return { success: false, error: error.message };
+      }
+
+      if (data && data.length > 0) {
+        allData = [...allData, ...data];
+        from += pageSize;
+
+        // Si recibimos menos registros que el tamaño de página, ya no hay más
+        hasMore = data.length === pageSize;
+      } else {
+        hasMore = false;
+      }
     }
 
-    return { success: true, data: data as SavedAlert[] };
+    console.log(`✅ Cargadas ${allData.length} alertas auto-guardadas (sin límite de 1000)`);
+    return { success: true, data: allData as SavedAlert[] };
   } catch (error: any) {
     console.error('Exception fetching auto-saved alerts:', error);
     return { success: false, error: error.message || 'Error desconocido' };
@@ -131,35 +176,55 @@ export async function getFilteredAutoSavedAlerts(
   }
 ): Promise<{ success: boolean; data?: SavedAlert[]; error?: string }> {
   try {
-    let query = supabase
-      .from('saved_alerts')
-      .select('*')
-      .order('timestamp', { ascending: false });
+    // 🔧 SOLUCIÓN: Obtener TODOS los registros filtrados usando paginación automática
+    let allData: SavedAlert[] = [];
+    let from = 0;
+    const pageSize = 1000;
+    let hasMore = true;
 
-    if (filters.status) {
-      query = query.eq('status', filters.status);
+    while (hasMore) {
+      let query = supabase
+        .from('saved_alerts')
+        .select('*')
+        .order('timestamp', { ascending: false })
+        .range(from, from + pageSize - 1);
+
+      if (filters.status) {
+        query = query.eq('status', filters.status);
+      }
+
+      if (filters.severity) {
+        query = query.eq('severity', filters.severity);
+      }
+
+      if (filters.startDate) {
+        query = query.gte('timestamp', filters.startDate);
+      }
+
+      if (filters.endDate) {
+        query = query.lte('timestamp', filters.endDate);
+      }
+
+      const { data, error } = await query;
+
+      if (error) {
+        console.error('Error fetching filtered auto-saved alerts:', error);
+        return { success: false, error: error.message };
+      }
+
+      if (data && data.length > 0) {
+        allData = [...allData, ...data];
+        from += pageSize;
+
+        // Si recibimos menos registros que el tamaño de página, ya no hay más
+        hasMore = data.length === pageSize;
+      } else {
+        hasMore = false;
+      }
     }
 
-    if (filters.severity) {
-      query = query.eq('severity', filters.severity);
-    }
-
-    if (filters.startDate) {
-      query = query.gte('timestamp', filters.startDate);
-    }
-
-    if (filters.endDate) {
-      query = query.lte('timestamp', filters.endDate);
-    }
-
-    const { data, error } = await query;
-
-    if (error) {
-      console.error('Error fetching filtered auto-saved alerts:', error);
-      return { success: false, error: error.message };
-    }
-
-    return { success: true, data: data as SavedAlert[] };
+    console.log(`✅ Cargadas ${allData.length} alertas filtradas (sin límite de 1000)`);
+    return { success: true, data: allData as SavedAlert[] };
   } catch (error: any) {
     console.error('Exception fetching filtered auto-saved alerts:', error);
     return { success: false, error: error.message || 'Error desconocido' };
