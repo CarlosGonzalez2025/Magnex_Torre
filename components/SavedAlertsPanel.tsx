@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { AlertTriangle, AlertCircle, Bell, BellRing, CheckCircle, Clock, MapPin, User, Gauge, FileDown, Search, Calendar, Database, Info } from 'lucide-react';
+import { AlertTriangle, AlertCircle, Bell, BellRing, CheckCircle, Clock, MapPin, User, Gauge, FileDown, Search, Calendar, Database, Info, Save, Copy } from 'lucide-react';
+import { Alert } from '../types';
 import {
   getAllAutoSavedAlerts,
   getFilteredAutoSavedAlerts,
@@ -11,9 +12,11 @@ import { useExportToExcel } from '../hooks/useExportToExcel';
 
 interface SavedAlertsPanelProps {
   onRefresh?: () => void;
+  onSaveAlert?: (alert: Alert) => void;
+  onCopyAlert?: (alert: Alert) => void;
 }
 
-export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh }) => {
+export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, onSaveAlert, onCopyAlert }) => {
   const [alerts, setAlerts] = useState<SavedAlert[]>([]);
   const [loading, setLoading] = useState(true);
   const [showInfo, setShowInfo] = useState(false);
@@ -130,6 +133,55 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh })
     setLoading(false);
   };
 
+  const handleSaveWrapper = (savedAlert: SavedAlert) => {
+    if (!onSaveAlert) return;
+
+    // Convert SavedAlert to Alert for compatibility
+    const alert: Alert = {
+      id: savedAlert.alert_id, // Use the original Alert ID
+      vehicleId: savedAlert.vehicle_id,
+      plate: savedAlert.plate,
+      driver: savedAlert.driver,
+      type: savedAlert.type as any,
+      severity: savedAlert.severity as any,
+      timestamp: savedAlert.timestamp,
+      location: savedAlert.location,
+      latitude: 0,
+      longitude: 0,
+      speed: savedAlert.speed,
+      details: savedAlert.details,
+      contract: savedAlert.contract,
+      source: savedAlert.source as any,
+      sent: false // Defaults
+    };
+
+    onSaveAlert(alert);
+  };
+
+  const handleCopyWrapper = (savedAlert: SavedAlert) => {
+    if (!onCopyAlert) return;
+
+    const alert: Alert = {
+      id: savedAlert.alert_id,
+      vehicleId: savedAlert.vehicle_id,
+      plate: savedAlert.plate,
+      driver: savedAlert.driver,
+      type: savedAlert.type as any,
+      severity: savedAlert.severity as any,
+      timestamp: savedAlert.timestamp,
+      location: savedAlert.location,
+      latitude: 0,
+      longitude: 0,
+      speed: savedAlert.speed,
+      details: savedAlert.details,
+      contract: savedAlert.contract,
+      source: savedAlert.source as any,
+      sent: false
+    };
+
+    onCopyAlert(alert);
+  };
+
   const getSeverityColor = (severity: string) => {
     switch (severity) {
       case 'critical': return 'bg-red-100 text-red-800 border-red-300';
@@ -195,8 +247,8 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh })
                 <p><strong>🗑️ Limpieza:</strong> Automática cada 7 días</p>
                 <p><strong>🎯 Uso:</strong> Análisis, reportes, cumplimiento PESV</p>
                 <p className="pt-2 border-t border-blue-200">
-                  <strong>💡 Nota:</strong> Si una alerta requiere seguimiento, guárdala manualmente desde el panel de "Alertas"
-                  para que aparezca en "Historial" de forma permanente con planes de acción.
+                  <strong>💡 Nota:</strong> Si una alerta requiere seguimiento, pulsa el botón <Save className="w-3 h-3 inline mx-1" /> <strong>Guardar</strong>
+                  para moverla al "Historial", donde podrás asignar planes de acción y realizar seguimiento detallado.
                 </p>
               </div>
             )}
@@ -299,6 +351,7 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh })
           <table className="w-full text-xs">
             <thead className="bg-gradient-to-r from-blue-700 to-blue-600 text-white sticky top-0">
               <tr>
+                <th className="px-2 py-2 text-center text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">Acciones</th>
                 <th className="px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">Tipo</th>
                 <th className="px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">Placa/Contrato</th>
                 <th className="px-2 py-2 text-center text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">Estado</th>
@@ -317,6 +370,30 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh })
                   key={alert.id}
                   className={`${index % 2 === 0 ? 'bg-white' : 'bg-slate-50'} hover:bg-blue-50 transition-colors`}
                 >
+                  {/* Acciones */}
+                  <td className="px-2 py-1.5 text-center whitespace-nowrap bg-gray-50/50">
+                    <div className="flex items-center justify-center gap-1">
+                      {onSaveAlert && (
+                        <button
+                          onClick={() => handleSaveWrapper(alert)}
+                          className="p-1.5 rounded text-white bg-green-600 hover:bg-green-700 transition-colors shadow-sm"
+                          title="Mover a Historial (Seguimiento)"
+                        >
+                          <Save className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      {onCopyAlert && (
+                        <button
+                          onClick={() => handleCopyWrapper(alert)}
+                          className="p-1.5 rounded text-white bg-blue-600 hover:bg-blue-700 transition-colors shadow-sm"
+                          title="Copiar Detalles"
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </td>
+
                   {/* Tipo */}
                   <td className="px-2 py-1.5">
                     <div className="flex items-center gap-1.5">

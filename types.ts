@@ -48,6 +48,7 @@ export interface Alert {
   sent?: boolean; // Si fue enviada por WhatsApp
   sentAt?: string; // Cuándo fue enviada
   sentBy?: string; // Quién la envió
+  saved?: boolean; // Si ya fue guardada en historial
 }
 
 export interface Vehicle {

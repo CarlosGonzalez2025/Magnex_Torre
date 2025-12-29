@@ -548,21 +548,26 @@ export default function App() {
                 <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
                   <AlertPanel
                     alerts={alerts.filter(a => !a.saved)}
-                    onSave={handleSaveAlert}
-                    onCopy={handleCopyAlert}
-                    onViewMap={() => setActiveTab('map')}
+                    onSaveAlert={handleSaveAlert}
+                    onCopyAlert={handleCopyAlert}
                   />
                 </div>
               )}
 
               {activeTab === 'history' && <AlertHistory />}
-              {activeTab === 'saved' && <SavedAlertsPanel />}
+              {activeTab === 'saved' && (
+                <SavedAlertsPanel
+                  onRefresh={fetchData}
+                  onSaveAlert={handleSaveAlert}
+                  onCopyAlert={handleCopyAlert}
+                />
+              )}
               {activeTab === 'analytics' && <Analytics vehicles={vehicles} alerts={alerts} />}
               {activeTab === 'inspections' && <Inspections />}
               {activeTab === 'schedules' && <RouteSchedules vehicles={vehicles} />}
               {activeTab === 'drivers' && <DriverManagement />}
               {activeTab === 'geofences' && <GeofenceEditor />}
-              {activeTab === 'maintenance' && <MaintenancePanel vehicles={vehicles} />}
+              {activeTab === 'maintenance' && <MaintenancePanel />}
             </div>
           </div>
         </main>
