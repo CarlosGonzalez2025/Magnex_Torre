@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { supabase } from '../services/supabaseClient';
 
 // =====================================================
 // TYPES
@@ -42,77 +43,60 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Check for existing session on mount
+  // Initialize Supabase Auth
   useEffect(() => {
-    checkSession();
+    // 1. Check active session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        mapSupabaseUser(session.user);
+      } else {
+        setIsLoading(false);
+      }
+    });
+
+    // 2. Listen for auth changes
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        mapSupabaseUser(session.user);
+      } else {
+        setUser(null);
+        setIsLoading(false);
+      }
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
-  const checkSession = async () => {
-    try {
-      // Check localStorage for existing session
-      const savedUser = localStorage.getItem('torre_control_user');
-      if (savedUser) {
-        const parsedUser = JSON.parse(savedUser);
-        setUser(parsedUser);
-      }
-    } catch (error) {
-      console.error('Error checking session:', error);
-      localStorage.removeItem('torre_control_user');
-    } finally {
-      setIsLoading(false);
-    }
+  const mapSupabaseUser = (supabaseUser: any) => {
+    const userMap: User = {
+      id: supabaseUser.id,
+      email: supabaseUser.email!,
+      name: supabaseUser.user_metadata?.name || supabaseUser.email!.split('@')[0],
+      role: (supabaseUser.user_metadata?.role as any) || 'operator', // Default safe role
+      createdAt: supabaseUser.created_at,
+      lastLogin: new Date().toISOString(),
+    };
+    setUser(userMap);
+    setIsLoading(false);
   };
 
   const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
     try {
       setIsLoading(true);
 
-      // TODO: Replace with Supabase Auth when credentials are available
-      // For now, use demo authentication
-      if (email && password.length >= 6) {
-        const mockUser: User = {
-          id: crypto.randomUUID(),
-          email,
-          name: email.split('@')[0],
-          role: email.includes('admin') ? 'admin' : 'operator',
-          createdAt: new Date().toISOString(),
-          lastLogin: new Date().toISOString(),
-        };
-
-        setUser(mockUser);
-        localStorage.setItem('torre_control_user', JSON.stringify(mockUser));
-
-        return { success: true };
-      } else {
-        return { success: false, error: 'Credenciales inválidas' };
-      }
-
-      /* SUPABASE AUTH - Descomentar cuando estén las credenciales
-      import { supabase } from '../services/supabaseClient';
-      
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
 
       if (error) {
-        return { success: false, error: error.message };
+        console.error('Supabase Login Error:', error);
+        return { success: false, error: 'Credenciales inválidas o error de conexión.' };
       }
 
-      if (data.user) {
-        const user: User = {
-          id: data.user.id,
-          email: data.user.email!,
-          name: data.user.user_metadata?.name || email.split('@')[0],
-          role: data.user.user_metadata?.role || 'operator',
-          createdAt: data.user.created_at,
-          lastLogin: new Date().toISOString(),
-        };
-        setUser(user);
-        localStorage.setItem('torre_control_user', JSON.stringify(user));
-        return { success: true };
-      }
-      */
+      return { success: true };
     } catch (error: any) {
       console.error('Login error:', error);
       return { success: false, error: error.message || 'Error al iniciar sesión' };
@@ -124,12 +108,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const logout = async (): Promise<void> => {
     try {
       setIsLoading(true);
-
-      // TODO: Supabase signOut
-      // await supabase.auth.signOut();
-
+      await supabase.auth.signOut();
       setUser(null);
-      localStorage.removeItem('torre_control_user');
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
@@ -145,30 +125,14 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     try {
       setIsLoading(true);
 
-      // TODO: Replace with Supabase Auth
-      if (email && password.length >= 6 && name) {
-        const mockUser: User = {
-          id: crypto.randomUUID(),
-          email,
-          name,
-          role: 'operator',
-          createdAt: new Date().toISOString(),
-        };
-
-        setUser(mockUser);
-        localStorage.setItem('torre_control_user', JSON.stringify(mockUser));
-
-        return { success: true };
-      } else {
-        return { success: false, error: 'Datos inválidos' };
-      }
-
-      /* SUPABASE AUTH
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
         options: {
-          data: { name, role: 'operator' },
+          data: {
+            name,
+            role: 'operator' // Default role for new users
+          },
         },
       });
 
@@ -177,7 +141,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       }
 
       return { success: true };
-      */
     } catch (error: any) {
       console.error('Register error:', error);
       return { success: false, error: error.message || 'Error al registrar' };
@@ -192,9 +155,19 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         return { success: false, error: 'No hay usuario autenticado' };
       }
 
+      // Update local state first for speed
       const updatedUser = { ...user, ...updates };
       setUser(updatedUser);
-      localStorage.setItem('torre_control_user', JSON.stringify(updatedUser));
+
+      // Persist to Supabase metadata if needed
+      const { error } = await supabase.auth.updateUser({
+        data: {
+          name: updates.name,
+          role: updates.role
+        }
+      });
+
+      if (error) throw error;
 
       return { success: true };
     } catch (error: any) {
@@ -262,7 +235,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   if (requiredRole && user) {
     const userLevel = roleHierarchy[user.role] || 0;
     const requiredLevel = roleHierarchy[requiredRole] || 0;
-    
+
     if (userLevel < requiredLevel) {
       return (
         <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900">
