@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { AlertTriangle, AlertCircle, Bell, BellRing, CheckCircle, Clock, MapPin, User, Gauge, FileDown, Search, Calendar, Database, Info, Save, Copy } from 'lucide-react';
+import { AlertTriangle, AlertCircle, Bell, BellRing, CheckCircle, Clock, MapPin, User, Gauge, FileDown, Search, Calendar, Database, Info, Save, Copy, MessageCircle } from 'lucide-react';
 import { Alert } from '../types';
 import {
   getAllAutoSavedAlerts,
@@ -385,10 +385,10 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
                       {onCopyAlert && (
                         <button
                           onClick={() => handleCopyWrapper(alert)}
-                          className="p-1.5 rounded text-white bg-blue-600 hover:bg-blue-700 transition-colors shadow-sm"
-                          title="Copiar Detalles"
+                          className="p-1.5 rounded text-white bg-sky-500 hover:bg-sky-600 transition-colors shadow-sm"
+                          title="Reportar por WhatsApp"
                         >
-                          <Copy className="w-3.5 h-3.5" />
+                          <MessageCircle className="w-3.5 h-3.5" />
                         </button>
                       )}
                     </div>

@@ -14,6 +14,7 @@ import {
     Calendar,
     Fuel,
     Gauge,
+    Download,
 } from 'lucide-react';
 import { Vehicle, Alert, VehicleStatus } from '../types';
 import { getAlertStatistics } from '../services/databaseService';
@@ -22,6 +23,8 @@ interface DashboardProps {
     vehicles: Vehicle[];
     alerts: Alert[];
     onNavigate?: (tab: string) => void;
+    installPWA?: () => void;
+    isInstallable?: boolean;
 }
 
 interface StatCardProps {
@@ -97,7 +100,7 @@ const StatCard: React.FC<StatCardProps> = ({
     );
 };
 
-export const Dashboard: React.FC<DashboardProps> = ({ vehicles, alerts, onNavigate }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ vehicles, alerts, onNavigate, installPWA, isInstallable }) => {
     const [stats, setStats] = useState<any>(null);
 
     useEffect(() => {
@@ -304,10 +307,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ vehicles, alerts, onNaviga
                                 >
                                     <div
                                         className={`w-2 h-2 rounded-full mt-2 ${alert.severity === 'critical'
-                                                ? 'bg-red-500'
-                                                : alert.severity === 'high'
-                                                    ? 'bg-amber-500'
-                                                    : 'bg-blue-500'
+                                            ? 'bg-red-500'
+                                            : alert.severity === 'high'
+                                                ? 'bg-amber-500'
+                                                : 'bg-blue-500'
                                             }`}
                                     ></div>
                                     <div className="flex-1 min-w-0">
@@ -340,10 +343,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ vehicles, alerts, onNaviga
                                 <div key={item.plate} className="flex items-center gap-3">
                                     <span
                                         className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${index === 0
-                                                ? 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400'
-                                                : index === 1
-                                                    ? 'bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400'
-                                                    : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400'
+                                            ? 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400'
+                                            : index === 1
+                                                ? 'bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400'
+                                                : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400'
                                             }`}
                                     >
                                         {index + 1}
@@ -399,6 +402,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ vehicles, alerts, onNaviga
                         <TrendingUp className="w-6 h-6 text-amber-600 dark:text-amber-400 mx-auto mb-2" />
                         <span className="text-sm font-medium text-slate-900 dark:text-white">Análisis</span>
                     </button>
+                    {isInstallable && (
+                        <button
+                            onClick={installPWA}
+                            className="p-4 rounded-xl bg-gradient-to-br from-indigo-50 to-violet-50 dark:from-indigo-900/20 dark:to-violet-900/20 border border-indigo-100 dark:border-indigo-800 hover:shadow-md transition-all text-center col-span-2 sm:col-span-1 border-dashed border-2"
+                        >
+                            <Download className="w-6 h-6 text-indigo-600 dark:text-indigo-400 mx-auto mb-2 animate-bounce" />
+                            <span className="text-sm font-bold text-indigo-700 dark:text-indigo-300">Instalar App</span>
+                        </button>
+                    )}
                 </div>
             </div>
         </div>

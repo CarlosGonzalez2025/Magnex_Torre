@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Alert, AlertSeverity, AlertType } from '../types';
-import { AlertTriangle, AlertCircle, Bell, BellRing, Copy, CheckCircle, Clock, MapPin, User, Gauge, Save, FileDown, Search } from 'lucide-react';
+import { AlertTriangle, AlertCircle, Bell, BellRing, Copy, CheckCircle, Clock, MapPin, User, Gauge, Save, FileDown, Search, MessageCircle } from 'lucide-react';
 import { usePagination } from '../hooks/usePagination';
 import { PaginationControls } from './PaginationControls';
 import { useExportToExcel } from '../hooks/useExportToExcel';
@@ -211,10 +211,10 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
                             e.stopPropagation();
                             onCopyAlert(alert);
                           }}
-                          className="p-2 rounded-lg text-white bg-blue-600 hover:bg-blue-700 transition-colors"
-                          title="Copiar Alerta"
+                          className="p-2 rounded-lg text-white bg-sky-500 hover:bg-sky-600 transition-colors"
+                          title="Reportar por WhatsApp"
                         >
-                          <Copy className="w-4 h-4" />
+                          <MessageCircle className="w-4 h-4" />
                         </button>
                       )}
                     </div>

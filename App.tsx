@@ -25,6 +25,7 @@ import { detectAlerts, saveAlertsToStorage, getAlertsFromStorage, getUnsavedAler
 import { saveAlertToDatabase, autoSaveAlert } from './services/databaseService';
 import { useAutoCleanup } from './hooks/useAutoCleanup';
 import audioEngine from './services/alertSoundService';
+import { usePWA } from './hooks/usePWA';
 
 // Constants
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
@@ -78,6 +79,9 @@ export default function App() {
 
   // Auto-cleanup hook for data retention disabled by user request (manual only)
   // const { isCleaningUp, lastCleanup, runCleanup } = useAutoCleanup();
+
+  // PWA Install Hook
+  const { isInstallable, installApp } = usePWA();
 
   // Load Data
   const fetchData = React.useCallback(async () => {
@@ -529,6 +533,8 @@ export default function App() {
                   vehicles={vehicles}
                   alerts={alerts}
                   onNavigate={(tab) => setActiveTab(tab as any)}
+                  installPWA={installApp}
+                  isInstallable={isInstallable}
                 />
               )}
 
