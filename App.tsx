@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { LayoutDashboard, Map as MapIcon, RefreshCw, Search, Server, Wifi, Radio, AlertTriangle, XCircle, CloudOff, CheckCircle, Database, Bell, History, BarChart3, ClipboardCheck, Calendar, Settings } from 'lucide-react';
+import { LayoutDashboard, Map as MapIcon, RefreshCw, Search, Server, Wifi, Radio, AlertTriangle, XCircle, CloudOff, CheckCircle, Database, Bell, History, BarChart3, ClipboardCheck, Calendar, Settings, Users, MapPin, Home } from 'lucide-react';
 import { Vehicle, ApiSource, VehicleStatus, FilterType, StatusFilterType, Alert } from './types';
+import { AuthProvider, useAuth, ProtectedRoute } from './contexts/AuthContext';
+import { ThemeProvider } from './contexts/ThemeContext';
 import { KpiCards } from './components/KpiCards';
 import { VehicleTable } from './components/VehicleTable';
 import FleetMap from './components/FleetMap';
@@ -12,6 +14,11 @@ import { Inspections } from './components/Inspections';
 import { RouteSchedules } from './components/RouteSchedules';
 import { MaintenancePanel } from './components/MaintenancePanel';
 import { AlertSoundToggle } from './components/AlertSoundSettings';
+import { Dashboard } from './components/Dashboard';
+import { DriverManagement } from './components/DriverManagement';
+import { GeofenceEditor } from './components/GeofenceEditor';
+import { ThemeToggle } from './components/ThemeToggle';
+import { Login } from './components/Login';
 import { fetchFleetData, FleetResponse } from './services/fleetService';
 import { detectAlerts, saveAlertsToStorage, getAlertsFromStorage, getUnsavedAlerts, markAlertAsSent, markAlertAsSaved, cleanOldAlerts, processVehiclesForIdleDetection } from './services/alertService';
 import { saveAlertToDatabase, autoSaveAlert } from './services/databaseService';
@@ -48,10 +55,11 @@ function playAlertSound() {
 }
 
 export default function App() {
+  const { user } = useAuth();
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
-  const [activeTab, setActiveTab] = useState<'table' | 'map' | 'alerts' | 'history' | 'saved' | 'analytics' | 'inspections' | 'schedules' | 'maintenance'>('table');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'maintenance'>('dashboard');
   const [dataSource, setDataSource] = useState<'REAL' | 'DIRECT_API' | 'PARTIAL_DIRECT' | 'ERROR' | 'MOCK'>('REAL');
   const [apiStatus, setApiStatus] = useState<FleetResponse['apiStatus']>();
   const [vehicleCounts, setVehicleCounts] = useState<FleetResponse['vehicleCounts']>();
@@ -146,11 +154,11 @@ export default function App() {
   // Derived State (Filtering)
   const filteredVehicles = useMemo(() => {
     return vehicles.filter(v => {
-      const matchesSearch = 
+      const matchesSearch =
         v.plate.toLowerCase().includes(searchQuery.toLowerCase()) ||
         v.driver.toLowerCase().includes(searchQuery.toLowerCase()) ||
         v.location.toLowerCase().includes(searchQuery.toLowerCase());
-      
+
       const matchesApi = apiFilter === 'ALL' || v.source === apiFilter;
       const matchesStatus = statusFilter === 'ALL' || v.status === statusFilter;
 
@@ -236,7 +244,7 @@ export default function App() {
   const handleCopyAlert = async (alert: Alert) => {
     // Determinar si es exceso de velocidad
     const isSpeedingAlert = alert.type.toLowerCase().includes('velocidad') ||
-                            alert.type.toLowerCase().includes('speeding');
+      alert.type.toLowerCase().includes('speeding');
 
     // Formato con markdown para WhatsApp
     const message = `🚨 *ALERTA DE FLOTA*\n\n` +
@@ -305,20 +313,23 @@ export default function App() {
       playAlertSound();
     }
     // Update the ref with current count
-    prevCriticalAlertsRef.current = criticalAlertsCount;
   }, [criticalAlertsCount]);
 
+  if (!user) {
+    return <Login />;
+  }
+
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex flex-col">
       {/* Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-50 shadow-sm">
+      <header className="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 sticky top-0 z-50 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 min-h-[64px] flex items-center justify-between py-3">
           <div className="flex items-center gap-2 sm:gap-3">
             <div className={`w-8 h-8 sm:w-10 sm:h-10 rounded-lg flex items-center justify-center shadow-md transition-colors ${getStatusColor()}`}>
               <Server className="text-white w-5 h-5 sm:w-6 sm:h-6" />
             </div>
             <div>
-              <h1 className="text-base sm:text-xl font-bold text-slate-800 leading-none">Sistema Central de Flota</h1>
+              <h1 className="text-base sm:text-xl font-bold text-slate-800 dark:text-white leading-none">Torre de Control</h1>
               <div className="flex items-center gap-2 mt-1.5 hidden sm:flex">
                 {getStatusBadge()}
               </div>
@@ -333,27 +344,26 @@ export default function App() {
             <button
               onClick={fetchData}
               disabled={loading}
-              className={`p-2 rounded-full hover:bg-slate-100 transition-all ${loading ? 'animate-spin text-blue-600' : 'text-slate-600'}`}
+              className={`p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-700 transition-all ${loading ? 'animate-spin text-blue-600' : 'text-slate-600 dark:text-slate-400'}`}
               title="Actualizar ahora"
             >
               <RefreshCw className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
             <AlertSoundToggle />
-            <div className="h-8 w-px bg-slate-200 mx-2 hidden md:block"></div>
+            <ThemeToggle />
             <div className="flex items-center gap-1 sm:gap-2">
-               <span className="relative flex h-3 w-3">
-                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${getStatusColor().replace('bg-', 'bg-').replace('600', '400').replace('500', '300')}`}></span>
-                  <span className={`relative inline-flex rounded-full h-3 w-3 ${getStatusColor()}`}></span>
-                </span>
-                <span className={`text-xs sm:text-sm font-medium ${
-                  dataSource === 'REAL' ? 'text-green-700' :
-                  dataSource === 'DIRECT_API' ? 'text-purple-700' :
+              <span className="relative flex h-3 w-3">
+                <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${getStatusColor().replace('bg-', 'bg-').replace('600', '400').replace('500', '300')}`}></span>
+                <span className={`relative inline-flex rounded-full h-3 w-3 ${getStatusColor()}`}></span>
+              </span>
+              <span className={`text-xs sm:text-sm font-medium ${dataSource === 'REAL' ? 'text-green-700' :
+                dataSource === 'DIRECT_API' ? 'text-purple-700' :
                   dataSource === 'PARTIAL_DIRECT' ? 'text-orange-700' :
-                  dataSource === 'MOCK' ? 'text-amber-700' :
-                  'text-red-700'
+                    dataSource === 'MOCK' ? 'text-amber-700' :
+                      'text-red-700'
                 }`}>
-                  {getStatusText()}
-                </span>
+                {getStatusText()}
+              </span>
             </div>
           </div>
         </div>
@@ -389,10 +399,9 @@ export default function App() {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   {/* Backend Status */}
                   <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-lg">
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                      apiStatus.backend === 'connected' ? 'bg-green-100' :
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${apiStatus.backend === 'connected' ? 'bg-green-100' :
                       apiStatus.backend === 'failed' ? 'bg-red-100' : 'bg-gray-100'
-                    }`}>
+                      }`}>
                       {apiStatus.backend === 'connected' ? (
                         <CheckCircle className="w-5 h-5 text-green-600" />
                       ) : (
@@ -401,9 +410,8 @@ export default function App() {
                     </div>
                     <div className="flex-1">
                       <div className="font-semibold text-slate-800 text-sm">Backend Python</div>
-                      <div className={`text-xs ${
-                        apiStatus.backend === 'connected' ? 'text-green-600' : 'text-red-600'
-                      }`}>
+                      <div className={`text-xs ${apiStatus.backend === 'connected' ? 'text-green-600' : 'text-red-600'
+                        }`}>
                         {apiStatus.backend === 'connected' ? 'Conectado' : 'Desconectado'}
                       </div>
                     </div>
@@ -411,10 +419,9 @@ export default function App() {
 
                   {/* Coltrack Status */}
                   <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-lg">
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                      apiStatus.coltrack === 'connected' ? 'bg-green-100' :
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${apiStatus.coltrack === 'connected' ? 'bg-green-100' :
                       apiStatus.coltrack === 'failed' ? 'bg-red-100' : 'bg-gray-100'
-                    }`}>
+                      }`}>
                       {apiStatus.coltrack === 'connected' ? (
                         <CheckCircle className="w-5 h-5 text-green-600" />
                       ) : (
@@ -423,9 +430,8 @@ export default function App() {
                     </div>
                     <div className="flex-1">
                       <div className="font-semibold text-slate-800 text-sm">Coltrack (Magnex)</div>
-                      <div className={`text-xs ${
-                        apiStatus.coltrack === 'connected' ? 'text-green-600' : 'text-red-600'
-                      }`}>
+                      <div className={`text-xs ${apiStatus.coltrack === 'connected' ? 'text-green-600' : 'text-red-600'
+                        }`}>
                         {apiStatus.coltrack === 'connected'
                           ? `✓ ${vehicleCounts?.coltrack || 0} vehículos`
                           : apiStatus.coltrack === 'failed' ? 'Desconectado' : 'No probado'
@@ -436,10 +442,9 @@ export default function App() {
 
                   {/* Fagor Status */}
                   <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-lg">
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                      apiStatus.fagor === 'connected' ? 'bg-green-100' :
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${apiStatus.fagor === 'connected' ? 'bg-green-100' :
                       apiStatus.fagor === 'failed' ? 'bg-red-100' : 'bg-gray-100'
-                    }`}>
+                      }`}>
                       {apiStatus.fagor === 'connected' ? (
                         <CheckCircle className="w-5 h-5 text-green-600" />
                       ) : (
@@ -448,9 +453,8 @@ export default function App() {
                     </div>
                     <div className="flex-1">
                       <div className="font-semibold text-slate-800 text-sm">Fagor (FlotasNet)</div>
-                      <div className={`text-xs ${
-                        apiStatus.fagor === 'connected' ? 'text-green-600' : 'text-red-600'
-                      }`}>
+                      <div className={`text-xs ${apiStatus.fagor === 'connected' ? 'text-green-600' : 'text-red-600'
+                        }`}>
                         {apiStatus.fagor === 'connected'
                           ? `✓ ${vehicleCounts?.fagor || 0} vehículos`
                           : apiStatus.fagor === 'failed' ? 'Desconectado' : 'No probado'
@@ -477,10 +481,17 @@ export default function App() {
         <div className="flex flex-col gap-4 mb-6 bg-white p-3 sm:p-4 rounded-xl border border-slate-200 shadow-sm">
 
           {/* View Toggles */}
-          <div className="flex flex-wrap bg-slate-100 p-1 rounded-lg gap-1">
+          <div className="flex flex-wrap bg-slate-100 dark:bg-slate-800 p-1 rounded-lg gap-1">
+            <button
+              onClick={() => setActiveTab('dashboard')}
+              className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-all ${activeTab === 'dashboard' ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'}`}
+            >
+              <Home className="w-4 h-4" />
+              <span className="hidden sm:inline">Inicio</span>
+            </button>
             <button
               onClick={() => setActiveTab('table')}
-              className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-all ${activeTab === 'table' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-all ${activeTab === 'table' ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'}`}
             >
               <LayoutDashboard className="w-4 h-4" />
               <span className="hidden sm:inline">Tabla</span>
@@ -540,8 +551,22 @@ export default function App() {
               <span className="hidden sm:inline">Cronogramas</span>
             </button>
             <button
+              onClick={() => setActiveTab('drivers')}
+              className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-all ${activeTab === 'drivers' ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'}`}
+            >
+              <Users className="w-4 h-4" />
+              <span className="hidden sm:inline">Conductores</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('geofences')}
+              className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-all ${activeTab === 'geofences' ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'}`}
+            >
+              <MapPin className="w-4 h-4" />
+              <span className="hidden sm:inline">Geocercas</span>
+            </button>
+            <button
               onClick={() => setActiveTab('maintenance')}
-              className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-all ${activeTab === 'maintenance' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition-all ${activeTab === 'maintenance' ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'}`}
             >
               <Settings className="w-4 h-4" />
               <span className="hidden sm:inline">Mantenimiento</span>
@@ -550,7 +575,7 @@ export default function App() {
 
           {/* Filters Group */}
           <div className="flex flex-col sm:flex-row gap-3 w-full lg:w-auto">
-            
+
             <div className="relative group flex-grow sm:flex-grow-0">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                 <Search className="h-4 w-4 text-slate-400" />
@@ -565,7 +590,7 @@ export default function App() {
             </div>
 
             <div className="flex gap-2">
-              <select 
+              <select
                 value={apiFilter}
                 onChange={(e) => setApiFilter(e.target.value as FilterType)}
                 className="pl-3 pr-8 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
@@ -575,7 +600,7 @@ export default function App() {
                 <option value={ApiSource.COLTRACK}>Coltrack (Magnex)</option>
               </select>
 
-              <select 
+              <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value as StatusFilterType)}
                 className="pl-3 pr-8 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
@@ -594,120 +619,123 @@ export default function App() {
         <div className="min-h-[500px]">
           {/* Error Banner */}
           {dataSource === 'ERROR' && !loading && (
-             <div className="bg-red-50 border border-red-200 rounded-xl p-6 text-center mb-6 shadow-sm">
-               <div className="flex items-center justify-center gap-3 mb-2">
-                 <XCircle className="w-6 h-6 text-red-600" />
-                 <h3 className="text-lg font-bold text-red-800">Conexión Fallida</h3>
-               </div>
-               <p className="text-red-700 mt-1 max-w-2xl mx-auto">
-                 No se pudo establecer conexión. Revise su red o contacte al administrador.
-               </p>
-             </div>
+            <div className="bg-red-50 border border-red-200 rounded-xl p-6 text-center mb-6 shadow-sm">
+              <div className="flex items-center justify-center gap-3 mb-2">
+                <XCircle className="w-6 h-6 text-red-600" />
+                <h3 className="text-lg font-bold text-red-800">Conexión Fallida</h3>
+              </div>
+              <p className="text-red-700 mt-1 max-w-2xl mx-auto">
+                No se pudo establecer conexión. Revise su red o contacte al administrador.
+              </p>
+            </div>
           )}
 
           {/* Partial Connection Banner */}
           {dataSource === 'PARTIAL_DIRECT' && !loading && apiStatus && (
-             <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 mb-6 shadow-sm">
-               <div className="flex items-center gap-3 mb-3">
-                 <div className="p-2 bg-orange-100 rounded-full">
-                   <AlertTriangle className="w-5 h-5 text-orange-600" />
-                 </div>
-                 <div>
-                   <h3 className="text-sm font-bold text-orange-900">Conexión Parcial</h3>
-                   <p className="text-xs text-orange-700 mt-0.5">
-                     Solo una API está respondiendo correctamente. Algunos vehículos pueden no estar visibles.
-                   </p>
-                 </div>
-               </div>
-               <div className="flex gap-2 ml-11">
-                 {apiStatus.coltrack === 'connected' && vehicleCounts && (
-                   <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full font-medium">
-                     ✓ Coltrack: {vehicleCounts.coltrack} vehículos
-                   </span>
-                 )}
-                 {apiStatus.fagor === 'connected' && vehicleCounts && (
-                   <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full font-medium">
-                     ✓ Fagor: {vehicleCounts.fagor} vehículos
-                   </span>
-                 )}
-                 {apiStatus.coltrack === 'failed' && (
-                   <span className="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full font-medium">
-                     ✗ Coltrack no disponible
-                   </span>
-                 )}
-                 {apiStatus.fagor === 'failed' && (
-                   <span className="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full font-medium">
-                     ✗ Fagor no disponible
-                   </span>
-                 )}
-               </div>
-             </div>
+            <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 mb-6 shadow-sm">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="p-2 bg-orange-100 rounded-full">
+                  <AlertTriangle className="w-5 h-5 text-orange-600" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-orange-900">Conexión Parcial</h3>
+                  <p className="text-xs text-orange-700 mt-0.5">
+                    Solo una API está respondiendo correctamente. Algunos vehículos pueden no estar visibles.
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-2 ml-11">
+                {apiStatus.coltrack === 'connected' && vehicleCounts && (
+                  <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full font-medium">
+                    ✓ Coltrack: {vehicleCounts.coltrack} vehículos
+                  </span>
+                )}
+                {apiStatus.fagor === 'connected' && vehicleCounts && (
+                  <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full font-medium">
+                    ✓ Fagor: {vehicleCounts.fagor} vehículos
+                  </span>
+                )}
+                {apiStatus.coltrack === 'failed' && (
+                  <span className="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full font-medium">
+                    ✗ Coltrack no disponible
+                  </span>
+                )}
+                {apiStatus.fagor === 'failed' && (
+                  <span className="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full font-medium">
+                    ✗ Fagor no disponible
+                  </span>
+                )}
+              </div>
+            </div>
           )}
 
           {/* Direct API Success Banner */}
           {dataSource === 'DIRECT_API' && !loading && vehicleCounts && (
-             <div className="bg-purple-50 border border-purple-200 rounded-xl p-4 mb-6 flex flex-col md:flex-row items-start md:items-center justify-between shadow-sm gap-4">
-               <div className="flex items-center gap-3">
-                 <div className="p-2 bg-purple-100 rounded-full">
-                   <Radio className="w-5 h-5 text-purple-600" />
-                 </div>
-                 <div>
-                   <h3 className="text-sm font-bold text-purple-900">Conexión Directa a APIs</h3>
-                   <p className="text-xs text-purple-700 mt-0.5">
-                     Conectado directamente a Coltrack ({vehicleCounts.coltrack} veh.) y Fagor ({vehicleCounts.fagor} veh.)
-                   </p>
-                 </div>
-               </div>
-             </div>
+            <div className="bg-purple-50 border border-purple-200 rounded-xl p-4 mb-6 flex flex-col md:flex-row items-start md:items-center justify-between shadow-sm gap-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-purple-100 rounded-full">
+                  <Radio className="w-5 h-5 text-purple-600" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-purple-900">Conexión Directa a APIs</h3>
+                  <p className="text-xs text-purple-700 mt-0.5">
+                    Conectado directamente a Coltrack ({vehicleCounts.coltrack} veh.) y Fagor ({vehicleCounts.fagor} veh.)
+                  </p>
+                </div>
+              </div>
+            </div>
           )}
 
           {/* Mock Mode Banner */}
           {dataSource === 'MOCK' && !loading && (
-             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 flex flex-col md:flex-row items-start md:items-center justify-between shadow-sm gap-4">
-               <div className="flex items-center gap-3">
-                 <div className="p-2 bg-amber-100 rounded-full">
-                   <CloudOff className="w-5 h-5 text-amber-600" />
-                 </div>
-                 <div>
-                   <h3 className="text-sm font-bold text-amber-900">Modo de Simulación Activo</h3>
-                   <p className="text-xs text-amber-700 mt-0.5">
-                     Las conexiones directas fallaron (posiblemente por bloqueo de seguridad del navegador/CORS).
-                     Se muestran datos generados para demostración.
-                   </p>
-                 </div>
-               </div>
-               <button
-                  onClick={fetchData}
-                  className="px-4 py-2 bg-white border border-amber-200 text-amber-700 text-sm font-medium rounded-lg hover:bg-amber-100 transition-colors whitespace-nowrap"
-               >
-                 Reintentar Conexión
-               </button>
-             </div>
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 flex flex-col md:flex-row items-start md:items-center justify-between shadow-sm gap-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-amber-100 rounded-full">
+                  <CloudOff className="w-5 h-5 text-amber-600" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-amber-900">Modo de Simulación Activo</h3>
+                  <p className="text-xs text-amber-700 mt-0.5">
+                    Las conexiones directas fallaron (posiblemente por bloqueo de seguridad del navegador/CORS).
+                    Se muestran datos generados para demostración.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={fetchData}
+                className="px-4 py-2 bg-white border border-amber-200 text-amber-700 text-sm font-medium rounded-lg hover:bg-amber-100 transition-colors whitespace-nowrap"
+              >
+                Reintentar Conexión
+              </button>
+            </div>
           )}
 
           {/* Render content */}
           {(vehicles.length > 0 || loading) ? (
-             <>
-               {activeTab === 'table' && <VehicleTable vehicles={filteredVehicles} />}
-               {activeTab === 'map' && <FleetMap vehicles={filteredVehicles} />}
-               {activeTab === 'alerts' && <AlertPanel alerts={alerts} onCopyAlert={handleCopyAlert} onSaveAlert={handleSaveAlert} />}
-               {activeTab === 'history' && <AlertHistory onRefresh={fetchData} />}
-               {activeTab === 'saved' && <SavedAlertsPanel onRefresh={fetchData} />}
-               {activeTab === 'analytics' && <Analytics vehicles={vehicles} />}
-               {activeTab === 'inspections' && <Inspections />}
-               {activeTab === 'schedules' && <RouteSchedules />}
-               {activeTab === 'maintenance' && <MaintenancePanel />}
+            <>
+              {activeTab === 'dashboard' && <Dashboard vehicles={vehicles} alerts={alerts} onNavigate={(tab) => setActiveTab(tab as any)} />}
+              {activeTab === 'table' && <VehicleTable vehicles={filteredVehicles} />}
+              {activeTab === 'map' && <FleetMap vehicles={filteredVehicles} />}
+              {activeTab === 'alerts' && <AlertPanel alerts={alerts} onCopyAlert={handleCopyAlert} onSaveAlert={handleSaveAlert} />}
+              {activeTab === 'history' && <AlertHistory onRefresh={fetchData} />}
+              {activeTab === 'saved' && <SavedAlertsPanel onRefresh={fetchData} />}
+              {activeTab === 'analytics' && <Analytics vehicles={vehicles} />}
+              {activeTab === 'inspections' && <Inspections />}
+              {activeTab === 'schedules' && <RouteSchedules />}
+              {activeTab === 'drivers' && <DriverManagement />}
+              {activeTab === 'geofences' && <GeofenceEditor />}
+              {activeTab === 'maintenance' && <MaintenancePanel />}
 
-                {activeTab !== 'alerts' && activeTab !== 'history' && activeTab !== 'saved' && activeTab !== 'analytics' && activeTab !== 'inspections' && activeTab !== 'schedules' && activeTab !== 'maintenance' && filteredVehicles.length === 0 && !loading && (
-                  <div className="text-center py-20">
-                    <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-slate-100 mb-4">
-                      <Search className="w-8 h-8 text-slate-400" />
-                    </div>
-                    <h3 className="text-lg font-medium text-slate-900">No se encontraron vehículos</h3>
-                    <p className="text-slate-500 mt-2">Intenta ajustar los filtros o la búsqueda.</p>
+              {activeTab !== 'dashboard' && activeTab !== 'alerts' && activeTab !== 'history' && activeTab !== 'saved' && activeTab !== 'analytics' && activeTab !== 'inspections' && activeTab !== 'schedules' && activeTab !== 'drivers' && activeTab !== 'geofences' && activeTab !== 'maintenance' && filteredVehicles.length === 0 && !loading && (
+                <div className="text-center py-20">
+                  <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-slate-100 mb-4">
+                    <Search className="w-8 h-8 text-slate-400" />
                   </div>
-                )}
-             </>
+                  <h3 className="text-lg font-medium text-slate-900">No se encontraron vehículos</h3>
+                  <p className="text-slate-500 mt-2">Intenta ajustar los filtros o la búsqueda.</p>
+                </div>
+              )}
+            </>
           ) : (
             // Empty state
             !loading && dataSource !== 'ERROR' && (
