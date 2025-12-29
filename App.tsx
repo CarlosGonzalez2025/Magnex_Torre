@@ -76,8 +76,8 @@ export default function App() {
   // Track previous critical alerts count for sound notification
   const prevCriticalAlertsRef = useRef<number>(0);
 
-  // Auto-cleanup hook for data retention
-  const { isCleaningUp, lastCleanup, runCleanup } = useAutoCleanup();
+  // Auto-cleanup hook for data retention disabled by user request (manual only)
+  // const { isCleaningUp, lastCleanup, runCleanup } = useAutoCleanup();
 
   // Load Data
   const fetchData = React.useCallback(async () => {
@@ -270,10 +270,10 @@ export default function App() {
       setAlerts(getAlertsFromStorage());
 
       // Show user feedback
-      alert('✅ Alerta copiada al portapapeles\n\nYa puedes pegarla en WhatsApp o cualquier otra aplicación.');
+      window.alert('✅ Alerta copiada al portapapeles\n\nYa puedes pegarla en WhatsApp o cualquier otra aplicación.');
     } catch (error) {
       console.error('Error copying to clipboard:', error);
-      alert('❌ Error al copiar la alerta. Por favor, intenta nuevamente.');
+      window.alert('❌ Error al copiar la alerta. Por favor, intenta nuevamente.');
     }
   };
 
@@ -293,9 +293,9 @@ export default function App() {
         const unsavedAlerts = getUnsavedAlerts();
         setAlerts(unsavedAlerts);
 
-        alert('✅ Alerta guardada en la base de datos\n\nSe ha movido al "Historial" donde puedes agregar planes de acción.');
+        window.alert('✅ Alerta guardada en la base de datos\n\nSe ha movido al "Historial" donde puedes agregar planes de acción.');
       } else {
-        alert('❌ Error al guardar la alerta: ' + result.error);
+        window.alert('❌ Error al guardar la alerta: ' + result.error);
       }
     } catch (error: any) {
       console.error('Error saving alert:', error);
@@ -528,10 +528,7 @@ export default function App() {
                 <Dashboard
                   vehicles={vehicles}
                   alerts={alerts}
-                  onActionClick={(action) => {
-                    if (action === 'view_map') setActiveTab('map');
-                    if (action === 'view_alerts') setActiveTab('alerts');
-                  }}
+                  onNavigate={(tab) => setActiveTab(tab as any)}
                 />
               )}
 
