@@ -1,18 +1,25 @@
 /**
- * Supabase Edge Function: Alert Monitor Worker
+ * Supabase Edge Function: Alert Monitor Worker (v2.0)
  *
  * Este worker se ejecuta cada 5 minutos de forma independiente (24/7)
  * sin necesidad de que haya usuarios conectados al frontend.
  *
  * Funciones:
  * 1. Consulta APIs de Coltrack y Fagor a través de Vercel serverless functions
- * 2. Detecta alertas automáticamente
- * 3. Guarda alertas en saved_alerts
- * 4. Procesa detección de ralentí y registros
+ * 2. Detecta alertas automáticamente (velocidad, pánico, frenada, aceleración, colisión)
+ * 3. Sistema inteligente de deduplicación con ventanas de tiempo
+ * 4. Validación estricta de eventos críticos (pánico, colisión)
+ * 5. Guarda alertas únicas y verificadas en saved_alerts
  *
  * Arquitectura:
  * - Supabase Edge Function → Vercel Serverless Functions → Coltrack/Fagor APIs
  * - Esto evita problemas de CORS y bloqueos de IP de las APIs externas
+ *
+ * Características de Deduplicación:
+ * - Exceso de Velocidad: 15 minutos (evita spam de mismo evento)
+ * - Frenada/Aceleración Brusca: 10 minutos
+ * - Botón de Pánico: 60 minutos (eventos críticos tienen ventana mayor)
+ * - Colisión: 24 horas (evento único, validación estricta)
  *
  * Trigger: Cron Job cada 5 minutos (vía cron-job.org)
  * Endpoint: https://[project-ref].supabase.co/functions/v1/alert-monitor
@@ -33,6 +40,18 @@ const ALERT_THRESHOLDS = {
   SPEED_LIMIT: 80,
   IDLE_TIME_MINUTES: 10,
   LOW_FUEL: 15,
+};
+
+// Configuración de deduplicación (en minutos)
+const DEDUPLICATION_WINDOWS = {
+  // Infracciones continuas - ventana corta para evitar spam
+  'Exceso de Velocidad': 15,      // 15 minutos
+  'Frenada Brusca': 10,            // 10 minutos
+  'Aceleración Brusca': 10,        // 10 minutos
+
+  // Eventos críticos - ventana larga, son únicos
+  'Botón de Pánico': 60,           // 1 hora
+  'Colisión': 1440,                // 24 horas
 };
 
 // ==================== TYPES ====================
@@ -299,43 +318,111 @@ function detectAlerts(vehicle: Vehicle): Alert[] {
 
 // ==================== DATABASE OPERATIONS ====================
 
+/**
+ * Sistema inteligente de detección de duplicados
+ * Usa ventanas de tiempo según el tipo de alerta para evitar spam
+ */
 async function checkDuplicate(
   supabase: any,
   plate: string,
   timestamp: string,
   type: string
-): Promise<boolean> {
-  const { count, error } = await supabase
-    .from('saved_alerts')
-    .select('id', { count: 'exact', head: true })
-    .eq('plate', plate)
-    .eq('timestamp', timestamp)
-    .eq('type', type);
+): Promise<{ isDuplicate: boolean; reason?: string }> {
+  try {
+    // Obtener la ventana de deduplicación para este tipo de alerta
+    const windowMinutes = DEDUPLICATION_WINDOWS[type] || 15; // Default: 15 minutos
 
-  if (error) {
-    console.error('[DB] Error checking duplicate:', error);
-    return false;
+    // Calcular el rango de tiempo
+    const alertTime = new Date(timestamp);
+    const windowStart = new Date(alertTime.getTime() - windowMinutes * 60 * 1000);
+
+    // Buscar alertas del mismo tipo y placa en la ventana de tiempo
+    const { data, error, count } = await supabase
+      .from('saved_alerts')
+      .select('timestamp, details', { count: 'exact' })
+      .eq('plate', plate)
+      .eq('type', type)
+      .gte('timestamp', windowStart.toISOString())
+      .lte('timestamp', timestamp);
+
+    if (error) {
+      console.error('[DB] Error checking duplicate:', error);
+      return { isDuplicate: false };
+    }
+
+    if ((count || 0) > 0) {
+      const lastAlert = data?.[0];
+      const timeDiff = Math.round((alertTime.getTime() - new Date(lastAlert.timestamp).getTime()) / 60000);
+
+      console.log(`[Dedup] 🔄 Duplicate detected: ${plate} - ${type} (last alert ${timeDiff}min ago, window: ${windowMinutes}min)`);
+
+      return {
+        isDuplicate: true,
+        reason: `Alert already exists within ${windowMinutes} minute window`
+      };
+    }
+
+    return { isDuplicate: false };
+
+  } catch (error) {
+    console.error('[DB] Exception in checkDuplicate:', error);
+    return { isDuplicate: false };
+  }
+}
+
+/**
+ * Validación adicional para eventos críticos
+ * Eventos como pánico y colisión requieren validación estricta
+ */
+async function validateCriticalEvent(
+  supabase: any,
+  plate: string,
+  type: string,
+  timestamp: string
+): Promise<{ isValid: boolean; reason?: string }> {
+  // Solo validar eventos críticos
+  const criticalEvents = ['Botón de Pánico', 'Colisión'];
+  if (!criticalEvents.includes(type)) {
+    return { isValid: true };
   }
 
-  return (count || 0) > 0;
+  try {
+    // Para eventos críticos, verificar en las últimas 24 horas
+    const twentyFourHoursAgo = new Date(new Date(timestamp).getTime() - 24 * 60 * 60 * 1000);
+
+    const { count, error } = await supabase
+      .from('saved_alerts')
+      .select('id', { count: 'exact', head: true })
+      .eq('plate', plate)
+      .eq('type', type)
+      .gte('timestamp', twentyFourHoursAgo.toISOString());
+
+    if (error) {
+      console.error('[Validation] Error validating critical event:', error);
+      return { isValid: true }; // En caso de error, permitir guardado
+    }
+
+    if ((count || 0) > 0) {
+      console.log(`[Validation] ⚠️ Critical event already reported in last 24h: ${plate} - ${type}`);
+      return {
+        isValid: false,
+        reason: 'Critical event already reported in last 24 hours'
+      };
+    }
+
+    console.log(`[Validation] ✅ Critical event validated: ${plate} - ${type}`);
+    return { isValid: true };
+
+  } catch (error) {
+    console.error('[Validation] Exception validating critical event:', error);
+    return { isValid: true }; // En caso de error, permitir guardado
+  }
 }
 
 async function saveAlert(supabase: any, alert: Alert): Promise<boolean> {
   try {
-    // Check duplicate
-    const isDuplicate = await checkDuplicate(
-      supabase,
-      alert.plate,
-      alert.timestamp,
-      alert.type
-    );
-
-    if (isDuplicate) {
-      console.log(`[DB] Duplicate alert skipped: ${alert.plate} - ${alert.type}`);
-      return true;
-    }
-
-    // Insert alert
+    // Insert alert (validaciones ya se hicieron en el loop principal)
+    // Esto mantiene saveAlert como una función simple de guardado
     const { error } = await supabase
       .from('saved_alerts')
       .insert({
@@ -400,25 +487,42 @@ serve(async (req) => {
 
     console.log(`⚠️  Detected ${allAlerts.length} alerts`);
 
-    // Save alerts to database
+    // Save alerts to database with intelligent deduplication
     console.log('💾 Saving alerts to database...');
     let savedCount = 0;
     let duplicateCount = 0;
+    let rejectedCount = 0;
     let errorCount = 0;
 
     for (const alert of allAlerts) {
-      const isDuplicate = await checkDuplicate(
+      // Verificar duplicados antes de intentar guardar
+      const duplicateCheck = await checkDuplicate(
         supabase,
         alert.plate,
         alert.timestamp,
         alert.type
       );
 
-      if (isDuplicate) {
+      if (duplicateCheck.isDuplicate) {
         duplicateCount++;
         continue;
       }
 
+      // Verificar validación de eventos críticos
+      const validationResult = await validateCriticalEvent(
+        supabase,
+        alert.plate,
+        alert.type,
+        alert.timestamp
+      );
+
+      if (!validationResult.isValid) {
+        rejectedCount++;
+        console.log(`[DB] 🚫 Critical event rejected: ${alert.plate} - ${alert.type}`);
+        continue;
+      }
+
+      // Intentar guardar la alerta
       const success = await saveAlert(supabase, alert);
       if (success) {
         savedCount++;
@@ -442,7 +546,12 @@ serve(async (req) => {
         detected: allAlerts.length,
         saved: savedCount,
         duplicates: duplicateCount,
+        rejected_critical: rejectedCount,
         errors: errorCount
+      },
+      deduplication: {
+        enabled: true,
+        windows: DEDUPLICATION_WINDOWS
       }
     };
 
