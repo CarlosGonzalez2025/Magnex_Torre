@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth, User } from '../contexts/AuthContext';
 import { userService } from '../services/userService';
-import { User, UserRole } from '../types';
+
+type UserRole = 'admin' | 'operator' | 'viewer';
 
 export const UserManagement: React.FC = () => {
   const { user: currentUser, isAdmin } = useAuth();
@@ -21,7 +22,7 @@ export const UserManagement: React.FC = () => {
   const [formData, setFormData] = useState({
     email: '',
     full_name: '',
-    role: UserRole.USER as UserRole,
+    role: 'viewer' as UserRole,
     password: '',
     confirmPassword: ''
   });
@@ -219,7 +220,7 @@ export const UserManagement: React.FC = () => {
     setFormData({
       email: '',
       full_name: '',
-      role: UserRole.USER,
+      role: 'viewer',
       password: '',
       confirmPassword: ''
     });
@@ -335,12 +336,14 @@ export const UserManagement: React.FC = () => {
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span
                           className={`px-2 py-1 text-xs font-semibold rounded ${
-                            user.role === UserRole.ADMIN
+                            user.role === 'admin'
                               ? 'bg-purple-600 text-white'
-                              : 'bg-blue-600 text-white'
+                              : user.role === 'operator'
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-gray-600 text-white'
                           }`}
                         >
-                          {user.role === UserRole.ADMIN ? 'ADMIN' : 'USER'}
+                          {user.role === 'admin' ? 'ADMIN' : user.role === 'operator' ? 'OPERADOR' : 'VISOR'}
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
@@ -440,8 +443,9 @@ export const UserManagement: React.FC = () => {
                   onChange={(e) => setFormData({ ...formData, role: e.target.value as UserRole })}
                   className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
-                  <option value={UserRole.USER}>Usuario</option>
-                  <option value={UserRole.ADMIN}>Administrador</option>
+                  <option value="viewer">Visor (Solo lectura)</option>
+                  <option value="operator">Operador (Puede editar)</option>
+                  <option value="admin">Administrador (Control total)</option>
                 </select>
               </div>
 
@@ -548,8 +552,9 @@ export const UserManagement: React.FC = () => {
                   onChange={(e) => setFormData({ ...formData, role: e.target.value as UserRole })}
                   className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
-                  <option value={UserRole.USER}>Usuario</option>
-                  <option value={UserRole.ADMIN}>Administrador</option>
+                  <option value="viewer">Visor (Solo lectura)</option>
+                  <option value="operator">Operador (Puede editar)</option>
+                  <option value="admin">Administrador (Control total)</option>
                 </select>
               </div>
 
