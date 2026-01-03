@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
-export type TabType = 'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'maintenance';
+export type TabType = 'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'users' | 'maintenance';
 
 interface SidebarProps {
     activeTab: TabType;
@@ -51,6 +51,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
         { id: 'geofences', label: 'Geocercas', icon: MapPin },
         { id: 'maintenance', label: 'Mantenimiento', icon: Settings },
     ];
+
+    // Admin-only menu items
+    const adminMenuItems = user?.role === 'admin' ? [
+        { id: 'users', label: 'Gestión de Usuarios', icon: UserIcon },
+    ] : [];
+
+    const allMenuItems = [...menuItems, ...adminMenuItems];
 
     const handleTabClick = (id: string) => {
         setActiveTab(id as TabType);
@@ -97,7 +104,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 {/* Navigation Items */}
                 <div className="flex-1 overflow-y-auto py-4 px-3 scrollbar-thin scrollbar-thumb-slate-200 dark:scrollbar-thumb-slate-700">
                     <nav className="space-y-1">
-                        {menuItems.map((item) => {
+                        {allMenuItems.map((item) => {
                             const Icon = item.icon;
                             const isActive = activeTab === item.id;
 

@@ -17,6 +17,7 @@ import { AlertSoundToggle } from './components/AlertSoundSettings';
 import { Dashboard } from './components/Dashboard';
 import { DriverManagement } from './components/DriverManagement';
 import { GeofenceEditor } from './components/GeofenceEditor';
+import { UserManagement } from './components/UserManagement';
 import { ThemeToggle } from './components/ThemeToggle';
 import { Login } from './components/Login';
 import { Sidebar, TabType } from './components/Sidebar';
@@ -61,7 +62,7 @@ export default function App() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'maintenance'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'users' | 'maintenance'>('dashboard');
   const [dataSource, setDataSource] = useState<'REAL' | 'DIRECT_API' | 'PARTIAL_DIRECT' | 'ERROR' | 'MOCK'>('REAL');
   const [apiStatus, setApiStatus] = useState<FleetResponse['apiStatus']>();
   const [vehicleCounts, setVehicleCounts] = useState<FleetResponse['vehicleCounts']>();
@@ -372,7 +373,8 @@ export default function App() {
                                   activeTab === 'schedules' ? 'Cronogramas' :
                                     activeTab === 'drivers' ? 'Gestión de Conductores' :
                                       activeTab === 'geofences' ? 'Editor de Geocercas' :
-                                        activeTab === 'maintenance' ? 'Mantenimiento' : 'Magnex'}
+                                        activeTab === 'users' ? 'Gestión de Usuarios' :
+                                          activeTab === 'maintenance' ? 'Mantenimiento' : 'Magnex'}
                 </h2>
                 <div className="ml-4 opacity-80 scale-90 origin-left">
                   {getStatusBadge()}
@@ -573,6 +575,7 @@ export default function App() {
               {activeTab === 'schedules' && <RouteSchedules vehicles={vehicles} />}
               {activeTab === 'drivers' && <DriverManagement />}
               {activeTab === 'geofences' && <GeofenceEditor />}
+              {activeTab === 'users' && <UserManagement />}
               {activeTab === 'maintenance' && <MaintenancePanel />}
             </div>
           </div>
