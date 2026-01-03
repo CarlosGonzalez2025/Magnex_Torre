@@ -1,22 +1,14 @@
-import React, { useState, useEffect } from 'react';
-import { BarChart3, TrendingUp, Users, AlertTriangle, CheckCircle, Activity, FileText, Target, Clock } from 'lucide-react';
-import { Vehicle } from '../types';
+import React, { useState, useEffect, useMemo } from 'react';
+import { TrendingUp, Activity, AlertTriangle, Shield, Clock, Award, Users } from 'lucide-react';
+import { Vehicle, Alert } from '../types';
 import { getAllSavedAlerts, getAlertStatistics, SavedAlertWithPlans } from '../services/databaseService';
 import { getIdleTimeByContract, type IdleTimeRecord } from '../services/towerControlService';
 import { getCurrentIdleStats } from '../services/alertService';
+import { TrendChart, DonutChart, ScoreGauge, EfficiencyBar } from './AnalyticsCharts';
 
 interface AnalyticsProps {
   vehicles: Vehicle[];
-}
-
-interface ContractStats {
-  contract: string;
-  vehicleCount: number;
-  alertCount: number;
-  criticalAlerts: number;
-  resolvedAlerts: number;
-  completedPlans: number;
-  totalPlans: number;
+  alerts?: Alert[]; // Optional: realtime alerts
 }
 
 interface VehicleAlertStats {
@@ -26,9 +18,10 @@ interface VehicleAlertStats {
   alertCount: number;
   criticalCount: number;
   lastAlert?: string;
+  score: number;
 }
 
-export const Analytics: React.FC<AnalyticsProps> = ({ vehicles }) => {
+export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtimeAlerts = [] }) => {
   const [savedAlerts, setSavedAlerts] = useState<SavedAlertWithPlans[]>([]);
   const [alertStats, setAlertStats] = useState<any>(null);
   const [idleRecords, setIdleRecords] = useState<IdleTimeRecord[]>([]);
@@ -90,447 +83,291 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles }) => {
     setLoading(false);
   };
 
-  // Calcular estadísticas por contrato
-  const contractStats: ContractStats[] = React.useMemo(() => {
-    const statsMap = new Map<string, ContractStats>();
-
-    // Contar vehículos por contrato
-    vehicles.forEach(vehicle => {
-      const contract = vehicle.contract || 'Sin Contrato';
-      if (!statsMap.has(contract)) {
-        statsMap.set(contract, {
-          contract,
-          vehicleCount: 0,
-          alertCount: 0,
-          criticalAlerts: 0,
-          resolvedAlerts: 0,
-          completedPlans: 0,
-          totalPlans: 0
-        });
-      }
-      const stats = statsMap.get(contract)!;
-      stats.vehicleCount++;
+  // --- MEMO: Trend Data (Last 7 Days) ---
+  const trendData = useMemo(() => {
+    const days = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+    const last7Days = Array(7).fill(0).map((_, i) => {
+      const d = new Date();
+      d.setDate(d.getDate() - (6 - i));
+      return {
+        date: d,
+        label: days[d.getDay()],
+        total: 0,
+        critical: 0
+      };
     });
 
-    // Contar alertas por contrato
     savedAlerts.forEach(alert => {
-      const contract = alert.contract || 'Sin Contrato';
-      if (!statsMap.has(contract)) {
-        statsMap.set(contract, {
-          contract,
-          vehicleCount: 0,
-          alertCount: 0,
-          criticalAlerts: 0,
-          resolvedAlerts: 0,
-          completedPlans: 0,
-          totalPlans: 0
-        });
-      }
-      const stats = statsMap.get(contract)!;
-      stats.alertCount++;
-      if (alert.severity === 'critical') stats.criticalAlerts++;
-      if (alert.status === 'resolved') stats.resolvedAlerts++;
-      if (alert.action_plans) {
-        stats.totalPlans += alert.action_plans.length;
-        stats.completedPlans += alert.action_plans.filter(p => p.status === 'completed').length;
+      const alertDate = new Date(alert.timestamp);
+      // Find matching day in last7Days by comparing date/month/year
+      const dayStat = last7Days.find(d =>
+        d.date.getDate() === alertDate.getDate() &&
+        d.date.getMonth() === alertDate.getMonth() &&
+        d.date.getFullYear() === alertDate.getFullYear()
+      );
+
+      if (dayStat) {
+        dayStat.total++;
+        if (alert.severity === 'critical') dayStat.critical++;
       }
     });
 
-    return Array.from(statsMap.values()).sort((a, b) => b.vehicleCount - a.vehicleCount);
-  }, [vehicles, savedAlerts]);
+    return last7Days;
+  }, [savedAlerts]);
 
-  // Calcular estadísticas por vehículo
+  // --- MEMO: Alert Distribution ---
+  const alertDistribution = useMemo(() => {
+    const dist = new Map<string, number>();
+    savedAlerts.forEach(a => {
+      const type = a.type || 'Otros';
+      dist.set(type, (dist.get(type) || 0) + 1);
+    });
+
+    // Top 5 types + Others
+    const sorted = Array.from(dist.entries()).sort((a, b) => b[1] - a[1]);
+    const top = sorted.slice(0, 4);
+    const others = sorted.slice(4).reduce((sum, item) => sum + item[1], 0);
+
+    const colors = ['#3b82f6', '#ef4444', '#f59e0b', '#10b981', '#64748b']; // Blue, Red, Amber, Green, Slate
+
+    const data = top.map((item, i) => ({
+      name: item[0],
+      value: item[1],
+      color: colors[i]
+    }));
+
+    if (others > 0) {
+      data.push({ name: 'Otros', value: others, color: colors[4] });
+    }
+
+    return data;
+  }, [savedAlerts]);
+
+
+  // Calcular estadísticas por vehículo (incluyendo SCORE)
   const vehicleStats: VehicleAlertStats[] = React.useMemo(() => {
     const statsMap = new Map<string, VehicleAlertStats>();
 
+    // Initial population from vehicles list
+    vehicles.forEach(v => {
+      statsMap.set(v.plate, {
+        plate: v.plate,
+        driver: v.driver,
+        contract: v.contract || 'Sin Contrato',
+        alertCount: 0,
+        criticalCount: 0,
+        lastAlert: undefined,
+        score: 100 // Start with perfect score
+      });
+    });
+
+    // Process alerts
     savedAlerts.forEach(alert => {
       if (!statsMap.has(alert.plate)) {
         statsMap.set(alert.plate, {
           plate: alert.plate,
-          driver: alert.driver,
+          driver: alert.driver || 'Desconocido',
           contract: alert.contract || 'Sin Contrato',
           alertCount: 0,
           criticalCount: 0,
-          lastAlert: undefined
+          lastAlert: undefined,
+          score: 100
         });
       }
       const stats = statsMap.get(alert.plate)!;
       stats.alertCount++;
       if (alert.severity === 'critical') stats.criticalCount++;
+
+      // Update score (Simple deduction logic)
+      let pen = 0;
+      if (alert.severity === 'critical') pen = 5;
+      else if (alert.severity === 'high') pen = 3;
+      else if (alert.severity === 'medium') pen = 1;
+      stats.score = Math.max(0, stats.score - pen);
+
       if (!stats.lastAlert || new Date(alert.timestamp) > new Date(stats.lastAlert)) {
         stats.lastAlert = alert.timestamp;
       }
     });
 
-    return Array.from(statsMap.values()).sort((a, b) => b.alertCount - a.alertCount);
-  }, [savedAlerts]);
+    return Array.from(statsMap.values()).sort((a, b) => a.score - b.score); // Sort by lowest score (worst first)
+  }, [vehicles, savedAlerts]);
+
+  // Average Fleet Score
+  const averageFleetScore = useMemo(() => {
+    if (vehicleStats.length === 0) return 100;
+    const totalScore = vehicleStats.reduce((sum, v) => sum + v.score, 0);
+    return Math.round(totalScore / vehicleStats.length);
+  }, [vehicleStats]);
+
 
   // Calcular métricas generales
   const overallMetrics = React.useMemo(() => {
     const totalVehicles = vehicles.length;
-    const totalAlerts = savedAlerts.length;
-    const criticalAlerts = savedAlerts.filter(a => a.severity === 'critical').length;
-    const resolvedAlerts = savedAlerts.filter(a => a.status === 'resolved').length;
-    const pendingAlerts = savedAlerts.filter(a => a.status === 'pending').length;
-    const inProgressAlerts = savedAlerts.filter(a => a.status === 'in_progress').length;
 
-    const totalPlans = savedAlerts.reduce((sum, alert) =>
-      sum + (alert.action_plans?.length || 0), 0);
-    const completedPlans = savedAlerts.reduce((sum, alert) =>
-      sum + (alert.action_plans?.filter(p => p.status === 'completed').length || 0), 0);
+    // Status distribution
+    const moving = vehicles.filter(v => v.speed > 0).length;
+    // Idle is speed 0 BUT ignition ON (or Idle/Ralenti status)
+    // We use the simpler status check or the explicit realtime detection
+    const idleCount = currentIdleVehicles.length;
+    // Stopped are the rest, but ensure no double counting.
+    // Actually, simpler logic:
+    const stopped = totalVehicles - moving - idleCount;
 
-    const resolutionRate = totalAlerts > 0
-      ? Math.round((resolvedAlerts / totalAlerts) * 100)
-      : 0;
-
-    const planCompletionRate = totalPlans > 0
-      ? Math.round((completedPlans / totalPlans) * 100)
-      : 0;
-
-    // Ralentí
+    // Ralentí hours
     const totalIdleMinutes = idleRecords.reduce((sum, record) => sum + (record.duration_minutes || 0), 0);
     const totalIdleHours = Math.round((totalIdleMinutes / 60) * 10) / 10;
 
     return {
       totalVehicles,
-      totalAlerts,
-      criticalAlerts,
-      resolvedAlerts,
-      pendingAlerts,
-      inProgressAlerts,
-      totalPlans,
-      completedPlans,
-      resolutionRate,
-      planCompletionRate,
       totalIdleHours,
-      totalIdleMinutes,
-      currentIdleVehicles: currentIdleVehicles.length
+      moving,
+      idle: idleCount,
+      stopped: Math.max(0, stopped), // Prevent negative
     };
-  }, [vehicles, savedAlerts, idleRecords, currentIdleVehicles]);
+  }, [vehicles, idleRecords, currentIdleVehicles]);
 
-  // Calcular estadísticas de ralentí por vehículo
-  const idleStatsByVehicle = React.useMemo(() => {
-    const statsMap = new Map<string, { plate: string; totalMinutes: number; count: number; avgMinutes: number; contract?: string; driver?: string }>();
-
-    idleRecords.forEach(record => {
-      if (!statsMap.has(record.plate)) {
-        statsMap.set(record.plate, {
-          plate: record.plate,
-          totalMinutes: 0,
-          count: 0,
-          avgMinutes: 0,
-          contract: record.contract,
-          driver: record.driver
-        });
-      }
-      const stats = statsMap.get(record.plate)!;
-      stats.totalMinutes += record.duration_minutes || 0;
-      stats.count++;
-    });
-
-    // Calcular promedio
-    statsMap.forEach(stats => {
-      stats.avgMinutes = Math.round((stats.totalMinutes / stats.count) * 10) / 10;
-    });
-
-    return Array.from(statsMap.values()).sort((a, b) => b.totalMinutes - a.totalMinutes);
-  }, [idleRecords]);
 
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
         <div className="text-center">
           <Activity className="w-12 h-12 text-sky-600 animate-spin mx-auto mb-4" />
-          <p className="text-slate-600 font-medium">Cargando análisis...</p>
+          <p className="text-slate-600 font-medium">Cargando análisis avanzado...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
-      {/* Título */}
-      <div className="flex items-center gap-3">
-        <BarChart3 className="w-8 h-8 text-sky-600" />
-        <div>
-          <h2 className="text-2xl font-bold text-slate-900">Análisis y Estadísticas</h2>
-          <p className="text-sm text-slate-600 mt-1">Dashboard de métricas y KPIs del sistema de alertas</p>
-        </div>
-      </div>
+    <div className="space-y-6 animate-in fade-in duration-500">
 
-      {/* Métricas Generales */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-gradient-to-br from-blue-50 to-blue-100 border border-blue-200 rounded-xl p-5 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold text-blue-700 uppercase tracking-wide">Total Vehículos</p>
-              <p className="text-3xl font-bold text-blue-900 mt-2">{overallMetrics.totalVehicles}</p>
+      {/* HEADER: Scorecard & Efficiency */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Fleet Score */}
+        <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6 shadow-sm flex flex-col items-center justify-center relative overflow-hidden">
+          <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
+            <Shield className="w-32 h-32 text-slate-900 dark:text-white" />
+          </div>
+          <h3 className="text-lg font-bold text-slate-800 dark:text-white mb-2 z-10">Puntaje de Seguridad</h3>
+          <ScoreGauge score={averageFleetScore} label="Índice Global" size={160} />
+          <p className="text-sm text-center text-slate-500 dark:text-slate-400 mt-2 z-10 max-w-[200px]">
+            Calidad de conducción basada en infracciones y alertas.
+          </p>
+        </div>
+
+        {/* Efficiency & Utilization */}
+        <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6 shadow-sm flex flex-col justify-between">
+          <div>
+            <h3 className="text-lg font-bold text-slate-800 dark:text-white mb-4 flex items-center gap-2">
+              <Activity className="w-5 h-5 text-blue-500" />
+              Eficiencia Operativa
+            </h3>
+            <div className="mb-6">
+              <EfficiencyBar
+                moving={overallMetrics.moving}
+                idle={overallMetrics.idle}
+                stopped={overallMetrics.stopped}
+              />
             </div>
-            <div className="p-3 bg-blue-200 rounded-lg">
-              <Users className="w-6 h-6 text-blue-700" />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-orange-50 dark:bg-orange-900/20 p-3 rounded-lg border border-orange-100 dark:border-orange-800">
+              <p className="text-xs text-orange-600 dark:text-orange-400 font-semibold uppercase">Ralentí (30d)</p>
+              <p className="text-2xl font-bold text-orange-800 dark:text-orange-200">{overallMetrics.totalIdleHours}h</p>
+            </div>
+            <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg border border-blue-100 dark:border-blue-800">
+              <p className="text-xs text-blue-600 dark:text-blue-400 font-semibold uppercase">Flota Activa</p>
+              <p className="text-2xl font-bold text-blue-800 dark:text-blue-200">{overallMetrics.moving + overallMetrics.idle}</p>
             </div>
           </div>
         </div>
 
-        <div className="bg-gradient-to-br from-amber-50 to-amber-100 border border-amber-200 rounded-xl p-5 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold text-amber-700 uppercase tracking-wide">Total Alertas</p>
-              <p className="text-3xl font-bold text-amber-900 mt-2">{overallMetrics.totalAlerts}</p>
-              <p className="text-xs text-amber-600 mt-1">{overallMetrics.criticalAlerts} críticas</p>
-            </div>
-            <div className="p-3 bg-amber-200 rounded-lg">
-              <AlertTriangle className="w-6 h-6 text-amber-700" />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-gradient-to-br from-green-50 to-green-100 border border-green-200 rounded-xl p-5 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold text-green-700 uppercase tracking-wide">Tasa de Resolución</p>
-              <p className="text-3xl font-bold text-green-900 mt-2">{overallMetrics.resolutionRate}%</p>
-              <p className="text-xs text-green-600 mt-1">{overallMetrics.resolvedAlerts} de {overallMetrics.totalAlerts}</p>
-            </div>
-            <div className="p-3 bg-green-200 rounded-lg">
-              <TrendingUp className="w-6 h-6 text-green-700" />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-gradient-to-br from-purple-50 to-purple-100 border border-purple-200 rounded-xl p-5 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold text-purple-700 uppercase tracking-wide">Planes de Acción</p>
-              <p className="text-3xl font-bold text-purple-900 mt-2">{overallMetrics.completedPlans}/{overallMetrics.totalPlans}</p>
-              <p className="text-xs text-purple-600 mt-1">{overallMetrics.planCompletionRate}% completados</p>
-            </div>
-            <div className="p-3 bg-purple-200 rounded-lg">
-              <FileText className="w-6 h-6 text-purple-700" />
-            </div>
+        {/* Alert Volume */}
+        <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6 shadow-sm flex flex-col">
+          <h3 className="text-lg font-bold text-slate-800 dark:text-white mb-4 flex items-center gap-2">
+            <AlertTriangle className="w-5 h-5 text-amber-500" />
+            Distribución de Alertas
+          </h3>
+          <div className="flex-1 flex items-center justify-center">
+            <DonutChart data={alertDistribution} size={180} thickness={25} />
           </div>
         </div>
       </div>
 
-      {/* Estado de Alertas */}
-      <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
-        <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
-          <Target className="w-5 h-5 text-sky-600" />
-          Estado de Alertas
-        </h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-            <p className="text-sm font-semibold text-yellow-700">Pendientes</p>
-            <p className="text-2xl font-bold text-yellow-900 mt-1">{overallMetrics.pendingAlerts}</p>
-          </div>
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-            <p className="text-sm font-semibold text-blue-700">En Proceso</p>
-            <p className="text-2xl font-bold text-blue-900 mt-1">{overallMetrics.inProgressAlerts}</p>
-          </div>
-          <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-            <p className="text-sm font-semibold text-green-700">Resueltas</p>
-            <p className="text-2xl font-bold text-green-900 mt-1">{overallMetrics.resolvedAlerts}</p>
-          </div>
-        </div>
-      </div>
+      {/* TRENDS & RANKING */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
-      {/* Estadísticas por Contrato */}
-      <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
-        <h3 className="text-lg font-bold text-slate-900 mb-4">Estadísticas por Contrato</h3>
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-slate-200">
-                <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">Contrato</th>
-                <th className="text-center py-3 px-4 text-sm font-semibold text-slate-700">Vehículos</th>
-                <th className="text-center py-3 px-4 text-sm font-semibold text-slate-700">Alertas</th>
-                <th className="text-center py-3 px-4 text-sm font-semibold text-slate-700">Críticas</th>
-                <th className="text-center py-3 px-4 text-sm font-semibold text-slate-700">Resueltas</th>
-                <th className="text-center py-3 px-4 text-sm font-semibold text-slate-700">Planes</th>
-                <th className="text-center py-3 px-4 text-sm font-semibold text-slate-700">Tasa Resolución</th>
-              </tr>
-            </thead>
-            <tbody>
-              {contractStats.map((stat, index) => {
-                const resolutionRate = stat.alertCount > 0
-                  ? Math.round((stat.resolvedAlerts / stat.alertCount) * 100)
-                  : 0;
-
-                return (
-                  <tr key={index} className="border-b border-slate-100 hover:bg-slate-50">
-                    <td className="py-3 px-4 font-medium text-slate-900">{stat.contract}</td>
-                    <td className="py-3 px-4 text-center text-slate-700">{stat.vehicleCount}</td>
-                    <td className="py-3 px-4 text-center text-slate-700">{stat.alertCount}</td>
-                    <td className="py-3 px-4 text-center">
-                      <span className="px-2 py-1 bg-red-100 text-red-700 rounded text-sm font-semibold">
-                        {stat.criticalAlerts}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-center text-slate-700">{stat.resolvedAlerts}</td>
-                    <td className="py-3 px-4 text-center">
-                      <span className="text-slate-700">{stat.completedPlans}/{stat.totalPlans}</span>
-                    </td>
-                    <td className="py-3 px-4 text-center">
-                      <span className={`px-2 py-1 rounded text-sm font-semibold ${
-                        resolutionRate >= 75 ? 'bg-green-100 text-green-700' :
-                        resolutionRate >= 50 ? 'bg-yellow-100 text-yellow-700' :
-                        'bg-red-100 text-red-700'
-                      }`}>
-                        {resolutionRate}%
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Estadísticas por Vehículo */}
-      <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
-        <h3 className="text-lg font-bold text-slate-900 mb-4">Top 10 Vehículos con Más Alertas</h3>
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-slate-200">
-                <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">Placa</th>
-                <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">Conductor</th>
-                <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">Contrato</th>
-                <th className="text-center py-3 px-4 text-sm font-semibold text-slate-700">Total Alertas</th>
-                <th className="text-center py-3 px-4 text-sm font-semibold text-slate-700">Críticas</th>
-                <th className="text-center py-3 px-4 text-sm font-semibold text-slate-700">Última Alerta</th>
-              </tr>
-            </thead>
-            <tbody>
-              {vehicleStats.slice(0, 10).map((stat, index) => (
-                <tr key={index} className="border-b border-slate-100 hover:bg-slate-50">
-                  <td className="py-3 px-4 font-medium text-slate-900">{stat.plate}</td>
-                  <td className="py-3 px-4 text-slate-700">{stat.driver}</td>
-                  <td className="py-3 px-4 text-sm text-sky-600 font-semibold">{stat.contract}</td>
-                  <td className="py-3 px-4 text-center">
-                    <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded text-sm font-semibold">
-                      {stat.alertCount}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4 text-center">
-                    <span className="px-2 py-1 bg-red-100 text-red-700 rounded text-sm font-semibold">
-                      {stat.criticalCount}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4 text-center text-xs text-slate-600">
-                    {stat.lastAlert ? new Date(stat.lastAlert).toLocaleString() : '-'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Sección de Ralentí */}
-      <div className="bg-gradient-to-br from-orange-50 to-orange-100 border border-orange-200 rounded-xl p-6 shadow-sm">
-        <h3 className="text-lg font-bold text-orange-900 mb-4 flex items-center gap-2">
-          <Clock className="w-6 h-6 text-orange-600" />
-          Análisis de Ralentí (Últimos 30 días)
-        </h3>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-          <div className="bg-white rounded-lg p-4 border border-orange-200">
-            <p className="text-sm font-semibold text-orange-700 mb-2">Total Horas Ralentí</p>
-            <p className="text-3xl font-bold text-orange-900">{overallMetrics.totalIdleHours}h</p>
-            <p className="text-xs text-orange-600 mt-1">{Math.round(overallMetrics.totalIdleMinutes)} minutos</p>
-          </div>
-          <div className="bg-white rounded-lg p-4 border border-orange-200">
-            <p className="text-sm font-semibold text-orange-700 mb-2">Eventos de Ralentí</p>
-            <p className="text-3xl font-bold text-orange-900">{idleRecords.length}</p>
-            <p className="text-xs text-orange-600 mt-1">Registros totales</p>
-          </div>
-          <div className="bg-white rounded-lg p-4 border border-orange-200">
-            <p className="text-sm font-semibold text-orange-700 mb-2">Vehículos en Ralentí Ahora</p>
-            <p className="text-3xl font-bold text-orange-900">{overallMetrics.currentIdleVehicles}</p>
-            <p className="text-xs text-orange-600 mt-1">En tiempo real</p>
-          </div>
+        {/* Weekly Trends */}
+        <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6 shadow-sm">
+          <h3 className="text-lg font-bold text-slate-800 dark:text-white mb-6 flex items-center gap-2">
+            <TrendingUp className="w-5 h-5 text-slate-500 dark:text-slate-400" />
+            Tendencia Semanal (Últimos 7 días)
+          </h3>
+          <TrendChart data={trendData} height={220} />
         </div>
 
-        {/* Vehículos actualmente en ralentí */}
-        {currentIdleVehicles.length > 0 && (
-          <div className="bg-white rounded-lg p-4 border border-orange-200 mb-4">
-            <h4 className="font-semibold text-orange-900 mb-3">Vehículos en Ralentí AHORA:</h4>
-            <div className="space-y-2">
-              {currentIdleVehicles.slice(0, 5).map((vehicle, index) => (
-                <div key={index} className="flex items-center justify-between p-2 bg-orange-50 rounded">
-                  <div>
-                    <span className="font-semibold text-orange-900">{vehicle.plate}</span>
-                    {vehicle.driver && (
-                      <span className="text-sm text-orange-700 ml-2">- {vehicle.driver}</span>
-                    )}
+        {/* Driver Ranking (Worst Scores) */}
+        <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6 shadow-sm flex flex-col">
+          <h3 className="text-lg font-bold text-slate-800 dark:text-white mb-4 flex items-center gap-2">
+            <Award className="w-5 h-5 text-slate-500 dark:text-slate-400" />
+            Ranking de Conductores (Requieren Atención)
+          </h3>
+          <div className="overflow-auto max-h-[250px] pr-2 custom-scrollbar">
+            {vehicleStats.slice(0, 8).map((v, i) => (
+              <div key={i} className="flex items-center justify-between p-3 mb-2 bg-slate-50 dark:bg-slate-900/50 rounded-lg border border-slate-100 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
+                <div className="flex items-center gap-3">
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-sm ${v.score < 60 ? 'bg-red-500' : v.score < 80 ? 'bg-amber-400' : 'bg-green-500'}`}>
+                    {v.score}
                   </div>
-                  <div className="text-right">
-                    <span className="text-lg font-bold text-orange-600">
-                      {Math.round(vehicle.durationMinutes)} min
-                    </span>
-                    {vehicle.location && (
-                      <p className="text-xs text-orange-600">{vehicle.location}</p>
-                    )}
+                  <div>
+                    <p className="font-semibold text-slate-800 dark:text-white text-sm">{v.driver}</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">{v.plate} • {v.alertCount} alertas</p>
                   </div>
                 </div>
-              ))}
-            </div>
+                <div className="text-right">
+                  <span className="text-xs font-medium text-slate-400">Contrato</span>
+                  <p className="text-xs text-slate-600 dark:text-slate-300">{v.contract}</p>
+                </div>
+              </div>
+            ))}
+            {vehicleStats.length === 0 && (
+              <p className="text-center text-slate-400 py-10">Sin datos suficientes para el ranking</p>
+            )}
           </div>
-        )}
-      </div>
-
-      {/* Top 10 Vehículos por Ralentí */}
-      <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
-        <h3 className="text-lg font-bold text-slate-900 mb-4">Top 10 Vehículos con Más Ralentí</h3>
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-slate-200">
-                <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">Placa</th>
-                <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">Conductor</th>
-                <th className="text-left py-3 px-4 text-sm font-semibold text-slate-700">Contrato</th>
-                <th className="text-center py-3 px-4 text-sm font-semibold text-slate-700">Total Horas</th>
-                <th className="text-center py-3 px-4 text-sm font-semibold text-slate-700">Eventos</th>
-                <th className="text-center py-3 px-4 text-sm font-semibold text-slate-700">Promedio</th>
-              </tr>
-            </thead>
-            <tbody>
-              {idleStatsByVehicle.slice(0, 10).map((stat, index) => {
-                const totalHours = Math.round((stat.totalMinutes / 60) * 10) / 10;
-                const severity = totalHours >= 50 ? 'high' : totalHours >= 20 ? 'medium' : 'low';
-
-                return (
-                  <tr key={index} className="border-b border-slate-100 hover:bg-slate-50">
-                    <td className="py-3 px-4 font-medium text-slate-900">{stat.plate}</td>
-                    <td className="py-3 px-4 text-slate-700">{stat.driver || '-'}</td>
-                    <td className="py-3 px-4 text-sm text-sky-600 font-semibold">{stat.contract || '-'}</td>
-                    <td className="py-3 px-4 text-center">
-                      <span className={`px-2 py-1 rounded text-sm font-semibold ${
-                        severity === 'high' ? 'bg-red-100 text-red-700' :
-                        severity === 'medium' ? 'bg-orange-100 text-orange-700' :
-                        'bg-yellow-100 text-yellow-700'
-                      }`}>
-                        {totalHours}h
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-center text-slate-700">{stat.count}</td>
-                    <td className="py-3 px-4 text-center text-slate-700">{stat.avgMinutes} min</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
         </div>
-        {idleStatsByVehicle.length === 0 && (
-          <div className="text-center py-8 text-slate-500">
-            <Clock className="w-12 h-12 mx-auto mb-2 opacity-50" />
-            <p>No hay datos de ralentí registrados</p>
-            <p className="text-sm mt-2">Los datos se acumularán a medida que el sistema detecte ralentí</p>
-          </div>
-        )}
       </div>
+
+      {/* Current Idle Realtime */}
+      {currentIdleVehicles.length > 0 && (
+        <div className="bg-gradient-to-r from-orange-50 to-white dark:from-orange-900/20 dark:to-slate-800 border border-orange-200 dark:border-orange-800 rounded-xl p-6 shadow-sm">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-bold text-orange-900 dark:text-orange-200 flex items-center gap-2">
+              <Clock className="w-5 h-5 text-orange-600 dark:text-orange-400 animate-pulse" />
+              Vehículos en Ralentí (Tiempo Real)
+            </h3>
+            <span className="bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300 px-3 py-1 rounded-full text-xs font-bold animate-pulse">
+              {currentIdleVehicles.length} Activos
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {currentIdleVehicles.map((v, i) => (
+              <div key={i} className="bg-white dark:bg-slate-900 p-3 rounded-lg border border-orange-100 dark:border-orange-800 shadow-sm flex justify-between items-center">
+                <div>
+                  <p className="font-bold text-slate-800 dark:text-white">{v.plate}</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 truncate max-w-[120px]">{v.location || 'Ubicación desc.'}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-lg font-bold text-orange-600 dark:text-orange-400">{Math.round(v.durationMinutes)}m</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
     </div>
   );
 };

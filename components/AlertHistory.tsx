@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { AlertTriangle, AlertCircle, Bell, BellRing, CheckCircle, Clock, MapPin, User, Gauge, FileText, Plus, Trash2, Edit, X, FileDown, Search, Calendar } from 'lucide-react';
+import { AlertTriangle, AlertCircle, Bell, BellRing, CheckCircle, Clock, MapPin, User, Gauge, FileText, Plus, Trash2, Edit, X, FileDown, Search, Calendar, History, ShieldAlert } from 'lucide-react';
 import {
   getAllSavedAlerts,
   getFilteredAlerts,
@@ -14,6 +14,8 @@ import {
 import { usePagination } from '../hooks/usePagination';
 import { PaginationControls } from './PaginationControls';
 import { useExportToExcel } from '../hooks/useExportToExcel';
+import { useAuth } from '../contexts/AuthContext';
+import { DataCleanupService } from '../services/dataCleanupService';
 
 interface AlertHistoryProps {
   onRefresh?: () => void;
@@ -32,6 +34,8 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const { exportToExcel } = useExportToExcel();
+  const { user } = useAuth();
+  const [isCleaning, setIsCleaning] = useState(false);
 
   // Action Plan Form
   const [newActionPlan, setNewActionPlan] = useState({
@@ -144,6 +148,31 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
       onRefresh?.();
     } else {
       alert('Error al eliminar la alerta: ' + result.error);
+    }
+  };
+
+  const handleCleanupHistory = async () => {
+    if (!confirm('⚠️ ¿Estás seguro de ejecutar la limpieza del historial?\n\nEsta acción ejecutará manualmente la política de retención:\n- Eliminará alertas resueltas con más de 7 días.\n- Eliminará alertas activas con más de 30 días.\n\nEsta acción NO se puede deshacer.')) {
+      return;
+    }
+
+    setIsCleaning(true);
+    try {
+      const result = await DataCleanupService.runFullCleanup(true); // true = force execution
+      const total = result.deletedAlerts + result.deletedActionPlans + result.deletedInspections;
+
+      if (total > 0) {
+        alert(`✅ Limpieza completada.\nRegistros eliminados: ${total}`);
+        loadAlerts();
+        onRefresh?.();
+      } else {
+        alert('ℹ️ No se encontraron registros antiguos para eliminar según la política actual.');
+      }
+    } catch (error) {
+      console.error(error);
+      alert('❌ Error al ejecutar la limpieza.');
+    } finally {
+      setIsCleaning(false);
     }
   };
 
@@ -321,6 +350,19 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
             <FileDown className="w-4 h-4" />
             Excel
           </button>
+
+          {/* Botón Limpiar Historial (Solo Admin) */}
+          {user?.role === 'admin' && (
+            <button
+              onClick={handleCleanupHistory}
+              disabled={isCleaning}
+              className={`flex items-center gap-2 px-4 py-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-red-50 hover:text-red-700 border border-slate-200 transition-colors text-sm font-medium ${isCleaning ? 'opacity-50 cursor-not-allowed' : ''}`}
+              title="Limpiar alertas antiguas (Retención manual)"
+            >
+              <Trash2 className="w-4 h-4" />
+              {isCleaning ? 'Limpiando...' : 'Limpiar Historial'}
+            </button>
+          )}
 
           {/* Contador */}
           <div className="ml-auto text-sm font-semibold text-slate-600">
@@ -615,13 +657,12 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
                             <p className="text-xs text-slate-500 mt-1 italic">{plan.observations}</p>
                           )}
                         </div>
-                        <span className={`text-xs px-2 py-1 rounded ${
-                          plan.status === 'completed' ? 'bg-green-100 text-green-700' :
-                          plan.status === 'in_progress' ? 'bg-blue-100 text-blue-700' :
-                          'bg-yellow-100 text-yellow-700'
-                        }`}>
+                        <span className={`text-xs px-2 py-1 rounded ${plan.status === 'completed' ? 'bg-green-100 text-green-700' :
+                            plan.status === 'in_progress' ? 'bg-blue-100 text-blue-700' :
+                              'bg-yellow-100 text-yellow-700'
+                          }`}>
                           {plan.status === 'completed' ? 'Completado' :
-                           plan.status === 'in_progress' ? 'En Proceso' : 'Pendiente'}
+                            plan.status === 'in_progress' ? 'En Proceso' : 'Pendiente'}
                         </span>
                       </div>
                     </div>

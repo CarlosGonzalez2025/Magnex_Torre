@@ -23,8 +23,6 @@ interface AuthContextType {
   logout: () => Promise<void>;
   register: (email: string, password: string, name: string) => Promise<{ success: boolean; error?: string }>;
   updateProfile: (updates: Partial<User>) => Promise<{ success: boolean; error?: string }>;
-  isAdmin: () => boolean;
-  isOperator: () => boolean;
 }
 
 // =====================================================
@@ -76,7 +74,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       id: supabaseUser.id,
       email: supabaseUser.email!,
       name: supabaseUser.user_metadata?.name || supabaseUser.email!.split('@')[0],
-      role: (supabaseUser.user_metadata?.role as any) || 'viewer', // Default safe role
+      role: (supabaseUser.user_metadata?.role as any) || 'operator', // Default safe role
       createdAt: supabaseUser.created_at,
       lastLogin: new Date().toISOString(),
     };
@@ -100,8 +98,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
       return { success: true };
     } catch (error: any) {
-      console.error('Login Exception:', error);
-      return { success: false, error: error.message || 'Error inesperado' };
+      console.error('Login error:', error);
+      return { success: false, error: error.message || 'Error al iniciar sesión' };
     } finally {
       setIsLoading(false);
     }
@@ -109,10 +107,13 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const logout = async (): Promise<void> => {
     try {
+      setIsLoading(true);
       await supabase.auth.signOut();
       setUser(null);
     } catch (error) {
-      console.error('Logout Error:', error);
+      console.error('Logout error:', error);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -122,26 +123,29 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     name: string
   ): Promise<{ success: boolean; error?: string }> => {
     try {
+      setIsLoading(true);
+
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
         options: {
           data: {
             name,
-            role: 'viewer', // Default role
+            role: 'operator' // Default role for new users
           },
         },
       });
 
       if (error) {
-        console.error('Registration Error:', error);
-        return { success: false, error: 'Error al registrar usuario.' };
+        return { success: false, error: error.message };
       }
 
       return { success: true };
     } catch (error: any) {
-      console.error('Registration Exception:', error);
-      return { success: false, error: error.message || 'Error inesperado' };
+      console.error('Register error:', error);
+      return { success: false, error: error.message || 'Error al registrar' };
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -151,37 +155,25 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         return { success: false, error: 'No hay usuario autenticado' };
       }
 
+      // Update local state first for speed
+      const updatedUser = { ...user, ...updates };
+      setUser(updatedUser);
+
+      // Persist to Supabase metadata if needed
       const { error } = await supabase.auth.updateUser({
         data: {
-          name: updates.name || user.name,
-          role: updates.role || user.role,
-        },
+          name: updates.name,
+          role: updates.role
+        }
       });
 
-      if (error) {
-        console.error('Update Profile Error:', error);
-        return { success: false, error: 'Error al actualizar perfil.' };
-      }
-
-      // Actualizar estado local
-      setUser({
-        ...user,
-        ...updates,
-      });
+      if (error) throw error;
 
       return { success: true };
     } catch (error: any) {
-      console.error('Update Profile Exception:', error);
-      return { success: false, error: error.message || 'Error inesperado' };
+      console.error('Update profile error:', error);
+      return { success: false, error: error.message || 'Error al actualizar perfil' };
     }
-  };
-
-  const isAdmin = (): boolean => {
-    return user?.role === 'admin';
-  };
-
-  const isOperator = (): boolean => {
-    return user?.role === 'operator' || user?.role === 'admin';
   };
 
   const value: AuthContextType = {
@@ -192,8 +184,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     logout,
     register,
     updateProfile,
-    isAdmin,
-    isOperator,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -203,7 +193,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 // HOOK
 // =====================================================
 
-export const useAuth = () => {
+export const useAuth = (): AuthContextType => {
   const context = useContext(AuthContext);
   if (context === undefined) {
     throw new Error('useAuth must be used within an AuthProvider');
@@ -212,45 +202,57 @@ export const useAuth = () => {
 };
 
 // =====================================================
-// PROTECTED ROUTE COMPONENT (for convenience)
+// PROTECTED ROUTE COMPONENT
 // =====================================================
 
 interface ProtectedRouteProps {
   children: ReactNode;
-  requireAdmin?: boolean;
+  requiredRole?: 'admin' | 'operator' | 'viewer';
+  fallback?: ReactNode;
 }
 
-export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, requireAdmin = false }) => {
-  const { user, isLoading, isAdmin } = useAuth();
+export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
+  children,
+  requiredRole,
+  fallback,
+}) => {
+  const { isAuthenticated, isLoading, user } = useAuth();
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
-          <p className="text-gray-600">Cargando...</p>
-        </div>
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
       </div>
     );
   }
 
-  if (!user) {
-    return null; // El App.tsx maneja mostrar Login
+  if (!isAuthenticated) {
+    return fallback || null;
   }
 
-  if (requireAdmin && !isAdmin()) {
-    return (
-      <div className="flex items-center justify-center min-h-screen p-4">
-        <div className="bg-white rounded-lg shadow-xl p-8 max-w-md text-center">
-          <div className="text-6xl mb-4">🚫</div>
-          <h2 className="text-2xl font-bold text-gray-800 mb-2">Acceso Denegado</h2>
-          <p className="text-gray-600 mb-4">
-            No tienes permisos de administrador para acceder a esta sección.
-          </p>
+  // Role hierarchy: admin > operator > viewer
+  const roleHierarchy = { admin: 3, operator: 2, viewer: 1 };
+  if (requiredRole && user) {
+    const userLevel = roleHierarchy[user.role] || 0;
+    const requiredLevel = roleHierarchy[requiredRole] || 0;
+
+    if (userLevel < requiredLevel) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900">
+          <div className="text-center">
+            <h2 className="text-2xl font-bold text-slate-800 dark:text-white mb-2">
+              Acceso Denegado
+            </h2>
+            <p className="text-slate-600 dark:text-slate-400">
+              No tienes permisos para acceder a esta sección.
+            </p>
+          </div>
         </div>
-      </div>
-    );
+      );
+    }
   }
 
   return <>{children}</>;
 };
+
+export default AuthContext;
