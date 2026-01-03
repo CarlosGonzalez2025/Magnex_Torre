@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
     Home,
     LayoutDashboard,
@@ -14,7 +14,13 @@ import {
     Settings,
     X,
     LogOut,
-    User as UserIcon
+    User as UserIcon,
+    ChevronDown,
+    ChevronRight,
+    Activity,
+    AlertTriangle,
+    Wrench,
+    Shield
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -37,33 +43,71 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
     const { user, logout } = useAuth();
 
-    const menuItems = [
-        { id: 'dashboard', label: 'Inicio', icon: Home },
-        { id: 'table', label: 'Tabla de Flota', icon: LayoutDashboard },
-        { id: 'map', label: 'Mapa en Vivo', icon: MapIcon },
-        { id: 'alerts', label: 'Alertas', icon: Bell, badge: criticalAlertsCount },
-        { id: 'history', label: 'Historial', icon: History },
-        { id: 'saved', label: 'Auto-Guardadas', icon: Database },
-        { id: 'analytics', label: 'Análisis', icon: BarChart3 },
-        { id: 'inspections', label: 'Inspecciones', icon: ClipboardCheck },
-        { id: 'schedules', label: 'Cronogramas', icon: Calendar },
-        { id: 'drivers', label: 'Conductores', icon: Users },
-        { id: 'geofences', label: 'Geocercas', icon: MapPin },
-        { id: 'maintenance', label: 'Mantenimiento', icon: Settings },
+    // Estado para controlar qué grupos están expandidos
+    const [expandedGroups, setExpandedGroups] = useState<string[]>(['monitoring', 'alerts', 'management', 'admin']);
+
+    // Definición de grupos de menú
+    const menuGroups = [
+        {
+            id: 'monitoring',
+            label: 'Monitoreo',
+            icon: Activity,
+            items: [
+                { id: 'dashboard', label: 'Dashboard', icon: Home },
+                { id: 'table', label: 'Tabla de Flota', icon: LayoutDashboard },
+                { id: 'map', label: 'Mapa en Vivo', icon: MapIcon },
+            ]
+        },
+        {
+            id: 'alerts',
+            label: 'Alertas',
+            icon: AlertTriangle,
+            items: [
+                { id: 'alerts', label: 'Centro de Alertas', icon: Bell, badge: criticalAlertsCount },
+                { id: 'history', label: 'Historial', icon: History },
+                { id: 'saved', label: 'Auto-Guardadas', icon: Database },
+            ]
+        },
+        {
+            id: 'management',
+            label: 'Gestión',
+            icon: Wrench,
+            items: [
+                { id: 'drivers', label: 'Conductores', icon: Users },
+                { id: 'geofences', label: 'Geocercas', icon: MapPin },
+                { id: 'inspections', label: 'Inspecciones', icon: ClipboardCheck },
+                { id: 'schedules', label: 'Cronogramas', icon: Calendar },
+                { id: 'maintenance', label: 'Mantenimiento', icon: Settings },
+            ]
+        },
     ];
 
-    // Admin-only menu items
-    const adminMenuItems = user?.role === 'admin' ? [
-        { id: 'users', label: 'Gestión de Usuarios', icon: UserIcon },
-    ] : [];
+    // Grupo de administración (solo para admins)
+    const adminGroup = user?.role === 'admin' ? {
+        id: 'admin',
+        label: 'Administración',
+        icon: Shield,
+        items: [
+            { id: 'users', label: 'Usuarios', icon: UserIcon },
+            { id: 'analytics', label: 'Análisis', icon: BarChart3 },
+        ]
+    } : null;
 
-    const allMenuItems = [...menuItems, ...adminMenuItems];
+    const allGroups = adminGroup ? [...menuGroups, adminGroup] : menuGroups;
 
     const handleTabClick = (id: string) => {
         setActiveTab(id as TabType);
         if (window.innerWidth < 1024) { // Close on mobile click
             onClose();
         }
+    };
+
+    const toggleGroup = (groupId: string) => {
+        setExpandedGroups(prev =>
+            prev.includes(groupId)
+                ? prev.filter(id => id !== groupId)
+                : [...prev, groupId]
+        );
     };
 
     return (
@@ -103,33 +147,63 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
                 {/* Navigation Items */}
                 <div className="flex-1 overflow-y-auto py-4 px-3 scrollbar-thin scrollbar-thumb-slate-200 dark:scrollbar-thumb-slate-700">
-                    <nav className="space-y-1">
-                        {allMenuItems.map((item) => {
-                            const Icon = item.icon;
-                            const isActive = activeTab === item.id;
+                    <nav className="space-y-2">
+                        {allGroups.map((group) => {
+                            const GroupIcon = group.icon;
+                            const isExpanded = expandedGroups.includes(group.id);
 
                             return (
-                                <button
-                                    key={item.id}
-                                    onClick={() => handleTabClick(item.id)}
-                                    className={`
-                    w-full flex items-center justify-between px-3 py-2.5 rounded-lg transition-all duration-200 group
-                    ${isActive
-                                            ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 font-medium shadow-sm'
-                                            : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-200'
-                                        }
-                  `}
-                                >
-                                    <div className="flex items-center gap-3">
-                                        <Icon className={`w-5 h-5 ${isActive ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400 group-hover:text-slate-600 dark:text-slate-500 dark:group-hover:text-slate-300'}`} />
-                                        <span>{item.label}</span>
-                                    </div>
-                                    {item.badge && item.badge > 0 && (
-                                        <span className="bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full shadow-sm">
-                                            {item.badge}
-                                        </span>
+                                <div key={group.id} className="space-y-1">
+                                    {/* Group Header */}
+                                    <button
+                                        onClick={() => toggleGroup(group.id)}
+                                        className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors"
+                                    >
+                                        <div className="flex items-center gap-2">
+                                            <GroupIcon className="w-4 h-4 text-slate-500 dark:text-slate-400" />
+                                            <span className="text-xs font-semibold uppercase tracking-wider">{group.label}</span>
+                                        </div>
+                                        {isExpanded ? (
+                                            <ChevronDown className="w-4 h-4 text-slate-400" />
+                                        ) : (
+                                            <ChevronRight className="w-4 h-4 text-slate-400" />
+                                        )}
+                                    </button>
+
+                                    {/* Group Items */}
+                                    {isExpanded && (
+                                        <div className="ml-2 space-y-1">
+                                            {group.items.map((item) => {
+                                                const ItemIcon = item.icon;
+                                                const isActive = activeTab === item.id;
+
+                                                return (
+                                                    <button
+                                                        key={item.id}
+                                                        onClick={() => handleTabClick(item.id)}
+                                                        className={`
+                                                            w-full flex items-center justify-between px-3 py-2 rounded-lg transition-all duration-200 group
+                                                            ${isActive
+                                                                ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 font-medium shadow-sm'
+                                                                : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-200'
+                                                            }
+                                                        `}
+                                                    >
+                                                        <div className="flex items-center gap-3">
+                                                            <ItemIcon className={`w-4 h-4 ${isActive ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400 group-hover:text-slate-600 dark:text-slate-500 dark:group-hover:text-slate-300'}`} />
+                                                            <span className="text-sm">{item.label}</span>
+                                                        </div>
+                                                        {item.badge && item.badge > 0 && (
+                                                            <span className="bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full shadow-sm">
+                                                                {item.badge}
+                                                            </span>
+                                                        )}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
                                     )}
-                                </button>
+                                </div>
                             );
                         })}
                     </nav>
