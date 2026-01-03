@@ -27,34 +27,40 @@ interface ServiceResult<T = any> {
 // ==================== USER SERVICE ====================
 
 /**
- * Servicio de gestión de usuarios usando Supabase Auth
+ * Servicio de gestión de usuarios usando tabla pública user_profiles
  * Compatible con el sistema de autenticación existente
+ *
+ * IMPORTANTE: Usa user_profiles (tabla pública con RLS) en lugar de
+ * supabase.auth.admin que solo funciona con service_role key desde backend
  */
 class UserService {
   /**
    * Obtiene todos los usuarios del sistema
-   * Usa la API Admin de Supabase
+   * Usa la tabla pública user_profiles
    */
   async getAllUsers(): Promise<ServiceResult<User[]>> {
     try {
-      const { data, error } = await supabase.auth.admin.listUsers();
+      const { data, error } = await supabase
+        .from('user_profiles')
+        .select('*')
+        .order('created_at', { ascending: false });
 
       if (error) {
         console.error('[UserService] Get all users error:', error);
         return {
           success: false,
-          error: 'Error al obtener usuarios. Verifica permisos de administrador.'
+          error: 'Error al obtener usuarios: ' + error.message
         };
       }
 
-      // Mapear usuarios de Supabase Auth
-      const users: User[] = data.users.map(u => ({
-        id: u.id,
-        email: u.email || '',
-        name: u.user_metadata?.name || u.email?.split('@')[0] || 'Usuario',
-        role: (u.user_metadata?.role || 'viewer') as UserRole,
-        createdAt: u.created_at,
-        lastLogin: u.last_sign_in_at || undefined,
+      // Mapear user_profiles a User
+      const users: User[] = (data || []).map(profile => ({
+        id: profile.id,
+        email: profile.email,
+        name: profile.name,
+        role: profile.role as UserRole,
+        createdAt: profile.created_at,
+        lastLogin: profile.last_login || undefined,
       }));
 
       return {
@@ -76,9 +82,13 @@ class UserService {
    */
   async getUserById(userId: string): Promise<ServiceResult<User>> {
     try {
-      const { data, error } = await supabase.auth.admin.getUserById(userId);
+      const { data, error } = await supabase
+        .from('user_profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
 
-      if (error || !data.user) {
+      if (error || !data) {
         return {
           success: false,
           error: 'Usuario no encontrado'
@@ -86,12 +96,12 @@ class UserService {
       }
 
       const user: User = {
-        id: data.user.id,
-        email: data.user.email || '',
-        name: data.user.user_metadata?.name || data.user.email?.split('@')[0] || 'Usuario',
-        role: (data.user.user_metadata?.role || 'viewer') as UserRole,
-        createdAt: data.user.created_at,
-        lastLogin: data.user.last_sign_in_at || undefined,
+        id: data.id,
+        email: data.email,
+        name: data.name,
+        role: data.role as UserRole,
+        createdAt: data.created_at,
+        lastLogin: data.last_login || undefined,
       };
 
       return {
@@ -135,28 +145,30 @@ class UserService {
       }
 
       // Validar longitud de contraseña
-      if (userData.password.length < 6) {
+      if (userData.password.length < 8) {
         return {
           success: false,
-          error: 'La contraseña debe tener al menos 6 caracteres'
+          error: 'La contraseña debe tener al menos 8 caracteres'
         };
       }
 
-      // Crear usuario usando Supabase Auth Admin API
-      const { data, error } = await supabase.auth.admin.createUser({
+      // Crear usuario usando Supabase signUp
+      const { data: authData, error: authError } = await supabase.auth.signUp({
         email: userData.email.toLowerCase().trim(),
         password: userData.password,
-        email_confirm: true, // Auto-confirmar email
-        user_metadata: {
-          name: userData.full_name.trim(),
-          role: userData.role
+        options: {
+          data: {
+            name: userData.full_name.trim(),
+            role: userData.role
+          },
+          emailRedirectTo: window.location.origin
         }
       });
 
-      if (error) {
-        console.error('[UserService] Create user error:', error);
+      if (authError) {
+        console.error('[UserService] Create user error:', authError);
 
-        if (error.message?.includes('already') || error.message?.includes('duplicate')) {
+        if (authError.message?.includes('already') || authError.message?.includes('duplicate')) {
           return {
             success: false,
             error: 'Ya existe un usuario con este email'
@@ -165,14 +177,28 @@ class UserService {
 
         return {
           success: false,
-          error: 'Error al crear usuario: ' + error.message
+          error: 'Error al crear usuario: ' + authError.message
         };
       }
 
-      if (!data.user) {
+      if (!authData.user) {
         return {
           success: false,
           error: 'Error al crear usuario'
+        };
+      }
+
+      // El trigger sincronizará automáticamente a user_profiles
+      // Esperar un momento para la sincronización
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Obtener el usuario creado de user_profiles
+      const result = await this.getUserById(authData.user.id);
+
+      if (!result.success || !result.data) {
+        return {
+          success: false,
+          error: 'Usuario creado pero no se pudo sincronizar. Intenta recargar la página.'
         };
       }
 
@@ -181,22 +207,13 @@ class UserService {
         createdBy,
         'USER_CREATED',
         'user',
-        data.user.id,
+        authData.user.id,
         { email: userData.email, role: userData.role }
       );
 
-      // Retornar usuario creado
-      const user: User = {
-        id: data.user.id,
-        email: data.user.email || '',
-        name: userData.full_name,
-        role: userData.role,
-        createdAt: data.user.created_at,
-      };
-
       return {
         success: true,
-        data: user
+        data: result.data
       };
 
     } catch (error: any) {
@@ -218,51 +235,34 @@ class UserService {
     updatedBy: string
   ): Promise<ServiceResult<User>> {
     try {
-      // Preparar metadata de actualización
-      const updateData: any = {};
-
-      if (userData.email !== undefined) {
-        updateData.email = userData.email.toLowerCase().trim();
-      }
-
-      const userMetadata: any = {};
-      if (userData.full_name !== undefined) {
-        userMetadata.name = userData.full_name.trim();
-      }
-      if (userData.role !== undefined) {
-        userMetadata.role = userData.role;
-      }
-
-      if (Object.keys(userMetadata).length > 0) {
-        updateData.user_metadata = userMetadata;
-      }
-
-      // Actualizar usando Admin API
-      const { data, error } = await supabase.auth.admin.updateUserById(
-        userId,
-        updateData
+      // Usar función RPC para actualizar metadata en auth.users
+      const { data: rpcData, error: rpcError } = await supabase.rpc(
+        'update_user_metadata',
+        {
+          p_user_id: userId,
+          p_name: userData.full_name || '',
+          p_role: userData.role || 'viewer'
+        }
       );
 
-      if (error) {
-        console.error('[UserService] Update user error:', error);
-
-        if (error.message?.includes('duplicate') || error.message?.includes('already')) {
-          return {
-            success: false,
-            error: 'Ya existe un usuario con este email'
-          };
-        }
-
+      if (rpcError) {
+        console.error('[UserService] Update user error:', rpcError);
         return {
           success: false,
-          error: 'Error al actualizar usuario: ' + error.message
+          error: 'Error al actualizar usuario: ' + rpcError.message
         };
       }
 
-      if (!data.user) {
+      // El trigger sincronizará automáticamente a user_profiles
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      // Obtener usuario actualizado
+      const result = await this.getUserById(userId);
+
+      if (!result.success || !result.data) {
         return {
           success: false,
-          error: 'Error al actualizar usuario'
+          error: 'Error al obtener usuario actualizado'
         };
       }
 
@@ -275,19 +275,9 @@ class UserService {
         { updates: userData }
       );
 
-      // Retornar usuario actualizado
-      const user: User = {
-        id: data.user.id,
-        email: data.user.email || '',
-        name: data.user.user_metadata?.name || '',
-        role: (data.user.user_metadata?.role || 'viewer') as UserRole,
-        createdAt: data.user.created_at,
-        lastLogin: data.user.last_sign_in_at,
-      };
-
       return {
         success: true,
-        data: user
+        data: result.data
       };
 
     } catch (error: any) {
@@ -300,35 +290,35 @@ class UserService {
   }
 
   /**
-   * Desactiva un usuario (elimina)
+   * Desactiva un usuario (marcar como inactivo)
    */
-  async deleteUser(userId: string, deletedBy: string): Promise<ServiceResult> {
+  async deactivateUser(userId: string, deactivatedBy: string): Promise<ServiceResult> {
     try {
-      const { error } = await supabase.auth.admin.deleteUser(userId);
+      const { error } = await supabase
+        .from('user_profiles')
+        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .eq('id', userId);
 
       if (error) {
-        console.error('[UserService] Delete user error:', error);
+        console.error('[UserService] Deactivate user error:', error);
         return {
           success: false,
-          error: 'Error al eliminar usuario: ' + error.message
+          error: 'Error al desactivar usuario: ' + error.message
         };
       }
 
-      // Registrar en audit log
       await this.logAudit(
-        deletedBy,
-        'USER_DELETED',
+        deactivatedBy,
+        'USER_DEACTIVATED',
         'user',
         userId,
         null
       );
 
-      return {
-        success: true
-      };
+      return { success: true };
 
     } catch (error: any) {
-      console.error('[UserService] Delete user exception:', error);
+      console.error('[UserService] Deactivate user exception:', error);
       return {
         success: false,
         error: error.message || 'Error inesperado'
@@ -337,7 +327,54 @@ class UserService {
   }
 
   /**
+   * Activa un usuario
+   */
+  async activateUser(userId: string, activatedBy: string): Promise<ServiceResult> {
+    try {
+      const { error } = await supabase
+        .from('user_profiles')
+        .update({ is_active: true, updated_at: new Date().toISOString() })
+        .eq('id', userId);
+
+      if (error) {
+        console.error('[UserService] Activate user error:', error);
+        return {
+          success: false,
+          error: 'Error al activar usuario: ' + error.message
+        };
+      }
+
+      await this.logAudit(
+        activatedBy,
+        'USER_ACTIVATED',
+        'user',
+        userId,
+        null
+      );
+
+      return { success: true };
+
+    } catch (error: any) {
+      console.error('[UserService] Activate user exception:', error);
+      return {
+        success: false,
+        error: error.message || 'Error inesperado'
+      };
+    }
+  }
+
+  /**
+   * Elimina un usuario permanentemente (requiere SQL directo o backend)
+   * Por seguridad, solo desactivamos desde el frontend
+   */
+  async deleteUser(userId: string, deletedBy: string): Promise<ServiceResult> {
+    // Por seguridad, solo desactivar desde frontend
+    return this.deactivateUser(userId, deletedBy);
+  }
+
+  /**
    * Resetea la contraseña de un usuario (solo admin)
+   * NOTA: Desde frontend solo podemos enviar email de recuperación
    */
   async resetPassword(
     userId: string,
@@ -345,32 +382,34 @@ class UserService {
     resetBy: string
   ): Promise<ServiceResult> {
     try {
-      // Validar longitud de contraseña
-      if (newPassword.length < 6) {
+      // Obtener email del usuario
+      const userResult = await this.getUserById(userId);
+      if (!userResult.success || !userResult.data) {
         return {
           success: false,
-          error: 'La contraseña debe tener al menos 6 caracteres'
+          error: 'Usuario no encontrado'
         };
       }
 
-      // Actualizar contraseña usando Admin API
-      const { error } = await supabase.auth.admin.updateUserById(
-        userId,
-        { password: newPassword }
+      // Desde frontend, enviar email de recuperación
+      const { error } = await supabase.auth.resetPasswordForEmail(
+        userResult.data.email,
+        {
+          redirectTo: `${window.location.origin}/reset-password`
+        }
       );
 
       if (error) {
         console.error('[UserService] Reset password error:', error);
         return {
           success: false,
-          error: 'Error al resetear contraseña: ' + error.message
+          error: 'Error al enviar email de recuperación: ' + error.message
         };
       }
 
-      // Registrar en audit log
       await this.logAudit(
         resetBy,
-        'PASSWORD_RESET',
+        'PASSWORD_RESET_EMAIL_SENT',
         'user',
         userId,
         null
@@ -405,7 +444,7 @@ class UserService {
         p_action: action,
         p_resource_type: resourceType,
         p_resource_id: resourceId,
-        p_details: details ? JSON.stringify(details) : null,
+        p_details: details,
         p_ip_address: null
       });
     } catch (error) {
