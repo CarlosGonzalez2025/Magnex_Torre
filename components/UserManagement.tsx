@@ -1,11 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { useAuth, User } from '../contexts/AuthContext';
+import { useAuth, User as AuthUser } from '../contexts/AuthContext';
 import { userService } from '../services/userService';
 
 type UserRole = 'admin' | 'operator' | 'viewer';
 
+// Extend User type for management purposes
+interface User extends AuthUser {
+  full_name: string; // Alias for name
+  is_active: boolean; // Derived from Supabase
+  last_login?: string; // Alias for lastLogin
+}
+
 export const UserManagement: React.FC = () => {
-  const { user: currentUser, isAdmin } = useAuth();
+  const { user: currentUser } = useAuth();
 
   const [users, setUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -42,7 +49,14 @@ export const UserManagement: React.FC = () => {
       const result = await userService.getAllUsers();
 
       if (result.success && result.data) {
-        setUsers(result.data);
+        // Map AuthUser to User with extended properties
+        const extendedUsers: User[] = result.data.map(u => ({
+          ...u,
+          full_name: u.name,
+          is_active: true, // Supabase users are active by default
+          last_login: u.lastLogin
+        }));
+        setUsers(extendedUsers);
       } else {
         setError(result.error || 'Error al cargar usuarios');
       }
@@ -208,7 +222,7 @@ export const UserManagement: React.FC = () => {
     setFormData({
       email: '',
       full_name: '',
-      role: UserRole.USER,
+      role: 'viewer',
       password: '',
       confirmPassword: ''
     });
@@ -235,7 +249,7 @@ export const UserManagement: React.FC = () => {
   );
 
   // Si no es admin, no mostrar nada
-  if (!isAdmin()) {
+  if (currentUser?.role !== 'admin') {
     return (
       <div className="p-8 text-center">
         <p className="text-red-500">No tienes permisos para acceder a esta página</p>
