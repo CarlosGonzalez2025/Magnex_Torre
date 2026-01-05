@@ -19,6 +19,7 @@ import { DriverManagement } from './components/DriverManagement';
 import { GeofenceEditor } from './components/GeofenceEditor';
 import { UserManagement } from './components/UserManagement';
 import { ThemeToggle } from './components/ThemeToggle';
+import { UserGuideButton } from './components/UserGuide';
 import { Login } from './components/Login';
 import { Sidebar, TabType } from './components/Sidebar';
 import { fetchFleetData, FleetResponse } from './services/fleetService';
@@ -397,6 +398,7 @@ export default function App() {
               </button>
               <AlertSoundToggle />
               <ThemeToggle />
+              <UserGuideButton />
               <div className="hidden sm:flex items-center gap-2 ml-2">
                 <span className="relative flex h-3 w-3">
                   <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${getStatusColor().replace('bg-', 'bg-').replace('600', '400').replace('500', '300')}`}></span>
