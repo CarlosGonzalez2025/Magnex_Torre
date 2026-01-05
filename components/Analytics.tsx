@@ -1,8 +1,28 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { TrendingUp, Activity, AlertTriangle, Shield, Clock, Award, Users, Filter, X, Calendar, Truck, UserCheck } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  TrendingUp,
+  Activity,
+  AlertTriangle,
+  Shield,
+  Clock,
+  Award,
+  Users,
+  Filter,
+  X,
+  Calendar,
+  Truck,
+  UserCheck
+} from 'lucide-react';
 import { Vehicle, Alert } from '../types';
-import { getAllSavedAlerts, getAlertStatistics, SavedAlertWithPlans } from '../services/databaseService';
-import { getIdleTimeByContract, type IdleTimeRecord } from '../services/towerControlService';
+import {
+  getAllSavedAlerts,
+  getAlertStatistics,
+  SavedAlertWithPlans
+} from '../services/databaseService';
+import {
+  getIdleTimeByContract,
+  type IdleTimeRecord
+} from '../services/towerControlService';
 import { getCurrentIdleStats } from '../services/alertService';
 import { TrendChart, DonutChart, ScoreGauge, EfficiencyBar } from './AnalyticsCharts';
 
@@ -28,7 +48,9 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
   const [savedAlerts, setSavedAlerts] = useState<SavedAlertWithPlans[]>([]);
   const [alertStats, setAlertStats] = useState<any>(null);
   const [idleRecords, setIdleRecords] = useState<IdleTimeRecord[]>([]);
-  const [currentIdleVehicles, setCurrentIdleVehicles] = useState<Array<{ plate: string; durationMinutes: number; driver?: string; location?: string }>>([]);
+  const [currentIdleVehicles, setCurrentIdleVehicles] = useState<
+    Array<{ plate: string; durationMinutes: number; driver?: string; location?: string }>
+  >([]);
   const [loading, setLoading] = useState(true);
 
   // Filtros avanzados
@@ -54,88 +76,175 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
     return Array.from(new Set(vehicles.map(v => v.driver).filter(d => d && d !== 'Sin Asignar')));
   }, [vehicles]);
 
-  // Calcular rango de fechas basado en selección
-  const getDateRangeValues = () => {
-    const endDate = new Date();
-    const startDate = new Date();
+  // Helpers
+  const parseDateSafe = (s: string) => {
+    if (!s) return null;
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? null : d;
+  };
+
+  const getDateRangeValues = useCallback(() => {
+    const now = new Date();
+    let start = new Date();
+    let end = new Date();
 
     if (dateRange === 'custom' && customStartDate && customEndDate) {
-      return {
-        start: new Date(customStartDate),
-        end: new Date(customEndDate)
-      };
+      const s = parseDateSafe(customStartDate);
+      const e = parseDateSafe(customEndDate);
+      if (s && e) {
+        // normalize to midnight start and end 23:59:59
+        s.setHours(0, 0, 0, 0);
+        e.setHours(23, 59, 59, 999);
+        // ensure start <= end
+        if (s > e) {
+          return { start: e, end: s };
+        }
+        return { start: s, end: e };
+      }
     }
 
     switch (dateRange) {
       case '7d':
-        startDate.setDate(startDate.getDate() - 7);
-        break;
-      case '30d':
-        startDate.setDate(startDate.getDate() - 30);
+        start = new Date(now);
+        start.setDate(now.getDate() - 6); // include today => 7 points
+        start.setHours(0, 0, 0, 0);
+        end = new Date(now);
+        end.setHours(23, 59, 59, 999);
         break;
       case '90d':
-        startDate.setDate(startDate.getDate() - 90);
+        start = new Date(now);
+        start.setDate(now.getDate() - 89);
+        start.setHours(0, 0, 0, 0);
+        end = new Date(now);
+        end.setHours(23, 59, 59, 999);
+        break;
+      case '30d':
+      default:
+        start = new Date(now);
+        start.setDate(now.getDate() - 29);
+        start.setHours(0, 0, 0, 0);
+        end = new Date(now);
+        end.setHours(23, 59, 59, 999);
         break;
     }
 
-    return { start: startDate, end: endDate };
+    return { start, end };
+  }, [dateRange, customStartDate, customEndDate]);
+
+  // Safe max helper
+  const safeMax = (arr: number[]) => (arr.length ? Math.max(...arr) : 0);
+
+  const formatMinutes = (mins: number) => {
+    if (!mins) return '0';
+    if (mins < 60) return `${Math.round(mins)} m`;
+    const hrs = Math.floor(mins / 60);
+    const rem = Math.round(mins % 60);
+    return `${hrs}h ${rem}m`;
   };
 
+  // Load analytics with cancellation token (prevents race conditions)
+  const loadAnalytics = useCallback(async (signalToken?: number) => {
+    setLoading(true);
+    const token = typeof signalToken === 'number' ? signalToken : Date.now();
+
+    try {
+      // 1) saved alerts
+      const alertsResult = await getAllSavedAlerts();
+      if (alertsResult?.success && alertsResult?.data) {
+        // If a newer request started, ignore
+        if (token !== latestRequestRef.current) return;
+        setSavedAlerts(alertsResult.data);
+      } else {
+        setSavedAlerts([]);
+      }
+
+      // 2) alert statistics (optional)
+      try {
+        const statsResult = await getAlertStatistics();
+        if (statsResult?.success) {
+          setAlertStats(statsResult.data || null);
+        }
+      } catch (err) {
+        // keep going on partial failure
+        setAlertStats(null);
+        // eslint-disable-next-line no-console
+        console.warn('getAlertStatistics failed', err);
+      }
+
+      // 3) idle records per contract with current filters
+      const { start, end } = getDateRangeValues();
+      const contractsToLoad =
+        selectedContract === 'ALL' ? uniqueContracts : [selectedContract];
+
+      const allIdleRecords: IdleTimeRecord[] = [];
+      for (const contract of contractsToLoad) {
+        try {
+          const idleResult = await getIdleTimeByContract(
+            contract,
+            start.toISOString(),
+            end.toISOString()
+          );
+          if (token !== latestRequestRef.current) return; // another request happened
+          if (idleResult?.success && idleResult?.data?.records) {
+            allIdleRecords.push(...idleResult.data.records);
+          }
+        } catch (err) {
+          // ignore contract errors but log
+          // eslint-disable-next-line no-console
+          console.warn('getIdleTimeByContract failed for', contract, err);
+        }
+      }
+      if (token !== latestRequestRef.current) return;
+      setIdleRecords(allIdleRecords);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('loadAnalytics error', err);
+    } finally {
+      if (token === latestRequestRef.current) setLoading(false);
+    }
+  }, [selectedContract, uniqueContracts, getDateRangeValues]);
+
+  // Keep ref of latest request token
+  const latestRequestRef = React.useRef<number>(Date.now());
+
+  // Trigger load when filters change
   useEffect(() => {
-    loadAnalytics();
-
-    // Actualizar vehículos en ralentí cada 30 segundos
-    const interval = setInterval(() => {
-      setCurrentIdleVehicles(getCurrentIdleStats());
-    }, 30000);
-
-    return () => clearInterval(interval);
+    const token = Date.now();
+    latestRequestRef.current = token;
+    void loadAnalytics(token);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dateRange, customStartDate, customEndDate, selectedContract]);
 
-  const loadAnalytics = async () => {
-    setLoading(true);
-
-    // Cargar alertas guardadas
-    const alertsResult = await getAllSavedAlerts();
-    if (alertsResult.success && alertsResult.data) {
-      setSavedAlerts(alertsResult.data);
-    }
-
-    // Cargar estadísticas de alertas
-    const statsResult = await getAlertStatistics();
-    if (statsResult.success && statsResult.data) {
-      setAlertStats(statsResult.data);
-    }
-
-    // Cargar datos de ralentí con filtros
-    const { start: startDate, end: endDate } = getDateRangeValues();
-
-    // Cargar idle records con filtros aplicados
-    const contractsToLoad = selectedContract === 'ALL'
-      ? uniqueContracts
-      : [selectedContract];
-
-    const allIdleRecords: IdleTimeRecord[] = [];
-
-    for (const contract of contractsToLoad) {
-      const idleResult = await getIdleTimeByContract(
-        contract,
-        startDate.toISOString(),
-        endDate.toISOString()
-      );
-
-      if (idleResult.success && idleResult.data?.records) {
-        allIdleRecords.push(...idleResult.data.records);
+  // Update 'current idle' periodically (supports async)
+  useEffect(() => {
+    let mounted = true;
+    const update = async () => {
+      try {
+        const res = await getCurrentIdleStats();
+        if (!mounted) return;
+        // If res is an object or array, normalize to expected shape
+        if (Array.isArray(res)) {
+          setCurrentIdleVehicles(res);
+        } else if (res?.data) {
+          setCurrentIdleVehicles(res.data);
+        } else {
+          setCurrentIdleVehicles([]);
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('getCurrentIdleStats failed', err);
+        if (mounted) setCurrentIdleVehicles([]);
       }
-    }
+    };
 
-    setIdleRecords(allIdleRecords);
-
-    // Cargar vehículos actualmente en ralentí
-    setCurrentIdleVehicles(getCurrentIdleStats());
-
-    setLoading(false);
-  };
+    // initial
+    void update();
+    const interval = setInterval(update, 30000);
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   // Filtrar alertas según filtros activos
   const filteredAlerts = useMemo(() => {
@@ -143,168 +252,173 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
 
     return savedAlerts.filter(alert => {
       const alertDate = new Date(alert.timestamp);
+      if (isNaN(alertDate.getTime())) return false;
 
-      // Filtro de fecha
+      // Fecha
       if (alertDate < start || alertDate > end) return false;
 
-      // Filtro de contrato
+      // Contrato
       if (selectedContract !== 'ALL' && alert.contract !== selectedContract) return false;
 
-      // Filtro de placa
+      // Placa
       if (selectedPlate !== 'ALL' && alert.plate !== selectedPlate) return false;
 
-      // Filtro de conductor
+      // Conductor
       if (selectedDriver !== 'ALL' && alert.driver !== selectedDriver) return false;
 
       return true;
     });
-  }, [savedAlerts, dateRange, customStartDate, customEndDate, selectedContract, selectedPlate, selectedDriver]);
+  }, [savedAlerts, dateRange, customStartDate, customEndDate, selectedContract, selectedPlate, selectedDriver, getDateRangeValues]);
 
-  // --- MEMO: Trend Data (Dinámico según vista) ---
+  // Trend data (daily/weekly/monthly) with idle time included
   const trendData = useMemo(() => {
     const { start, end } = getDateRangeValues();
-    const days = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+
+    // utility to generate date buckets
+    type Point = { date: Date; label: string; total: number; critical: number; idle: number };
+
+    const daysNames = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
     const months = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
 
-    let dataPoints: Array<{ date: Date; label: string; total: number; critical: number; idle: number }> = [];
+    let points: Point[] = [];
 
     if (chartView === 'daily') {
-      // Vista diaria
-      const daysDiff = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-      const numDays = Math.min(daysDiff, 30); // Máximo 30 días para vista diaria
-
-      dataPoints = Array(numDays).fill(0).map((_, i) => {
-        const d = new Date(end);
-        d.setDate(d.getDate() - (numDays - 1 - i));
+      const msPerDay = 1000 * 60 * 60 * 24;
+      const daysDiff = Math.ceil((end.getTime() - start.getTime() + 1) / msPerDay);
+      const numDays = Math.min(Math.max(daysDiff, 1), 90); // cap to 90 for performance
+      for (let i = 0; i < numDays; i++) {
+        const d = new Date(start);
+        d.setDate(start.getDate() + i);
         d.setHours(0, 0, 0, 0);
-        return {
+        points.push({
           date: d,
-          label: `${days[d.getDay()]} ${d.getDate()}/${d.getMonth() + 1}`,
+          label: `${daysNames[d.getDay()]} ${d.getDate()}/${d.getMonth() + 1}`,
           total: 0,
           critical: 0,
           idle: 0
-        };
-      });
+        });
+      }
     } else if (chartView === 'weekly') {
-      // Vista semanal
-      const weeksDiff = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24 * 7));
-      const numWeeks = Math.min(weeksDiff, 12); // Máximo 12 semanas
-
-      dataPoints = Array(numWeeks).fill(0).map((_, i) => {
-        const d = new Date(end);
-        d.setDate(d.getDate() - (numWeeks - 1 - i) * 7);
-        d.setHours(0, 0, 0, 0);
-        const weekStart = new Date(d);
-        weekStart.setDate(d.getDate() - 6);
-        return {
-          date: d,
-          label: `Semana ${weekStart.getDate()}/${weekStart.getMonth() + 1}`,
+      // create weekly buckets starting from the start date (week ending)
+      const msPerWeek = 1000 * 60 * 60 * 24 * 7;
+      const weeksDiff = Math.ceil((end.getTime() - start.getTime() + 1) / msPerWeek);
+      const numWeeks = Math.min(Math.max(weeksDiff, 1), 52);
+      for (let i = 0; i < numWeeks; i++) {
+        const weekStart = new Date(start);
+        weekStart.setDate(start.getDate() + i * 7);
+        weekStart.setHours(0, 0, 0, 0);
+        const label = `Semana ${weekStart.getDate()}/${weekStart.getMonth() + 1}`;
+        points.push({
+          date: new Date(weekStart.getTime() + (1000 * 60 * 60 * 24 * 6)), // week end
+          label,
           total: 0,
           critical: 0,
           idle: 0
-        };
-      });
+        });
+      }
     } else {
-      // Vista mensual
-      const monthsDiff = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24 * 30));
-      const numMonths = Math.min(monthsDiff, 12); // Máximo 12 meses
-
-      dataPoints = Array(numMonths).fill(0).map((_, i) => {
-        const d = new Date(end);
-        d.setMonth(d.getMonth() - (numMonths - 1 - i));
-        d.setDate(1);
-        d.setHours(0, 0, 0, 0);
-        return {
+      // monthly
+      const startMonth = start.getMonth();
+      const startYear = start.getFullYear();
+      let monthsDiff =
+        (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth()) + 1;
+      monthsDiff = Math.min(Math.max(monthsDiff, 1), 24); // cap to 24 months
+      for (let i = 0; i < monthsDiff; i++) {
+        const d = new Date(start.getFullYear(), start.getMonth() + i, 1);
+        points.push({
           date: d,
           label: `${months[d.getMonth()]} ${d.getFullYear()}`,
           total: 0,
           critical: 0,
           idle: 0
-        };
-      });
+        });
+      }
     }
 
-    // Poblar con datos de alertas filtradas
+    // Populate alerts
     filteredAlerts.forEach(alert => {
-      const alertDate = new Date(alert.timestamp);
+      const aDate = new Date(alert.timestamp);
+      if (isNaN(aDate.getTime())) return;
 
-      let matchingPoint;
+      let point: Point | undefined;
       if (chartView === 'daily') {
-        matchingPoint = dataPoints.find(d =>
-          d.date.getDate() === alertDate.getDate() &&
-          d.date.getMonth() === alertDate.getMonth() &&
-          d.date.getFullYear() === alertDate.getFullYear()
+        point = points.find(p =>
+          p.date.getFullYear() === aDate.getFullYear() &&
+          p.date.getMonth() === aDate.getMonth() &&
+          p.date.getDate() === aDate.getDate()
         );
       } else if (chartView === 'weekly') {
-        matchingPoint = dataPoints.find(d => {
-          const weekStart = new Date(d.date);
-          weekStart.setDate(d.date.getDate() - 6);
-          return alertDate >= weekStart && alertDate <= d.date;
+        point = points.find(p => {
+          const weekEnd = p.date;
+          const weekStart = new Date(weekEnd);
+          weekStart.setDate(weekEnd.getDate() - 6);
+          return aDate >= weekStart && aDate <= weekEnd;
         });
       } else {
-        matchingPoint = dataPoints.find(d =>
-          d.date.getMonth() === alertDate.getMonth() &&
-          d.date.getFullYear() === alertDate.getFullYear()
+        point = points.find(p =>
+          p.date.getFullYear() === aDate.getFullYear() &&
+          p.date.getMonth() === aDate.getMonth()
         );
       }
 
-      if (matchingPoint) {
-        matchingPoint.total++;
-        if (alert.severity === 'critical') matchingPoint.critical++;
+      if (point) {
+        point.total += 1;
+        if (alert.severity === 'critical') point.critical += 1;
       }
     });
 
-    // Agregar datos de ralentí
+    // Populate idleRecords (convert minutes to hours for chart display)
     idleRecords.forEach(record => {
-      const recordDate = new Date(record.timestamp || record.created_at);
+      const rDate = new Date(record.timestamp || record.created_at || record.start_time || '');
+      if (isNaN(rDate.getTime())) return;
 
-      let matchingPoint;
+      let point: Point | undefined;
       if (chartView === 'daily') {
-        matchingPoint = dataPoints.find(d =>
-          d.date.getDate() === recordDate.getDate() &&
-          d.date.getMonth() === recordDate.getMonth() &&
-          d.date.getFullYear() === recordDate.getFullYear()
+        point = points.find(p =>
+          p.date.getFullYear() === rDate.getFullYear() &&
+          p.date.getMonth() === rDate.getMonth() &&
+          p.date.getDate() === rDate.getDate()
         );
       } else if (chartView === 'weekly') {
-        matchingPoint = dataPoints.find(d => {
-          const weekStart = new Date(d.date);
-          weekStart.setDate(d.date.getDate() - 6);
-          return recordDate >= weekStart && recordDate <= d.date;
+        point = points.find(p => {
+          const weekEnd = p.date;
+          const weekStart = new Date(weekEnd);
+          weekStart.setDate(weekEnd.getDate() - 6);
+          return rDate >= weekStart && rDate <= weekEnd;
         });
       } else {
-        matchingPoint = dataPoints.find(d =>
-          d.date.getMonth() === recordDate.getMonth() &&
-          d.date.getFullYear() === recordDate.getFullYear()
+        point = points.find(p =>
+          p.date.getFullYear() === rDate.getFullYear() &&
+          p.date.getMonth() === rDate.getMonth()
         );
       }
 
-      if (matchingPoint) {
-        matchingPoint.idle += (record.duration_minutes || 0) / 60; // Convertir a horas
+      if (point) {
+        point.idle += (record.duration_minutes || 0) / 60;
       }
     });
 
-    return dataPoints;
-  }, [filteredAlerts, idleRecords, chartView, dateRange, customStartDate, customEndDate]);
+    return points;
+  }, [filteredAlerts, idleRecords, chartView, getDateRangeValues]);
 
-  // --- MEMO: Alert Distribution (con filtros) ---
+  // Alert distribution (top types)
   const alertDistribution = useMemo(() => {
     const dist = new Map<string, number>();
     filteredAlerts.forEach(a => {
-      const type = a.type || 'Otros';
-      dist.set(type, (dist.get(type) || 0) + 1);
+      const t = a.type || 'Otros';
+      dist.set(t, (dist.get(t) || 0) + 1);
     });
 
-    // Top 5 types + Others
     const sorted = Array.from(dist.entries()).sort((a, b) => b[1] - a[1]);
     const top = sorted.slice(0, 4);
-    const others = sorted.slice(4).reduce((sum, item) => sum + item[1], 0);
+    const others = sorted.slice(4).reduce((s, it) => s + it[1], 0);
 
-    const colors = ['#3b82f6', '#ef4444', '#f59e0b', '#10b981', '#64748b']; // Blue, Red, Amber, Green, Slate
+    const colors = ['#3b82f6', '#ef4444', '#f59e0b', '#10b981', '#64748b'];
 
     const data = top.map((item, i) => ({
       name: item[0],
       value: item[1],
-      color: colors[i]
+      color: colors[i] ?? colors[4]
     }));
 
     if (others > 0) {
@@ -314,33 +428,31 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
     return data;
   }, [filteredAlerts]);
 
+  // Vehicle stats (with filters) - ranked worst first (lowest score)
+  const vehicleStats: VehicleAlertStats[] = useMemo(() => {
+    const map = new Map<string, VehicleAlertStats>();
 
-  // Calcular estadísticas por vehículo (incluyendo SCORE) - con filtros
-  const vehicleStats: VehicleAlertStats[] = React.useMemo(() => {
-    const statsMap = new Map<string, VehicleAlertStats>();
-
-    // Initial population from vehicles list
+    // seed from vehicles (apply vehicle filters)
     vehicles.forEach(v => {
-      // Aplicar filtros de vehículos
       if (selectedContract !== 'ALL' && v.contract !== selectedContract) return;
       if (selectedPlate !== 'ALL' && v.plate !== selectedPlate) return;
       if (selectedDriver !== 'ALL' && v.driver !== selectedDriver) return;
 
-      statsMap.set(v.plate, {
+      map.set(v.plate, {
         plate: v.plate,
-        driver: v.driver,
+        driver: v.driver || 'Sin asignar',
         contract: v.contract || 'Sin Contrato',
         alertCount: 0,
         criticalCount: 0,
         lastAlert: undefined,
-        score: 100 // Start with perfect score
+        score: 100
       });
     });
 
-    // Process alerts filtradas
+    // also include any alert plates not in seeded list (so alerts are not lost)
     filteredAlerts.forEach(alert => {
-      if (!statsMap.has(alert.plate)) {
-        statsMap.set(alert.plate, {
+      if (!map.has(alert.plate)) {
+        map.set(alert.plate, {
           plate: alert.plate,
           driver: alert.driver || 'Desconocido',
           contract: alert.contract || 'Sin Contrato',
@@ -350,59 +462,49 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
           score: 100
         });
       }
-      const stats = statsMap.get(alert.plate)!;
-      stats.alertCount++;
-      if (alert.severity === 'critical') stats.criticalCount++;
 
-      // Update score (Simple deduction logic)
-      let pen = 0;
-      if (alert.severity === 'critical') pen = 5;
-      else if (alert.severity === 'high') pen = 3;
-      else if (alert.severity === 'medium') pen = 1;
-      stats.score = Math.max(0, stats.score - pen);
+      const s = map.get(alert.plate)!;
+      s.alertCount++;
+      if (alert.severity === 'critical') s.criticalCount++;
 
-      if (!stats.lastAlert || new Date(alert.timestamp) > new Date(stats.lastAlert)) {
-        stats.lastAlert = alert.timestamp;
+      // score deduction rules (configurable later)
+      let penalty = 0;
+      if (alert.severity === 'critical') penalty = 5;
+      else if (alert.severity === 'high') penalty = 3;
+      else if (alert.severity === 'medium') penalty = 1;
+
+      s.score = Math.max(0, s.score - penalty);
+
+      if (!s.lastAlert || new Date(alert.timestamp) > new Date(s.lastAlert)) {
+        s.lastAlert = alert.timestamp;
       }
     });
 
-    return Array.from(statsMap.values()).sort((a, b) => a.score - b.score); // Sort by lowest score (worst first)
+    const arr = Array.from(map.values());
+    // sort ascending by score (lowest => worst)
+    arr.sort((a, b) => a.score - b.score || b.alertCount - a.alertCount);
+    return arr;
   }, [vehicles, filteredAlerts, selectedContract, selectedPlate, selectedDriver]);
 
-  // Average Fleet Score
+  // Average fleet score
   const averageFleetScore = useMemo(() => {
     if (vehicleStats.length === 0) return 100;
-    const totalScore = vehicleStats.reduce((sum, v) => sum + v.score, 0);
-    return Math.round(totalScore / vehicleStats.length);
+    const total = vehicleStats.reduce((s, v) => s + v.score, 0);
+    return Math.round(total / vehicleStats.length);
   }, [vehicleStats]);
 
-
-  // Calcular métricas generales
-  const overallMetrics = React.useMemo(() => {
+  // Overall metrics
+  const overallMetrics = useMemo(() => {
     const totalVehicles = vehicles.length;
-
-    // Status distribution
-    const moving = vehicles.filter(v => v.speed > 0).length;
-    // Idle is speed 0 BUT ignition ON (or Idle/Ralenti status)
-    // We use the simpler status check or the explicit realtime detection
+    const moving = vehicles.filter(v => (v.speed ?? 0) > 0).length;
     const idleCount = currentIdleVehicles.length;
-    // Stopped are the rest, but ensure no double counting.
-    // Actually, simpler logic:
-    const stopped = totalVehicles - moving - idleCount;
+    const stopped = Math.max(0, totalVehicles - moving - idleCount);
 
-    // Ralentí hours
-    const totalIdleMinutes = idleRecords.reduce((sum, record) => sum + (record.duration_minutes || 0), 0);
+    const totalIdleMinutes = idleRecords.reduce((s, r) => s + (r.duration_minutes || 0), 0);
     const totalIdleHours = Math.round((totalIdleMinutes / 60) * 10) / 10;
 
-    return {
-      totalVehicles,
-      totalIdleHours,
-      moving,
-      idle: idleCount,
-      stopped: Math.max(0, stopped), // Prevent negative
-    };
+    return { totalVehicles, totalIdleHours, moving, idle: idleCount, stopped };
   }, [vehicles, idleRecords, currentIdleVehicles]);
-
 
   if (loading) {
     return (
@@ -415,20 +517,25 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
     );
   }
 
+  // convenience values for display
+  const trendTotals = trendData.map(d => d.total);
+  const trendPeak = safeMax(trendTotals);
+  const trendAvg = Math.round((trendTotals.reduce((s, n) => s + n, 0) / (trendTotals.length || 1)) * 10) / 10;
+
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
 
-      {/* Analytics Header - NEW */}
+      {/* Header */}
       <div className="bg-gradient-to-r from-purple-600 via-blue-600 to-cyan-600 dark:from-purple-800 dark:via-blue-800 dark:to-cyan-800 rounded-2xl p-8 text-white shadow-2xl relative overflow-hidden">
-        <div className="absolute inset-0 opacity-10">
-          <div className="absolute top-0 right-0 w-96 h-96 bg-white rounded-full -translate-y-1/2 translate-x-1/2"></div>
-          <div className="absolute bottom-0 left-0 w-64 h-64 bg-white rounded-full translate-y-1/2 -translate-x-1/2"></div>
+        <div className="absolute inset-0 opacity-10 pointer-events-none">
+          <div className="absolute top-0 right-0 w-96 h-96 bg-white rounded-full -translate-y-1/2 translate-x-1/2" />
+          <div className="absolute bottom-0 left-0 w-64 h-64 bg-white rounded-full translate-y-1/2 -translate-x-1/2" />
         </div>
 
         <div className="relative flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
           <div>
             <h1 className="text-3xl md:text-4xl font-bold mb-3">Análisis Avanzado de Flota</h1>
-            <p className="text-blue-100 text-base">Métricas, tendencias y puntajes de seguridad en tiempo real</p>
+            <p className="text-blue-100 text-base">Métricas, tendencias y puntajes de seguridad para la gestión operativa</p>
           </div>
 
           <div className="grid grid-cols-3 gap-6">
@@ -444,20 +551,20 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
                 <Users className="w-8 h-8" />
               </div>
               <p className="text-2xl font-bold">{vehicleStats.length}</p>
-              <p className="text-xs text-blue-200">Vehículos</p>
+              <p className="text-xs text-blue-200">Vehículos en análisis</p>
             </div>
             <div className="text-center">
               <div className="w-16 h-16 mx-auto bg-white/20 backdrop-blur-sm rounded-2xl flex items-center justify-center mb-2 border-2 border-white/30">
                 <Clock className="w-8 h-8" />
               </div>
               <p className="text-2xl font-bold">{overallMetrics.totalIdleHours}h</p>
-              <p className="text-xs text-blue-200">Ralentí (30d)</p>
+              <p className="text-xs text-blue-200">Ralentí ({dateRange === '7d' ? '7d' : dateRange === '90d' ? '90d' : dateRange === 'custom' ? 'Custom' : '30d'})</p>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Filtros Avanzados Panel */}
+      {/* Filters */}
       <div className="bg-white dark:bg-slate-800 rounded-xl border-2 border-slate-200 dark:border-slate-700 shadow-lg overflow-hidden">
         <button
           onClick={() => setShowFilters(!showFilters)}
@@ -476,9 +583,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
           </div>
           <div className="flex items-center gap-2">
             {(selectedContract !== 'ALL' || selectedPlate !== 'ALL' || selectedDriver !== 'ALL' || dateRange === 'custom') && (
-              <span className="px-3 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-xs font-bold rounded-full">
-                Filtros activos
-              </span>
+              <span className="px-3 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-xs font-bold rounded-full">Filtros activos</span>
             )}
             <span className={`transform transition-transform ${showFilters ? 'rotate-180' : ''}`}>▼</span>
           </div>
@@ -487,7 +592,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
         {showFilters && (
           <div className="px-6 pb-6 pt-2 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/30">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
-              {/* Rango de Fecha */}
+              {/* Date Range */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2 flex items-center gap-1">
                   <Calendar className="w-4 h-4" />
@@ -496,7 +601,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
                 <select
                   value={dateRange}
                   onChange={(e) => setDateRange(e.target.value as DateRange)}
-                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-50"
                 >
                   <option value="7d">Últimos 7 días</option>
                   <option value="30d">Últimos 30 días</option>
@@ -505,15 +610,13 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
                 </select>
               </div>
 
-              {/* Contrato */}
+              {/* Contract */}
               <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">
-                  Contrato
-                </label>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">Contrato</label>
                 <select
                   value={selectedContract}
                   onChange={(e) => setSelectedContract(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-50"
                 >
                   <option value="ALL">Todos los contratos</option>
                   {uniqueContracts.map(contract => (
@@ -522,7 +625,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
                 </select>
               </div>
 
-              {/* Placa */}
+              {/* Plate */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2 flex items-center gap-1">
                   <Truck className="w-4 h-4" />
@@ -531,16 +634,16 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
                 <select
                   value={selectedPlate}
                   onChange={(e) => setSelectedPlate(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-50"
                 >
                   <option value="ALL">Todas las placas</option>
-                  {uniquePlates.slice(0, 50).map(plate => (
+                  {uniquePlates.slice(0, 200).map(plate => (
                     <option key={plate} value={plate}>{plate}</option>
                   ))}
                 </select>
               </div>
 
-              {/* Conductor */}
+              {/* Driver */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2 flex items-center gap-1">
                   <UserCheck className="w-4 h-4" />
@@ -549,23 +652,21 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
                 <select
                   value={selectedDriver}
                   onChange={(e) => setSelectedDriver(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-50"
                 >
                   <option value="ALL">Todos los conductores</option>
-                  {uniqueDrivers.slice(0, 50).map(driver => (
+                  {uniqueDrivers.slice(0, 200).map(driver => (
                     <option key={driver} value={driver}>{driver}</option>
                   ))}
                 </select>
               </div>
             </div>
 
-            {/* Fechas personalizadas */}
+            {/* Custom dates */}
             {dateRange === 'custom' && (
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
                 <div>
-                  <label className="block text-xs font-bold text-blue-900 dark:text-blue-300 mb-2">
-                    Fecha Inicio
-                  </label>
+                  <label className="block text-xs font-bold text-blue-900 dark:text-blue-300 mb-2">Fecha Inicio</label>
                   <input
                     type="date"
                     value={customStartDate}
@@ -574,9 +675,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-blue-900 dark:text-blue-300 mb-2">
-                    Fecha Fin
-                  </label>
+                  <label className="block text-xs font-bold text-blue-900 dark:text-blue-300 mb-2">Fecha Fin</label>
                   <input
                     type="date"
                     value={customEndDate}
@@ -586,7 +685,11 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
                 </div>
                 <div className="flex items-end">
                   <button
-                    onClick={loadAnalytics}
+                    onClick={() => {
+                      const token = Date.now();
+                      latestRequestRef.current = token;
+                      void loadAnalytics(token);
+                    }}
                     className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
                   >
                     Aplicar Fechas
@@ -595,46 +698,32 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
               </div>
             )}
 
-            {/* Vista de gráfico */}
+            {/* Chart view */}
             <div className="mt-4 p-4 bg-purple-50 dark:bg-purple-900/20 rounded-lg border border-purple-200 dark:border-purple-800">
-              <label className="block text-xs font-bold text-purple-900 dark:text-purple-300 mb-3">
-                Vista de Tendencias
-              </label>
+              <label className="block text-xs font-bold text-purple-900 dark:text-purple-300 mb-3">Vista de Tendencias</label>
               <div className="flex gap-2">
                 <button
                   onClick={() => setChartView('daily')}
-                  className={`flex-1 px-4 py-2 rounded-lg font-medium transition-colors ${
-                    chartView === 'daily'
-                      ? 'bg-purple-600 text-white'
-                      : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-purple-100 dark:hover:bg-purple-900/30'
-                  }`}
+                  className={`flex-1 px-4 py-2 rounded-lg font-medium transition-colors ${chartView === 'daily' ? 'bg-purple-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-purple-100 dark:hover:bg-purple-900/30'}`}
                 >
                   Diaria
                 </button>
                 <button
                   onClick={() => setChartView('weekly')}
-                  className={`flex-1 px-4 py-2 rounded-lg font-medium transition-colors ${
-                    chartView === 'weekly'
-                      ? 'bg-purple-600 text-white'
-                      : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-purple-100 dark:hover:bg-purple-900/30'
-                  }`}
+                  className={`flex-1 px-4 py-2 rounded-lg font-medium transition-colors ${chartView === 'weekly' ? 'bg-purple-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-purple-100 dark:hover:bg-purple-900/30'}`}
                 >
                   Semanal
                 </button>
                 <button
                   onClick={() => setChartView('monthly')}
-                  className={`flex-1 px-4 py-2 rounded-lg font-medium transition-colors ${
-                    chartView === 'monthly'
-                      ? 'bg-purple-600 text-white'
-                      : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-purple-100 dark:hover:bg-purple-900/30'
-                  }`}
+                  className={`flex-1 px-4 py-2 rounded-lg font-medium transition-colors ${chartView === 'monthly' ? 'bg-purple-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-purple-100 dark:hover:bg-purple-900/30'}`}
                 >
                   Mensual
                 </button>
               </div>
             </div>
 
-            {/* Botón limpiar filtros */}
+            {/* Clear filters */}
             {(selectedContract !== 'ALL' || selectedPlate !== 'ALL' || selectedDriver !== 'ALL' || dateRange !== '30d') && (
               <div className="mt-4 flex justify-end">
                 <button
@@ -645,6 +734,9 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
                     setDateRange('30d');
                     setCustomStartDate('');
                     setCustomEndDate('');
+                    const token = Date.now();
+                    latestRequestRef.current = token;
+                    void loadAnalytics(token);
                   }}
                   className="px-4 py-2 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-lg font-medium hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors flex items-center gap-2"
                 >
@@ -657,31 +749,25 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
         )}
       </div>
 
-      {/* HEADER: Scorecard & Efficiency */}
+      {/* Scorecard & Efficiency */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Fleet Score - Enhanced */}
-        <div className="bg-gradient-to-br from-white to-blue-50 dark:from-slate-800 dark:to-slate-900 rounded-xl border-2 border-blue-200 dark:border-blue-900 p-6 shadow-lg hover:shadow-xl transition-shadow flex flex-col items-center justify-center relative overflow-hidden">
+        {/* Fleet Score */}
+        <div className="relative bg-gradient-to-br from-white to-blue-50 dark:from-slate-800 dark:to-slate-900 rounded-xl border-2 border-blue-200 dark:border-blue-900 p-6 shadow-lg hover:shadow-xl transition-shadow">
           <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
             <Shield className="w-32 h-32 text-slate-900 dark:text-white" />
           </div>
           <h3 className="text-lg font-bold text-slate-800 dark:text-white mb-2 z-10">Puntaje de Seguridad</h3>
-          <ScoreGauge score={averageFleetScore} label="Índice Global" size={160} />
-          <p className="text-sm text-center text-slate-600 dark:text-slate-400 mt-2 z-10 max-w-[200px] font-medium">
-            Calidad de conducción basada en infracciones y alertas.
-          </p>
-          <div className={`mt-3 px-4 py-2 rounded-full text-sm font-bold ${
-            averageFleetScore >= 80
-              ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
-              : averageFleetScore >= 60
-                ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
-                : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
-          }`}>
-            {averageFleetScore >= 80 ? '✓ Excelente' : averageFleetScore >= 60 ? '⚠ Mejorable' : '✗ Crítico'}
+          <div className="flex flex-col items-center">
+            <ScoreGauge score={averageFleetScore} label="Índice Global" size={160} />
+            <p className="text-sm text-center text-slate-600 dark:text-slate-400 mt-2 z-10 max-w-[240px] font-medium">Calidad de conducción basada en infracciones y alertas</p>
+            <div className={`mt-3 px-4 py-2 rounded-full text-sm font-bold ${averageFleetScore >= 80 ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : averageFleetScore >= 60 ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'}`}>
+              {averageFleetScore >= 80 ? '✓ Excelente' : averageFleetScore >= 60 ? '⚠ Mejorable' : '✗ Crítico'}
+            </div>
           </div>
         </div>
 
-        {/* Efficiency & Utilization - Enhanced */}
-        <div className="bg-gradient-to-br from-white to-green-50 dark:from-slate-800 dark:to-green-900/10 rounded-xl border-2 border-green-200 dark:border-green-900 p-6 shadow-lg hover:shadow-xl transition-shadow flex flex-col justify-between">
+        {/* Efficiency */}
+        <div className="bg-gradient-to-br from-white to-green-50 dark:from-slate-800 dark:to-green-900/10 rounded-xl border-2 border-green-200 dark:border-green-900 p-6 shadow-lg hover:shadow-xl transition-shadow">
           <div>
             <h3 className="text-lg font-bold text-slate-800 dark:text-white mb-5 flex items-center gap-2">
               <div className="p-2 bg-green-100 dark:bg-green-900/30 rounded-lg">
@@ -701,19 +787,19 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
           <div className="grid grid-cols-2 gap-3">
             <div className="bg-gradient-to-br from-orange-50 to-red-50 dark:from-orange-900/20 dark:to-red-900/20 p-4 rounded-xl border border-orange-200 dark:border-orange-800 shadow-sm">
               <p className="text-xs text-orange-700 dark:text-orange-400 font-bold uppercase mb-1">Ralentí Total</p>
-              <p className="text-3xl font-bold text-orange-900 dark:text-orange-200">{overallMetrics.totalIdleHours}h</p>
-              <p className="text-xs text-orange-600 dark:text-orange-500 mt-1">Últimos 30 días</p>
+              <p className="text-3xl font-bold text-orange-900 dark:text-orange-200">{formatMinutes(overallMetrics.totalIdleHours * 60)}</p>
+              <p className="text-xs text-orange-600 dark:text-orange-500 mt-1">Periodo seleccionado</p>
             </div>
             <div className="bg-gradient-to-br from-blue-50 to-cyan-50 dark:from-blue-900/20 dark:to-cyan-900/20 p-4 rounded-xl border border-blue-200 dark:border-blue-800 shadow-sm">
               <p className="text-xs text-blue-700 dark:text-blue-400 font-bold uppercase mb-1">Flota Activa</p>
               <p className="text-3xl font-bold text-blue-900 dark:text-blue-200">{overallMetrics.moving + overallMetrics.idle}</p>
-              <p className="text-xs text-blue-600 dark:text-blue-500 mt-1">{Math.round(((overallMetrics.moving + overallMetrics.idle) / overallMetrics.totalVehicles) * 100)}% del total</p>
+              <p className="text-xs text-blue-600 dark:text-blue-500 mt-1">{Math.round(((overallMetrics.moving + overallMetrics.idle) / Math.max(overallMetrics.totalVehicles, 1)) * 100)}% del total</p>
             </div>
           </div>
         </div>
 
-        {/* Alert Volume - Enhanced */}
-        <div className="bg-gradient-to-br from-white to-amber-50 dark:from-slate-800 dark:to-amber-900/10 rounded-xl border-2 border-amber-200 dark:border-amber-900 p-6 shadow-lg hover:shadow-xl transition-shadow flex flex-col">
+        {/* Alert Volume */}
+        <div className="bg-gradient-to-br from-white to-amber-50 dark:from-slate-800 dark:to-amber-900/10 rounded-xl border-2 border-amber-200 dark:border-amber-900 p-6 shadow-lg hover:shadow-xl transition-shadow">
           <h3 className="text-lg font-bold text-slate-800 dark:text-white mb-5 flex items-center gap-2">
             <div className="p-2 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
               <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400" />
@@ -736,10 +822,9 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
         </div>
       </div>
 
-      {/* TRENDS & RANKING - Enhanced */}
+      {/* Trends & Ranking */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-
-        {/* Weekly Trends - Enhanced */}
+        {/* Trends */}
         <div className="bg-gradient-to-br from-white to-slate-50 dark:from-slate-800 dark:to-slate-900 rounded-xl border-2 border-slate-200 dark:border-slate-700 p-6 shadow-lg hover:shadow-xl transition-shadow">
           <div className="flex items-center justify-between mb-6">
             <h3 className="text-lg font-bold text-slate-800 dark:text-white flex items-center gap-2">
@@ -756,21 +841,17 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
           <div className="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700 grid grid-cols-2 gap-4">
             <div className="text-center">
               <p className="text-xs text-slate-600 dark:text-slate-400 font-medium mb-1">Pico de Alertas</p>
-              <p className="text-xl font-bold text-red-600 dark:text-red-400">
-                {Math.max(...trendData.map(d => d.total))}
-              </p>
+              <p className="text-xl font-bold text-red-600 dark:text-red-400">{trendPeak}</p>
             </div>
             <div className="text-center">
-              <p className="text-xs text-slate-600 dark:text-slate-400 font-medium mb-1">Promedio Diario</p>
-              <p className="text-xl font-bold text-blue-600 dark:text-blue-400">
-                {Math.round(trendData.reduce((sum, d) => sum + d.total, 0) / 7)}
-              </p>
+              <p className="text-xs text-slate-600 dark:text-slate-400 font-medium mb-1">Promedio</p>
+              <p className="text-xl font-bold text-blue-600 dark:text-blue-400">{trendAvg}</p>
             </div>
           </div>
         </div>
 
-        {/* Driver Ranking (Worst Scores) - Enhanced */}
-        <div className="bg-gradient-to-br from-white to-purple-50 dark:from-slate-800 dark:to-purple-900/10 rounded-xl border-2 border-purple-200 dark:border-purple-900 p-6 shadow-lg hover:shadow-xl transition-shadow flex flex-col">
+        {/* Driver ranking */}
+        <div className="bg-gradient-to-br from-white to-purple-50 dark:from-slate-800 dark:to-purple-900/10 rounded-xl border-2 border-purple-200 dark:border-purple-900 p-6 shadow-lg hover:shadow-xl transition-shadow">
           <div className="flex items-center justify-between mb-5">
             <h3 className="text-lg font-bold text-slate-800 dark:text-white flex items-center gap-2">
               <div className="p-2 bg-purple-100 dark:bg-purple-900/30 rounded-lg">
@@ -778,14 +859,20 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
               </div>
               Ranking de Conductores
             </h3>
-            <span className="text-xs font-bold text-purple-700 dark:text-purple-400 bg-purple-100 dark:bg-purple-900/30 px-3 py-1 rounded-full">
-              Top {Math.min(8, vehicleStats.length)}
-            </span>
+            <span className="text-xs font-bold text-purple-700 dark:text-purple-400 bg-purple-100 dark:bg-purple-900/30 px-3 py-1 rounded-full">Top {Math.min(8, vehicleStats.length)}</span>
           </div>
+
           <div className="overflow-auto max-h-[250px] pr-2 custom-scrollbar space-y-2.5">
-            {vehicleStats.slice(0, 8).map((v, i) => (
+            {vehicleStats.length === 0 && (
+              <div className="text-center py-10">
+                <Award className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-2" />
+                <p className="text-sm text-slate-500 dark:text-slate-400">Sin datos suficientes para el ranking</p>
+              </div>
+            )}
+
+            {vehicleStats.slice(0, 8).map((v) => (
               <div
-                key={i}
+                key={v.plate}
                 className={`flex items-center justify-between p-3 rounded-xl border transition-all hover:shadow-md ${
                   v.score < 60
                     ? 'bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-900/30'
@@ -795,47 +882,36 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <div
-                    className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shadow-lg ${
-                      v.score < 60
-                        ? 'bg-gradient-to-br from-red-500 to-red-600 shadow-red-500/50'
-                        : v.score < 80
-                          ? 'bg-gradient-to-br from-amber-500 to-amber-600 shadow-amber-500/50'
-                          : 'bg-gradient-to-br from-green-500 to-green-600 shadow-green-500/50'
-                    }`}
-                  >
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shadow-lg ${
+                    v.score < 60
+                      ? 'bg-gradient-to-br from-red-500 to-red-600 shadow-red-500/50'
+                      : v.score < 80
+                        ? 'bg-gradient-to-br from-amber-500 to-amber-600 shadow-amber-500/50'
+                        : 'bg-gradient-to-br from-green-500 to-green-600 shadow-green-500/50'
+                  }`}>
                     {v.score}
                   </div>
                   <div>
                     <p className="font-bold text-slate-900 dark:text-white text-sm">{v.driver}</p>
-                    <p className="text-xs text-slate-600 dark:text-slate-400">
-                      {v.plate} • {v.alertCount} alertas
-                    </p>
+                    <p className="text-xs text-slate-600 dark:text-slate-400">{v.plate} • {v.alertCount} alertas</p>
                   </div>
                 </div>
+
                 <div className="text-right">
                   <p className="text-xs font-bold text-slate-700 dark:text-slate-300">{v.contract}</p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    {v.criticalCount > 0 ? `${v.criticalCount} críticas` : 'Sin críticas'}
-                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{v.criticalCount > 0 ? `${v.criticalCount} críticas` : 'Sin críticas'}</p>
                 </div>
               </div>
             ))}
-            {vehicleStats.length === 0 && (
-              <div className="text-center py-10">
-                <Award className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-2" />
-                <p className="text-sm text-slate-500 dark:text-slate-400">Sin datos suficientes para el ranking</p>
-              </div>
-            )}
           </div>
         </div>
       </div>
 
-      {/* Current Idle Realtime - Enhanced */}
+      {/* Current idle vehicles */}
       {currentIdleVehicles.length > 0 && (
-        <div className="bg-gradient-to-br from-orange-50 via-red-50 to-orange-50 dark:from-orange-900/20 dark:via-red-900/20 dark:to-orange-900/20 border-2 border-orange-300 dark:border-orange-800 rounded-2xl p-8 shadow-2xl relative overflow-hidden">
-          <div className="absolute inset-0 opacity-5">
-            <div className="absolute top-0 right-0 w-64 h-64 bg-orange-500 rounded-full -translate-y-1/2 translate-x-1/2"></div>
+        <div className="bg-gradient-to-br from-orange-50 via-red-50 to-orange-50 dark:from-orange-900/20 dark:via-red-900/20 dark:to-orange-900/20 border-2 border-orange-300 dark:border-orange-800 rounded-xl p-6 relative overflow-hidden">
+          <div className="absolute inset-0 opacity-5 pointer-events-none">
+            <div className="absolute top-0 right-0 w-64 h-64 bg-orange-500 rounded-full -translate-y-1/2 translate-x-1/2" />
           </div>
 
           <div className="relative flex items-center justify-between mb-6">
@@ -844,48 +920,40 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
                 <Clock className="w-7 h-7 text-white animate-pulse" />
               </div>
               <div>
-                <h3 className="text-2xl font-bold text-orange-900 dark:text-orange-100">
-                  Vehículos en Ralentí
-                </h3>
-                <p className="text-sm text-orange-700 dark:text-orange-300 font-medium">Alertas en Tiempo Real</p>
+                <h3 className="text-2xl font-bold text-orange-900 dark:text-orange-100">Vehículos en Ralentí</h3>
+                <p className="text-sm text-orange-700 dark:text-orange-300 font-medium">Estado en tiempo real</p>
               </div>
             </div>
+
             <div className="text-center">
               <div className="bg-white dark:bg-slate-800 border-2 border-orange-300 dark:border-orange-700 px-6 py-3 rounded-2xl shadow-lg">
-                <p className="text-4xl font-bold text-orange-600 dark:text-orange-400 animate-pulse">
-                  {currentIdleVehicles.length}
-                </p>
+                <p className="text-4xl font-bold text-orange-600 dark:text-orange-400 animate-pulse">{currentIdleVehicles.length}</p>
                 <p className="text-xs text-orange-700 dark:text-orange-300 font-bold uppercase mt-1">Activos Ahora</p>
               </div>
             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 relative">
-            {currentIdleVehicles.map((v, i) => (
+            {currentIdleVehicles.map((v) => (
               <div
-                key={i}
+                key={v.plate}
                 className="bg-white dark:bg-slate-800 p-4 rounded-xl border-2 border-orange-200 dark:border-orange-800 shadow-lg hover:shadow-xl transition-all hover:scale-105"
               >
                 <div className="flex justify-between items-start mb-2">
                   <div>
                     <p className="font-bold text-lg text-slate-900 dark:text-white">{v.plate}</p>
-                    <p className="text-xs text-slate-600 dark:text-slate-400 font-medium mt-0.5">
-                      {v.driver || 'Sin conductor'}
-                    </p>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 font-medium mt-0.5">{v.driver || 'Sin conductor'}</p>
                   </div>
                   <div className="w-10 h-10 bg-orange-100 dark:bg-orange-900/30 rounded-full flex items-center justify-center">
                     <Clock className="w-5 h-5 text-orange-600 dark:text-orange-400" />
                   </div>
                 </div>
+
                 <div className="mt-3 pt-3 border-t border-orange-100 dark:border-orange-900/30">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs text-slate-500 dark:text-slate-400 truncate max-w-[100px]">
-                      {v.location || 'Ubicación desc.'}
-                    </span>
+                    <span className="text-xs text-slate-500 dark:text-slate-400 truncate max-w-[120px]">{v.location || 'Ubicación desc.'}</span>
                     <div className="text-right">
-                      <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">
-                        {Math.round(v.durationMinutes)}
-                      </p>
+                      <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">{Math.round(v.durationMinutes)}</p>
                       <p className="text-xs text-orange-700 dark:text-orange-500 font-medium">minutos</p>
                     </div>
                   </div>
