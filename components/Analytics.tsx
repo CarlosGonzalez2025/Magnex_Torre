@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { TrendingUp, Activity, AlertTriangle, Shield, Clock, Award, Users } from 'lucide-react';
+import { TrendingUp, Activity, AlertTriangle, Shield, Clock, Award, Users, Filter, X, Calendar, Truck, UserCheck } from 'lucide-react';
 import { Vehicle, Alert } from '../types';
 import { getAllSavedAlerts, getAlertStatistics, SavedAlertWithPlans } from '../services/databaseService';
 import { getIdleTimeByContract, type IdleTimeRecord } from '../services/towerControlService';
@@ -21,12 +21,65 @@ interface VehicleAlertStats {
   score: number;
 }
 
+type DateRange = '7d' | '30d' | '90d' | 'custom';
+type ChartView = 'daily' | 'weekly' | 'monthly';
+
 export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtimeAlerts = [] }) => {
   const [savedAlerts, setSavedAlerts] = useState<SavedAlertWithPlans[]>([]);
   const [alertStats, setAlertStats] = useState<any>(null);
   const [idleRecords, setIdleRecords] = useState<IdleTimeRecord[]>([]);
   const [currentIdleVehicles, setCurrentIdleVehicles] = useState<Array<{ plate: string; durationMinutes: number; driver?: string; location?: string }>>([]);
   const [loading, setLoading] = useState(true);
+
+  // Filtros avanzados
+  const [showFilters, setShowFilters] = useState(false);
+  const [dateRange, setDateRange] = useState<DateRange>('30d');
+  const [customStartDate, setCustomStartDate] = useState('');
+  const [customEndDate, setCustomEndDate] = useState('');
+  const [selectedContract, setSelectedContract] = useState<string>('ALL');
+  const [selectedPlate, setSelectedPlate] = useState<string>('ALL');
+  const [selectedDriver, setSelectedDriver] = useState<string>('ALL');
+  const [chartView, setChartView] = useState<ChartView>('daily');
+
+  // Opciones únicas para filtros
+  const uniqueContracts = useMemo(() => {
+    return Array.from(new Set(vehicles.map(v => v.contract).filter(Boolean)));
+  }, [vehicles]);
+
+  const uniquePlates = useMemo(() => {
+    return Array.from(new Set(vehicles.map(v => v.plate).filter(Boolean)));
+  }, [vehicles]);
+
+  const uniqueDrivers = useMemo(() => {
+    return Array.from(new Set(vehicles.map(v => v.driver).filter(d => d && d !== 'Sin Asignar')));
+  }, [vehicles]);
+
+  // Calcular rango de fechas basado en selección
+  const getDateRangeValues = () => {
+    const endDate = new Date();
+    const startDate = new Date();
+
+    if (dateRange === 'custom' && customStartDate && customEndDate) {
+      return {
+        start: new Date(customStartDate),
+        end: new Date(customEndDate)
+      };
+    }
+
+    switch (dateRange) {
+      case '7d':
+        startDate.setDate(startDate.getDate() - 7);
+        break;
+      case '30d':
+        startDate.setDate(startDate.getDate() - 30);
+        break;
+      case '90d':
+        startDate.setDate(startDate.getDate() - 90);
+        break;
+    }
+
+    return { start: startDate, end: endDate };
+  };
 
   useEffect(() => {
     loadAnalytics();
@@ -37,7 +90,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
     }, 30000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [dateRange, customStartDate, customEndDate, selectedContract]);
 
   const loadAnalytics = async () => {
     setLoading(true);
@@ -54,16 +107,17 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
       setAlertStats(statsResult.data);
     }
 
-    // Cargar datos de ralentí del último mes
-    const endDate = new Date();
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - 30);
+    // Cargar datos de ralentí con filtros
+    const { start: startDate, end: endDate } = getDateRangeValues();
 
-    // Cargar idle records de todos los contratos
-    const contracts = new Set(vehicles.map(v => v.contract).filter(Boolean));
+    // Cargar idle records con filtros aplicados
+    const contractsToLoad = selectedContract === 'ALL'
+      ? uniqueContracts
+      : [selectedContract];
+
     const allIdleRecords: IdleTimeRecord[] = [];
 
-    for (const contract of contracts) {
+    for (const contract of contractsToLoad) {
       const idleResult = await getIdleTimeByContract(
         contract,
         startDate.toISOString(),
@@ -83,42 +137,159 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
     setLoading(false);
   };
 
-  // --- MEMO: Trend Data (Last 7 Days) ---
-  const trendData = useMemo(() => {
-    const days = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
-    const last7Days = Array(7).fill(0).map((_, i) => {
-      const d = new Date();
-      d.setDate(d.getDate() - (6 - i));
-      return {
-        date: d,
-        label: days[d.getDay()],
-        total: 0,
-        critical: 0
-      };
-    });
+  // Filtrar alertas según filtros activos
+  const filteredAlerts = useMemo(() => {
+    const { start, end } = getDateRangeValues();
 
-    savedAlerts.forEach(alert => {
+    return savedAlerts.filter(alert => {
       const alertDate = new Date(alert.timestamp);
-      // Find matching day in last7Days by comparing date/month/year
-      const dayStat = last7Days.find(d =>
-        d.date.getDate() === alertDate.getDate() &&
-        d.date.getMonth() === alertDate.getMonth() &&
-        d.date.getFullYear() === alertDate.getFullYear()
-      );
 
-      if (dayStat) {
-        dayStat.total++;
-        if (alert.severity === 'critical') dayStat.critical++;
+      // Filtro de fecha
+      if (alertDate < start || alertDate > end) return false;
+
+      // Filtro de contrato
+      if (selectedContract !== 'ALL' && alert.contract !== selectedContract) return false;
+
+      // Filtro de placa
+      if (selectedPlate !== 'ALL' && alert.plate !== selectedPlate) return false;
+
+      // Filtro de conductor
+      if (selectedDriver !== 'ALL' && alert.driver !== selectedDriver) return false;
+
+      return true;
+    });
+  }, [savedAlerts, dateRange, customStartDate, customEndDate, selectedContract, selectedPlate, selectedDriver]);
+
+  // --- MEMO: Trend Data (Dinámico según vista) ---
+  const trendData = useMemo(() => {
+    const { start, end } = getDateRangeValues();
+    const days = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+    const months = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+
+    let dataPoints: Array<{ date: Date; label: string; total: number; critical: number; idle: number }> = [];
+
+    if (chartView === 'daily') {
+      // Vista diaria
+      const daysDiff = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+      const numDays = Math.min(daysDiff, 30); // Máximo 30 días para vista diaria
+
+      dataPoints = Array(numDays).fill(0).map((_, i) => {
+        const d = new Date(end);
+        d.setDate(d.getDate() - (numDays - 1 - i));
+        d.setHours(0, 0, 0, 0);
+        return {
+          date: d,
+          label: `${days[d.getDay()]} ${d.getDate()}/${d.getMonth() + 1}`,
+          total: 0,
+          critical: 0,
+          idle: 0
+        };
+      });
+    } else if (chartView === 'weekly') {
+      // Vista semanal
+      const weeksDiff = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24 * 7));
+      const numWeeks = Math.min(weeksDiff, 12); // Máximo 12 semanas
+
+      dataPoints = Array(numWeeks).fill(0).map((_, i) => {
+        const d = new Date(end);
+        d.setDate(d.getDate() - (numWeeks - 1 - i) * 7);
+        d.setHours(0, 0, 0, 0);
+        const weekStart = new Date(d);
+        weekStart.setDate(d.getDate() - 6);
+        return {
+          date: d,
+          label: `Semana ${weekStart.getDate()}/${weekStart.getMonth() + 1}`,
+          total: 0,
+          critical: 0,
+          idle: 0
+        };
+      });
+    } else {
+      // Vista mensual
+      const monthsDiff = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24 * 30));
+      const numMonths = Math.min(monthsDiff, 12); // Máximo 12 meses
+
+      dataPoints = Array(numMonths).fill(0).map((_, i) => {
+        const d = new Date(end);
+        d.setMonth(d.getMonth() - (numMonths - 1 - i));
+        d.setDate(1);
+        d.setHours(0, 0, 0, 0);
+        return {
+          date: d,
+          label: `${months[d.getMonth()]} ${d.getFullYear()}`,
+          total: 0,
+          critical: 0,
+          idle: 0
+        };
+      });
+    }
+
+    // Poblar con datos de alertas filtradas
+    filteredAlerts.forEach(alert => {
+      const alertDate = new Date(alert.timestamp);
+
+      let matchingPoint;
+      if (chartView === 'daily') {
+        matchingPoint = dataPoints.find(d =>
+          d.date.getDate() === alertDate.getDate() &&
+          d.date.getMonth() === alertDate.getMonth() &&
+          d.date.getFullYear() === alertDate.getFullYear()
+        );
+      } else if (chartView === 'weekly') {
+        matchingPoint = dataPoints.find(d => {
+          const weekStart = new Date(d.date);
+          weekStart.setDate(d.date.getDate() - 6);
+          return alertDate >= weekStart && alertDate <= d.date;
+        });
+      } else {
+        matchingPoint = dataPoints.find(d =>
+          d.date.getMonth() === alertDate.getMonth() &&
+          d.date.getFullYear() === alertDate.getFullYear()
+        );
+      }
+
+      if (matchingPoint) {
+        matchingPoint.total++;
+        if (alert.severity === 'critical') matchingPoint.critical++;
       }
     });
 
-    return last7Days;
-  }, [savedAlerts]);
+    // Agregar datos de ralentí
+    idleRecords.forEach(record => {
+      const recordDate = new Date(record.timestamp || record.created_at);
 
-  // --- MEMO: Alert Distribution ---
+      let matchingPoint;
+      if (chartView === 'daily') {
+        matchingPoint = dataPoints.find(d =>
+          d.date.getDate() === recordDate.getDate() &&
+          d.date.getMonth() === recordDate.getMonth() &&
+          d.date.getFullYear() === recordDate.getFullYear()
+        );
+      } else if (chartView === 'weekly') {
+        matchingPoint = dataPoints.find(d => {
+          const weekStart = new Date(d.date);
+          weekStart.setDate(d.date.getDate() - 6);
+          return recordDate >= weekStart && recordDate <= d.date;
+        });
+      } else {
+        matchingPoint = dataPoints.find(d =>
+          d.date.getMonth() === recordDate.getMonth() &&
+          d.date.getFullYear() === recordDate.getFullYear()
+        );
+      }
+
+      if (matchingPoint) {
+        matchingPoint.idle += (record.duration_minutes || 0) / 60; // Convertir a horas
+      }
+    });
+
+    return dataPoints;
+  }, [filteredAlerts, idleRecords, chartView, dateRange, customStartDate, customEndDate]);
+
+  // --- MEMO: Alert Distribution (con filtros) ---
   const alertDistribution = useMemo(() => {
     const dist = new Map<string, number>();
-    savedAlerts.forEach(a => {
+    filteredAlerts.forEach(a => {
       const type = a.type || 'Otros';
       dist.set(type, (dist.get(type) || 0) + 1);
     });
@@ -141,15 +312,20 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
     }
 
     return data;
-  }, [savedAlerts]);
+  }, [filteredAlerts]);
 
 
-  // Calcular estadísticas por vehículo (incluyendo SCORE)
+  // Calcular estadísticas por vehículo (incluyendo SCORE) - con filtros
   const vehicleStats: VehicleAlertStats[] = React.useMemo(() => {
     const statsMap = new Map<string, VehicleAlertStats>();
 
     // Initial population from vehicles list
     vehicles.forEach(v => {
+      // Aplicar filtros de vehículos
+      if (selectedContract !== 'ALL' && v.contract !== selectedContract) return;
+      if (selectedPlate !== 'ALL' && v.plate !== selectedPlate) return;
+      if (selectedDriver !== 'ALL' && v.driver !== selectedDriver) return;
+
       statsMap.set(v.plate, {
         plate: v.plate,
         driver: v.driver,
@@ -161,8 +337,8 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
       });
     });
 
-    // Process alerts
-    savedAlerts.forEach(alert => {
+    // Process alerts filtradas
+    filteredAlerts.forEach(alert => {
       if (!statsMap.has(alert.plate)) {
         statsMap.set(alert.plate, {
           plate: alert.plate,
@@ -191,7 +367,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
     });
 
     return Array.from(statsMap.values()).sort((a, b) => a.score - b.score); // Sort by lowest score (worst first)
-  }, [vehicles, savedAlerts]);
+  }, [vehicles, filteredAlerts, selectedContract, selectedPlate, selectedDriver]);
 
   // Average Fleet Score
   const averageFleetScore = useMemo(() => {
@@ -260,8 +436,8 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
               <div className="w-16 h-16 mx-auto bg-white/20 backdrop-blur-sm rounded-2xl flex items-center justify-center mb-2 border-2 border-white/30">
                 <TrendingUp className="w-8 h-8" />
               </div>
-              <p className="text-2xl font-bold">{savedAlerts.length}</p>
-              <p className="text-xs text-blue-200">Alertas (30d)</p>
+              <p className="text-2xl font-bold">{filteredAlerts.length}</p>
+              <p className="text-xs text-blue-200">Alertas filtradas</p>
             </div>
             <div className="text-center">
               <div className="w-16 h-16 mx-auto bg-white/20 backdrop-blur-sm rounded-2xl flex items-center justify-center mb-2 border-2 border-white/30">
@@ -279,6 +455,206 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Filtros Avanzados Panel */}
+      <div className="bg-white dark:bg-slate-800 rounded-xl border-2 border-slate-200 dark:border-slate-700 shadow-lg overflow-hidden">
+        <button
+          onClick={() => setShowFilters(!showFilters)}
+          className="w-full px-6 py-4 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors"
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
+              <Filter className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+            </div>
+            <div className="text-left">
+              <h3 className="font-bold text-slate-900 dark:text-white">Filtros Avanzados</h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                {filteredAlerts.length} de {savedAlerts.length} alertas • {dateRange === '7d' ? '7 días' : dateRange === '30d' ? '30 días' : dateRange === '90d' ? '90 días' : 'Personalizado'}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {(selectedContract !== 'ALL' || selectedPlate !== 'ALL' || selectedDriver !== 'ALL' || dateRange === 'custom') && (
+              <span className="px-3 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-xs font-bold rounded-full">
+                Filtros activos
+              </span>
+            )}
+            <span className={`transform transition-transform ${showFilters ? 'rotate-180' : ''}`}>▼</span>
+          </div>
+        </button>
+
+        {showFilters && (
+          <div className="px-6 pb-6 pt-2 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/30">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+              {/* Rango de Fecha */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2 flex items-center gap-1">
+                  <Calendar className="w-4 h-4" />
+                  Rango de Fecha
+                </label>
+                <select
+                  value={dateRange}
+                  onChange={(e) => setDateRange(e.target.value as DateRange)}
+                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="7d">Últimos 7 días</option>
+                  <option value="30d">Últimos 30 días</option>
+                  <option value="90d">Últimos 90 días</option>
+                  <option value="custom">Personalizado</option>
+                </select>
+              </div>
+
+              {/* Contrato */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">
+                  Contrato
+                </label>
+                <select
+                  value={selectedContract}
+                  onChange={(e) => setSelectedContract(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="ALL">Todos los contratos</option>
+                  {uniqueContracts.map(contract => (
+                    <option key={contract} value={contract}>{contract}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Placa */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2 flex items-center gap-1">
+                  <Truck className="w-4 h-4" />
+                  Placa
+                </label>
+                <select
+                  value={selectedPlate}
+                  onChange={(e) => setSelectedPlate(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="ALL">Todas las placas</option>
+                  {uniquePlates.slice(0, 50).map(plate => (
+                    <option key={plate} value={plate}>{plate}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Conductor */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2 flex items-center gap-1">
+                  <UserCheck className="w-4 h-4" />
+                  Conductor
+                </label>
+                <select
+                  value={selectedDriver}
+                  onChange={(e) => setSelectedDriver(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="ALL">Todos los conductores</option>
+                  {uniqueDrivers.slice(0, 50).map(driver => (
+                    <option key={driver} value={driver}>{driver}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Fechas personalizadas */}
+            {dateRange === 'custom' && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                <div>
+                  <label className="block text-xs font-bold text-blue-900 dark:text-blue-300 mb-2">
+                    Fecha Inicio
+                  </label>
+                  <input
+                    type="date"
+                    value={customStartDate}
+                    onChange={(e) => setCustomStartDate(e.target.value)}
+                    className="w-full px-3 py-2 border border-blue-300 dark:border-blue-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-blue-900 dark:text-blue-300 mb-2">
+                    Fecha Fin
+                  </label>
+                  <input
+                    type="date"
+                    value={customEndDate}
+                    onChange={(e) => setCustomEndDate(e.target.value)}
+                    className="w-full px-3 py-2 border border-blue-300 dark:border-blue-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
+                  />
+                </div>
+                <div className="flex items-end">
+                  <button
+                    onClick={loadAnalytics}
+                    className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
+                  >
+                    Aplicar Fechas
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Vista de gráfico */}
+            <div className="mt-4 p-4 bg-purple-50 dark:bg-purple-900/20 rounded-lg border border-purple-200 dark:border-purple-800">
+              <label className="block text-xs font-bold text-purple-900 dark:text-purple-300 mb-3">
+                Vista de Tendencias
+              </label>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setChartView('daily')}
+                  className={`flex-1 px-4 py-2 rounded-lg font-medium transition-colors ${
+                    chartView === 'daily'
+                      ? 'bg-purple-600 text-white'
+                      : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-purple-100 dark:hover:bg-purple-900/30'
+                  }`}
+                >
+                  Diaria
+                </button>
+                <button
+                  onClick={() => setChartView('weekly')}
+                  className={`flex-1 px-4 py-2 rounded-lg font-medium transition-colors ${
+                    chartView === 'weekly'
+                      ? 'bg-purple-600 text-white'
+                      : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-purple-100 dark:hover:bg-purple-900/30'
+                  }`}
+                >
+                  Semanal
+                </button>
+                <button
+                  onClick={() => setChartView('monthly')}
+                  className={`flex-1 px-4 py-2 rounded-lg font-medium transition-colors ${
+                    chartView === 'monthly'
+                      ? 'bg-purple-600 text-white'
+                      : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-purple-100 dark:hover:bg-purple-900/30'
+                  }`}
+                >
+                  Mensual
+                </button>
+              </div>
+            </div>
+
+            {/* Botón limpiar filtros */}
+            {(selectedContract !== 'ALL' || selectedPlate !== 'ALL' || selectedDriver !== 'ALL' || dateRange !== '30d') && (
+              <div className="mt-4 flex justify-end">
+                <button
+                  onClick={() => {
+                    setSelectedContract('ALL');
+                    setSelectedPlate('ALL');
+                    setSelectedDriver('ALL');
+                    setDateRange('30d');
+                    setCustomStartDate('');
+                    setCustomEndDate('');
+                  }}
+                  className="px-4 py-2 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-lg font-medium hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors flex items-center gap-2"
+                >
+                  <X className="w-4 h-4" />
+                  Limpiar Filtros
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* HEADER: Scorecard & Efficiency */}
@@ -349,8 +725,8 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
           </div>
           <div className="mt-4 pt-4 border-t border-amber-100 dark:border-amber-900/30 grid grid-cols-2 gap-2 text-center">
             <div>
-              <p className="text-xs text-slate-600 dark:text-slate-400 font-medium">Total Alertas</p>
-              <p className="text-lg font-bold text-slate-900 dark:text-white">{savedAlerts.length}</p>
+              <p className="text-xs text-slate-600 dark:text-slate-400 font-medium">Alertas Filtradas</p>
+              <p className="text-lg font-bold text-slate-900 dark:text-white">{filteredAlerts.length}</p>
             </div>
             <div>
               <p className="text-xs text-slate-600 dark:text-slate-400 font-medium">Tipos Únicos</p>
@@ -370,10 +746,10 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
               <div className="p-2 bg-slate-100 dark:bg-slate-700 rounded-lg">
                 <TrendingUp className="w-5 h-5 text-slate-600 dark:text-slate-400" />
               </div>
-              Tendencia Semanal
+              Tendencia {chartView === 'daily' ? 'Diaria' : chartView === 'weekly' ? 'Semanal' : 'Mensual'}
             </h3>
             <span className="text-xs font-medium text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-700 px-3 py-1 rounded-full">
-              Últimos 7 días
+              {chartView === 'daily' ? 'Por día' : chartView === 'weekly' ? 'Por semana' : 'Por mes'}
             </span>
           </div>
           <TrendChart data={trendData} height={220} />
