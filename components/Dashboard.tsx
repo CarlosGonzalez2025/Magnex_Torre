@@ -159,210 +159,362 @@ export const Dashboard: React.FC<DashboardProps> = ({ vehicles, alerts, onNaviga
             .map(([plate, count]) => ({ plate, count }));
     }, [alerts]);
 
+    // Additional operational stats
+    const operationalStats = useMemo(() => {
+        const uniqueContracts = new Set(vehicles.map(v => v.contract)).size;
+        const uniqueDrivers = new Set(vehicles.map(v => v.driver).filter(d => d && d !== 'Sin Asignar')).size;
+        const movingPercentage = Math.round((vehicleStats.moving / vehicleStats.total) * 100) || 0;
+        const speedViolations = alerts.filter(a => a.type.includes('Velocidad') || a.type.includes('SPEED')).length;
+
+        return { uniqueContracts, uniqueDrivers, movingPercentage, speedViolations };
+    }, [vehicles, alerts, vehicleStats]);
+
     return (
         <div className="space-y-6">
-            {/* Welcome Banner */}
-            <div className="bg-gradient-to-r from-blue-600 to-cyan-500 dark:from-blue-700 dark:to-cyan-600 rounded-2xl p-6 text-white shadow-lg">
-                <div className="flex items-center justify-between">
+            {/* Welcome Banner - Enhanced */}
+            <div className="bg-gradient-to-r from-blue-600 via-cyan-500 to-blue-700 dark:from-blue-800 dark:via-cyan-700 dark:to-blue-900 rounded-2xl p-8 text-white shadow-2xl relative overflow-hidden">
+                {/* Background Pattern */}
+                <div className="absolute inset-0 opacity-10">
+                    <div className="absolute top-0 right-0 w-64 h-64 bg-white rounded-full -translate-y-1/2 translate-x-1/2"></div>
+                    <div className="absolute bottom-0 left-0 w-48 h-48 bg-white rounded-full translate-y-1/2 -translate-x-1/2"></div>
+                </div>
+
+                <div className="relative flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
                     <div>
-                        <h1 className="text-2xl font-bold">Bienvenido a Torre de Control</h1>
-                        <p className="text-blue-100 mt-1">
-                            Última actualización: {new Date().toLocaleTimeString()}
-                        </p>
-                    </div>
-                    <div className="hidden md:flex items-center gap-4">
-                        <div className="text-right">
-                            <p className="text-sm text-blue-100">Vehículos Monitoreados</p>
-                            <p className="text-3xl font-bold">{vehicleStats.total}</p>
+                        <h1 className="text-3xl md:text-4xl font-bold mb-2">Torre de Control Magnex</h1>
+                        <div className="flex flex-wrap items-center gap-3 text-blue-100">
+                            <div className="flex items-center gap-1.5">
+                                <Clock className="w-4 h-4" />
+                                <span className="text-sm font-medium">
+                                    Actualizado: {new Date().toLocaleTimeString('es-CO')}
+                                </span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                                <Activity className="w-4 h-4 animate-pulse" />
+                                <span className="text-sm font-medium">Sistema Operativo</span>
+                            </div>
                         </div>
-                        <div className="w-16 h-16 bg-white/20 rounded-xl flex items-center justify-center">
-                            <Truck className="w-8 h-8" />
+                    </div>
+
+                    <div className="flex items-center gap-6">
+                        <div className="text-center">
+                            <p className="text-sm text-blue-100 mb-1">Total Flota</p>
+                            <p className="text-5xl font-bold">{vehicleStats.total}</p>
+                            <p className="text-xs text-blue-200 mt-1">vehículos</p>
+                        </div>
+                        <div className="w-20 h-20 bg-white/20 backdrop-blur-sm rounded-2xl flex items-center justify-center border-2 border-white/30">
+                            <Truck className="w-10 h-10" />
                         </div>
                     </div>
                 </div>
             </div>
 
-            {/* Main Stats Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* Critical Alerts Banner - NEW */}
+            {alertStats.critical > 0 && (
+                <div className="bg-gradient-to-r from-red-500 to-orange-500 dark:from-red-600 dark:to-orange-600 rounded-xl p-5 text-white shadow-lg border-2 border-red-300 dark:border-red-400 animate-pulse">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                            <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center">
+                                <AlertTriangle className="w-7 h-7 animate-bounce" />
+                            </div>
+                            <div>
+                                <h3 className="text-xl font-bold">¡ATENCIÓN! Alertas Críticas Activas</h3>
+                                <p className="text-red-100 text-sm">Requieren atención inmediata</p>
+                            </div>
+                        </div>
+                        <div className="text-right">
+                            <p className="text-5xl font-bold">{alertStats.critical}</p>
+                            <button
+                                onClick={() => onNavigate?.('alerts')}
+                                className="mt-2 px-4 py-2 bg-white text-red-600 rounded-lg text-sm font-semibold hover:bg-red-50 transition-colors"
+                            >
+                                Ver Alertas
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Main Stats Grid - Enhanced */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
                 <StatCard
-                    title="Vehículos Activos"
+                    title="Vehículos en Movimiento"
                     value={vehicleStats.moving}
-                    subtitle={`${vehicleStats.idle} en ralentí`}
-                    icon={<Truck className="w-6 h-6" />}
+                    subtitle={`${Math.round((vehicleStats.moving / vehicleStats.total) * 100)}% de la flota`}
+                    icon={<Truck className="w-7 h-7" />}
                     color="green"
                     onClick={() => onNavigate?.('table')}
                 />
                 <StatCard
                     title="Alertas Críticas"
                     value={alertStats.critical}
-                    subtitle={`${alertStats.today} alertas hoy`}
-                    icon={<AlertTriangle className="w-6 h-6" />}
+                    subtitle={`${alertStats.high} alertas altas`}
+                    icon={<AlertTriangle className="w-7 h-7" />}
                     color="red"
                     onClick={() => onNavigate?.('alerts')}
                 />
                 <StatCard
+                    title="Vehículos Detenidos"
+                    value={vehicleStats.stopped}
+                    subtitle={`${vehicleStats.off} apagados`}
+                    icon={<Activity className="w-7 h-7" />}
+                    color="amber"
+                    onClick={() => onNavigate?.('table')}
+                />
+                <StatCard
                     title="Velocidad Promedio"
                     value={`${vehicleStats.avgSpeed} km/h`}
-                    icon={<Gauge className="w-6 h-6" />}
+                    subtitle="Flota completa"
+                    icon={<Gauge className="w-7 h-7" />}
                     color="blue"
                 />
                 <StatCard
                     title="Combustible Promedio"
                     value={`${vehicleStats.avgFuel}%`}
-                    icon={<Fuel className="w-6 h-6" />}
-                    color="amber"
+                    subtitle={vehicleStats.avgFuel < 20 ? 'Nivel bajo' : 'Nivel óptimo'}
+                    icon={<Fuel className="w-7 h-7" />}
+                    color={vehicleStats.avgFuel < 20 ? 'red' : 'cyan'}
                 />
+            </div>
+
+            {/* Operational Stats - NEW */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div className="bg-gradient-to-br from-purple-50 to-pink-50 dark:from-purple-900/20 dark:to-pink-900/20 border border-purple-200 dark:border-purple-800 rounded-xl p-4 shadow-sm">
+                    <div className="flex items-center gap-3">
+                        <div className="p-2 bg-purple-100 dark:bg-purple-900/30 rounded-lg">
+                            <ClipboardCheck className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                        </div>
+                        <div>
+                            <p className="text-2xl font-bold text-slate-900 dark:text-white">{operationalStats.uniqueContracts}</p>
+                            <p className="text-xs text-slate-600 dark:text-slate-400">Contratos Activos</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="bg-gradient-to-br from-cyan-50 to-blue-50 dark:from-cyan-900/20 dark:to-blue-900/20 border border-cyan-200 dark:border-cyan-800 rounded-xl p-4 shadow-sm">
+                    <div className="flex items-center gap-3">
+                        <div className="p-2 bg-cyan-100 dark:bg-cyan-900/30 rounded-lg">
+                            <Users className="w-5 h-5 text-cyan-600 dark:text-cyan-400" />
+                        </div>
+                        <div>
+                            <p className="text-2xl font-bold text-slate-900 dark:text-white">{operationalStats.uniqueDrivers}</p>
+                            <p className="text-xs text-slate-600 dark:text-slate-400">Conductores Activos</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 border border-green-200 dark:border-green-800 rounded-xl p-4 shadow-sm">
+                    <div className="flex items-center gap-3">
+                        <div className="p-2 bg-green-100 dark:bg-green-900/30 rounded-lg">
+                            <TrendingUp className="w-5 h-5 text-green-600 dark:text-green-400" />
+                        </div>
+                        <div>
+                            <p className="text-2xl font-bold text-slate-900 dark:text-white">{operationalStats.movingPercentage}%</p>
+                            <p className="text-xs text-slate-600 dark:text-slate-400">Eficiencia Operativa</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="bg-gradient-to-br from-orange-50 to-red-50 dark:from-orange-900/20 dark:to-red-900/20 border border-orange-200 dark:border-orange-800 rounded-xl p-4 shadow-sm">
+                    <div className="flex items-center gap-3">
+                        <div className="p-2 bg-orange-100 dark:bg-orange-900/30 rounded-lg">
+                            <Gauge className="w-5 h-5 text-orange-600 dark:text-orange-400" />
+                        </div>
+                        <div>
+                            <p className="text-2xl font-bold text-slate-900 dark:text-white">{operationalStats.speedViolations}</p>
+                            <p className="text-xs text-slate-600 dark:text-slate-400">Excesos de Velocidad</p>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             {/* Secondary Stats */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Fleet Status */}
-                <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-5 shadow-sm">
-                    <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-4 flex items-center gap-2">
-                        <Activity className="w-5 h-5 text-blue-500" />
+                {/* Fleet Status - Enhanced */}
+                <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6 shadow-md hover:shadow-lg transition-shadow">
+                    <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-5 flex items-center gap-2">
+                        <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
+                            <Activity className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                        </div>
                         Estado de la Flota
                     </h3>
-                    <div className="space-y-4">
-                        <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                                <div className="w-3 h-3 rounded-full bg-green-500"></div>
-                                <span className="text-sm text-slate-600 dark:text-slate-400">En Movimiento</span>
+                    <div className="space-y-3.5">
+                        <div className="flex items-center justify-between p-3 rounded-lg bg-green-50 dark:bg-green-900/10 border border-green-100 dark:border-green-900/30">
+                            <div className="flex items-center gap-3">
+                                <div className="w-4 h-4 rounded-full bg-green-500 shadow-lg shadow-green-500/50"></div>
+                                <span className="text-sm font-medium text-slate-700 dark:text-slate-300">En Movimiento</span>
                             </div>
-                            <span className="font-semibold text-slate-900 dark:text-white">
+                            <span className="text-lg font-bold text-slate-900 dark:text-white">
                                 {vehicleStats.moving}
                             </span>
                         </div>
-                        <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                                <div className="w-3 h-3 rounded-full bg-amber-500"></div>
-                                <span className="text-sm text-slate-600 dark:text-slate-400">Encendidos (Idle)</span>
+                        <div className="flex items-center justify-between p-3 rounded-lg bg-amber-50 dark:bg-amber-900/10 border border-amber-100 dark:border-amber-900/30">
+                            <div className="flex items-center gap-3">
+                                <div className="w-4 h-4 rounded-full bg-amber-500 shadow-lg shadow-amber-500/50"></div>
+                                <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Encendidos (Idle)</span>
                             </div>
-                            <span className="font-semibold text-slate-900 dark:text-white">
+                            <span className="text-lg font-bold text-slate-900 dark:text-white">
                                 {vehicleStats.idle}
                             </span>
                         </div>
-                        <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                                <div className="w-3 h-3 rounded-full bg-red-500"></div>
-                                <span className="text-sm text-slate-600 dark:text-slate-400">Detenidos</span>
+                        <div className="flex items-center justify-between p-3 rounded-lg bg-red-50 dark:bg-red-900/10 border border-red-100 dark:border-red-900/30">
+                            <div className="flex items-center gap-3">
+                                <div className="w-4 h-4 rounded-full bg-red-500 shadow-lg shadow-red-500/50"></div>
+                                <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Detenidos</span>
                             </div>
-                            <span className="font-semibold text-slate-900 dark:text-white">
+                            <span className="text-lg font-bold text-slate-900 dark:text-white">
                                 {vehicleStats.stopped}
                             </span>
                         </div>
-                        <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                                <div className="w-3 h-3 rounded-full bg-slate-400"></div>
-                                <span className="text-sm text-slate-600 dark:text-slate-400">Apagados</span>
+                        <div className="flex items-center justify-between p-3 rounded-lg bg-slate-50 dark:bg-slate-700/30 border border-slate-200 dark:border-slate-600">
+                            <div className="flex items-center gap-3">
+                                <div className="w-4 h-4 rounded-full bg-slate-400"></div>
+                                <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Apagados</span>
                             </div>
-                            <span className="font-semibold text-slate-900 dark:text-white">
+                            <span className="text-lg font-bold text-slate-900 dark:text-white">
                                 {vehicleStats.off}
                             </span>
                         </div>
                     </div>
 
-                    {/* Progress Bar */}
-                    <div className="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
-                        <div className="flex h-2 rounded-full overflow-hidden bg-slate-200 dark:bg-slate-700">
+                    {/* Progress Bar - Enhanced */}
+                    <div className="mt-5 pt-5 border-t border-slate-200 dark:border-slate-700">
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mb-2 font-medium">Distribución de la Flota</p>
+                        <div className="flex h-3 rounded-full overflow-hidden bg-slate-200 dark:bg-slate-700 shadow-inner">
                             <div
-                                className="bg-green-500"
+                                className="bg-gradient-to-r from-green-400 to-green-500 transition-all duration-500"
                                 style={{ width: `${(vehicleStats.moving / vehicleStats.total) * 100}%` }}
+                                title={`${Math.round((vehicleStats.moving / vehicleStats.total) * 100)}% en movimiento`}
                             ></div>
                             <div
-                                className="bg-amber-500"
+                                className="bg-gradient-to-r from-amber-400 to-amber-500 transition-all duration-500"
                                 style={{ width: `${(vehicleStats.idle / vehicleStats.total) * 100}%` }}
+                                title={`${Math.round((vehicleStats.idle / vehicleStats.total) * 100)}% en idle`}
                             ></div>
                             <div
-                                className="bg-red-500"
+                                className="bg-gradient-to-r from-red-400 to-red-500 transition-all duration-500"
                                 style={{ width: `${(vehicleStats.stopped / vehicleStats.total) * 100}%` }}
+                                title={`${Math.round((vehicleStats.stopped / vehicleStats.total) * 100)}% detenidos`}
                             ></div>
                             <div
-                                className="bg-slate-400"
+                                className="bg-gradient-to-r from-slate-300 to-slate-400 transition-all duration-500"
                                 style={{ width: `${(vehicleStats.off / vehicleStats.total) * 100}%` }}
+                                title={`${Math.round((vehicleStats.off / vehicleStats.total) * 100)}% apagados`}
                             ></div>
                         </div>
                     </div>
                 </div>
 
-                {/* Recent Alerts */}
-                <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-5 shadow-sm">
-                    <div className="flex items-center justify-between mb-4">
-                        <h3 className="text-lg font-semibold text-slate-900 dark:text-white flex items-center gap-2">
-                            <Bell className="w-5 h-5 text-red-500" />
+                {/* Recent Alerts - Enhanced */}
+                <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6 shadow-md hover:shadow-lg transition-shadow">
+                    <div className="flex items-center justify-between mb-5">
+                        <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                            <div className="p-2 bg-red-100 dark:bg-red-900/30 rounded-lg">
+                                <Bell className="w-5 h-5 text-red-600 dark:text-red-400" />
+                            </div>
                             Alertas Recientes
                         </h3>
                         <button
                             onClick={() => onNavigate?.('alerts')}
-                            className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                            className="text-sm text-blue-600 dark:text-blue-400 hover:underline font-medium"
                         >
-                            Ver todas
+                            Ver todas →
                         </button>
                     </div>
-                    <div className="space-y-3">
+                    <div className="space-y-2.5">
                         {recentAlerts.length > 0 ? (
                             recentAlerts.map((alert, index) => (
                                 <div
                                     key={alert.id || index}
-                                    className="flex items-start gap-3 p-2 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors"
+                                    className={`flex items-start gap-3 p-3 rounded-lg border transition-all hover:shadow-md cursor-pointer ${
+                                        alert.severity === 'critical'
+                                            ? 'bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-900/30'
+                                            : alert.severity === 'high'
+                                                ? 'bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-900/30'
+                                                : 'bg-blue-50 dark:bg-blue-900/10 border-blue-200 dark:border-blue-900/30'
+                                    }`}
                                 >
                                     <div
-                                        className={`w-2 h-2 rounded-full mt-2 ${alert.severity === 'critical'
-                                            ? 'bg-red-500'
-                                            : alert.severity === 'high'
-                                                ? 'bg-amber-500'
-                                                : 'bg-blue-500'
-                                            }`}
+                                        className={`w-3 h-3 rounded-full mt-1.5 shadow-lg ${
+                                            alert.severity === 'critical'
+                                                ? 'bg-red-500 shadow-red-500/50 animate-pulse'
+                                                : alert.severity === 'high'
+                                                    ? 'bg-amber-500 shadow-amber-500/50'
+                                                    : 'bg-blue-500 shadow-blue-500/50'
+                                        }`}
                                     ></div>
                                     <div className="flex-1 min-w-0">
-                                        <p className="text-sm font-medium text-slate-900 dark:text-white truncate">
+                                        <p className="text-sm font-semibold text-slate-900 dark:text-white truncate">
                                             {alert.type}
                                         </p>
-                                        <p className="text-xs text-slate-500 dark:text-slate-400">
-                                            {alert.plate} • {new Date(alert.timestamp).toLocaleTimeString()}
+                                        <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
+                                            {alert.plate} • {new Date(alert.timestamp).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}
                                         </p>
                                     </div>
+                                    {alert.severity === 'critical' && (
+                                        <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0" />
+                                    )}
                                 </div>
                             ))
                         ) : (
-                            <p className="text-sm text-slate-500 dark:text-slate-400 text-center py-4">
-                                No hay alertas recientes
-                            </p>
+                            <div className="text-center py-8">
+                                <Bell className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-2" />
+                                <p className="text-sm text-slate-500 dark:text-slate-400">No hay alertas recientes</p>
+                            </div>
                         )}
                     </div>
                 </div>
 
-                {/* Top Alert Vehicles */}
-                <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-5 shadow-sm">
-                    <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-4 flex items-center gap-2">
-                        <TrendingUp className="w-5 h-5 text-purple-500" />
-                        Vehículos con Más Alertas
+                {/* Top Alert Vehicles - Enhanced */}
+                <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6 shadow-md hover:shadow-lg transition-shadow">
+                    <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-5 flex items-center gap-2">
+                        <div className="p-2 bg-purple-100 dark:bg-purple-900/30 rounded-lg">
+                            <TrendingUp className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                        </div>
+                        Vehículos Críticos
                     </h3>
                     <div className="space-y-3">
                         {topAlertVehicles.length > 0 ? (
                             topAlertVehicles.map((item, index) => (
-                                <div key={item.plate} className="flex items-center gap-3">
-                                    <span
-                                        className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${index === 0
-                                            ? 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400'
+                                <div
+                                    key={item.plate}
+                                    className={`flex items-center gap-3 p-3 rounded-lg border transition-all hover:shadow-md cursor-pointer ${
+                                        index === 0
+                                            ? 'bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-900/30'
                                             : index === 1
-                                                ? 'bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400'
-                                                : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400'
-                                            }`}
+                                                ? 'bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-900/30'
+                                                : 'bg-slate-50 dark:bg-slate-700/30 border-slate-200 dark:border-slate-600'
+                                    }`}
+                                >
+                                    <div
+                                        className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold shadow-lg ${
+                                            index === 0
+                                                ? 'bg-gradient-to-br from-red-500 to-red-600 text-white shadow-red-500/50'
+                                                : index === 1
+                                                    ? 'bg-gradient-to-br from-amber-500 to-amber-600 text-white shadow-amber-500/50'
+                                                    : index === 2
+                                                        ? 'bg-gradient-to-br from-orange-500 to-orange-600 text-white shadow-orange-500/50'
+                                                        : 'bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-300'
+                                        }`}
                                     >
                                         {index + 1}
-                                    </span>
-                                    <span className="flex-1 text-sm font-medium text-slate-900 dark:text-white">
+                                    </div>
+                                    <span className="flex-1 text-sm font-bold text-slate-900 dark:text-white">
                                         {item.plate}
                                     </span>
-                                    <span className="text-sm text-slate-500 dark:text-slate-400">
-                                        {item.count} alertas
-                                    </span>
+                                    <div className="text-right">
+                                        <span className="text-lg font-bold text-slate-900 dark:text-white">
+                                            {item.count}
+                                        </span>
+                                        <p className="text-xs text-slate-500 dark:text-slate-400">alertas</p>
+                                    </div>
                                 </div>
                             ))
                         ) : (
-                            <p className="text-sm text-slate-500 dark:text-slate-400 text-center py-4">
-                                Sin datos de alertas
-                            </p>
+                            <div className="text-center py-8">
+                                <TrendingUp className="w-12 h-12 text-slate-300 dark:text-slate-600 mx-auto mb-2" />
+                                <p className="text-sm text-slate-500 dark:text-slate-400">Sin datos de alertas</p>
+                            </div>
                         )}
                     </div>
                 </div>

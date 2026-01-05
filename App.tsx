@@ -121,7 +121,7 @@ export default function App() {
 
     setAlerts(uniqueAlerts);
     saveAlertsToStorage(uniqueAlerts);
-    cleanOldAlerts();
+    cleanOldAlerts(12); // Mantener alertas por 12 horas (turno operativo)
 
     // 🆕 GUARDADO AUTOMÁTICO: Guardar TODAS las alertas nuevas en saved_alerts
     // Esto se hace en segundo plano sin bloquear la UI
@@ -292,7 +292,7 @@ export default function App() {
         markAlertAsSaved(alertToSave.id);
 
         // Limpiar alertas guardadas del caché (se eliminan inmediatamente)
-        cleanOldAlerts(24);
+        cleanOldAlerts(12); // Mantener alertas por 12 horas (turno operativo)
 
         // Actualizar la lista de alertas (solo mostrar no guardadas)
         const unsavedAlerts = getUnsavedAlerts();
