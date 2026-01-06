@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { AlertTriangle, AlertCircle, Bell, BellRing, CheckCircle, Clock, MapPin, User, Gauge, FileDown, Search, Calendar, Database, Info, Save, Copy, MessageCircle, FolderCheck } from 'lucide-react';
 import { Alert } from '../types';
 import {
@@ -17,6 +17,11 @@ interface SavedAlertsPanelProps {
   onSaveAlert?: (alert: Alert) => void;
   onCopyAlert?: (alert: Alert) => void;
 }
+
+// 💾 Cache constants
+const CACHE_KEY = 'saved_alerts_cache';
+const CACHE_TIMESTAMP_KEY = 'saved_alerts_cache_timestamp';
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutos
 
 export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, onSaveAlert, onCopyAlert }) => {
   const [alerts, setAlerts] = useState<SavedAlert[]>([]);
@@ -119,12 +124,11 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
     );
   };
 
-  useEffect(() => {
-    loadAlerts();
-  }, [statusFilter, severityFilter]);
+  const loadAlerts = useCallback(async (silentRefresh = false) => {
+    if (!silentRefresh) {
+      setLoading(true);
+    }
 
-  const loadAlerts = async () => {
-    setLoading(true);
     const filters: any = {};
 
     if (statusFilter !== 'ALL') filters.status = statusFilter;
@@ -136,18 +140,53 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
 
     if (result.success && result.data) {
       setAlerts(result.data);
+
+      // 💾 Guardar en caché para próxima visita
+      localStorage.setItem(CACHE_KEY, JSON.stringify(result.data));
+      localStorage.setItem(CACHE_TIMESTAMP_KEY, Date.now().toString());
+
+      if (silentRefresh) {
+        console.log('✅ Alertas actualizadas en segundo plano');
+      }
     } else {
       console.error('Error loading auto-saved alerts:', result.error);
     }
+
     setLoading(false);
-  };
+  }, [statusFilter, severityFilter]);
+
+  useEffect(() => {
+    // 🚀 Intentar cargar del caché primero
+    const cachedData = localStorage.getItem(CACHE_KEY);
+    const cacheTimestamp = localStorage.getItem(CACHE_TIMESTAMP_KEY);
+    const now = Date.now();
+
+    if (cachedData && cacheTimestamp) {
+      const cacheAge = now - parseInt(cacheTimestamp);
+
+      if (cacheAge < CACHE_DURATION) {
+        // ✅ Caché válido: Mostrar inmediatamente
+        console.log('📦 Cargando alertas desde caché (sin espera)');
+        setAlerts(JSON.parse(cachedData));
+        setLoading(false);
+
+        // 🔄 Actualizar en segundo plano (sin loading)
+        loadAlerts(true);
+        return;
+      }
+    }
+
+    // ⚠️ Sin caché o caché expirado: Carga normal con loading
+    console.log('🌐 Cargando alertas desde servidor (primera vez)');
+    loadAlerts(false);
+  }, [loadAlerts]);
 
   const handleSaveWrapper = async (savedAlert: SavedAlert) => {
     if (!onSaveAlert || !user) return;
 
     // 🚀 ACTUALIZACIÓN OPTIMISTA: Actualizar UI inmediatamente
-    setAlerts(prevAlerts =>
-      prevAlerts.map(alert =>
+    setAlerts(prevAlerts => {
+      const updatedAlerts = prevAlerts.map(alert =>
         alert.id === savedAlert.id
           ? {
               ...alert,
@@ -156,8 +195,14 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
               moved_by: user.email
             }
           : alert
-      )
-    );
+      );
+
+      // 💾 Actualizar caché también
+      localStorage.setItem(CACHE_KEY, JSON.stringify(updatedAlerts));
+      localStorage.setItem(CACHE_TIMESTAMP_KEY, Date.now().toString());
+
+      return updatedAlerts;
+    });
 
     // Convert SavedAlert to Alert for compatibility
     const alert: Alert = {
@@ -186,9 +231,9 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
       if (!result.success) {
         console.error('Failed to mark alert as moved:', result.error);
 
-        // ⚠️ ROLLBACK: Si falla, revertir el cambio visual
-        setAlerts(prevAlerts =>
-          prevAlerts.map(alert =>
+        // ⚠️ ROLLBACK: Si falla, revertir el cambio visual y caché
+        setAlerts(prevAlerts => {
+          const revertedAlerts = prevAlerts.map(alert =>
             alert.id === savedAlert.id
               ? {
                   ...alert,
@@ -197,8 +242,14 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
                   moved_by: undefined
                 }
               : alert
-          )
-        );
+          );
+
+          // 💾 Actualizar caché con el rollback
+          localStorage.setItem(CACHE_KEY, JSON.stringify(revertedAlerts));
+          localStorage.setItem(CACHE_TIMESTAMP_KEY, Date.now().toString());
+
+          return revertedAlerts;
+        });
       }
     });
   };
