@@ -23,6 +23,9 @@ export interface SavedAlert {
   saved_by: string;
   created_at: string;
   updated_at: string;
+  moved_to_history?: boolean;
+  moved_at?: string;
+  moved_by?: string;
 }
 
 export interface ActionPlan {
@@ -227,6 +230,37 @@ export async function getFilteredAutoSavedAlerts(
     return { success: true, data: allData as SavedAlert[] };
   } catch (error: any) {
     console.error('Exception fetching filtered auto-saved alerts:', error);
+    return { success: false, error: error.message || 'Error desconocido' };
+  }
+}
+
+/**
+ * Mark a saved alert as moved to history
+ * This helps track which alerts are already being followed up in the history table
+ */
+export async function markAlertAsMovedToHistory(
+  alertId: string,
+  userEmail: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { error } = await supabase
+      .from('saved_alerts')
+      .update({
+        moved_to_history: true,
+        moved_at: new Date().toISOString(),
+        moved_by: userEmail
+      })
+      .eq('id', alertId);
+
+    if (error) {
+      console.error('Error marking alert as moved to history:', error);
+      return { success: false, error: error.message };
+    }
+
+    console.log(`✅ Alert ${alertId} marked as moved to history by ${userEmail}`);
+    return { success: true };
+  } catch (error: any) {
+    console.error('Exception marking alert as moved to history:', error);
     return { success: false, error: error.message || 'Error desconocido' };
   }
 }
