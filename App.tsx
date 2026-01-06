@@ -22,6 +22,7 @@ import { ThemeToggle } from './components/ThemeToggle';
 import { UserGuideButton } from './components/UserGuide';
 import { Login } from './components/Login';
 import { Sidebar, TabType } from './components/Sidebar';
+import { FleetManagement } from './components/FleetManagement';
 import { fetchFleetData, FleetResponse } from './services/fleetService';
 import { detectAlerts, saveAlertsToStorage, getAlertsFromStorage, getUnsavedAlerts, markAlertAsSent, markAlertAsSaved, cleanOldAlerts, processVehiclesForIdleDetection } from './services/alertService';
 import { saveAlertToDatabase, autoSaveAlert } from './services/databaseService';
@@ -366,16 +367,17 @@ export default function App() {
                   {activeTab === 'dashboard' ? 'Panel de Control' :
                     activeTab === 'table' ? 'Tabla de Flota' :
                       activeTab === 'map' ? 'Mapa en Vivo' :
-                        activeTab === 'alerts' ? 'Centro de Alertas' :
-                          activeTab === 'history' ? 'Historial de Eventos' :
-                            activeTab === 'saved' ? 'Alertas Guardadas' :
-                              activeTab === 'analytics' ? 'Análisis y Métricas' :
-                                activeTab === 'inspections' ? 'Inspecciones' :
-                                  activeTab === 'schedules' ? 'Cronogramas' :
-                                    activeTab === 'drivers' ? 'Gestión de Conductores' :
-                                      activeTab === 'geofences' ? 'Editor de Geocercas' :
-                                        activeTab === 'users' ? 'Gestión de Usuarios' :
-                                          activeTab === 'maintenance' ? 'Mantenimiento' : 'Magnex'}
+                        activeTab === 'fleet' ? 'Gestión de Flota' :
+                          activeTab === 'alerts' ? 'Centro de Alertas' :
+                            activeTab === 'history' ? 'Historial de Eventos' :
+                              activeTab === 'saved' ? 'Alertas Guardadas' :
+                                activeTab === 'analytics' ? 'Análisis y Métricas' :
+                                  activeTab === 'inspections' ? 'Inspecciones' :
+                                    activeTab === 'schedules' ? 'Cronogramas' :
+                                      activeTab === 'drivers' ? 'Gestión de Conductores' :
+                                        activeTab === 'geofences' ? 'Editor de Geocercas' :
+                                          activeTab === 'users' ? 'Gestión de Usuarios' :
+                                            activeTab === 'maintenance' ? 'Mantenimiento' : 'Magnex'}
                 </h2>
                 <div className="ml-4 opacity-80 scale-90 origin-left">
                   {getStatusBadge()}
@@ -579,6 +581,7 @@ export default function App() {
               {activeTab === 'geofences' && <GeofenceEditor />}
               {activeTab === 'users' && <UserManagement />}
               {activeTab === 'maintenance' && <MaintenancePanel />}
+              {activeTab === 'fleet' && <FleetManagement vehicles={vehicles} />}
             </div>
           </div>
         </main>

@@ -20,11 +20,12 @@ import {
     Activity,
     AlertTriangle,
     Wrench,
-    Shield
+    Shield,
+    Truck
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
-export type TabType = 'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'users' | 'maintenance';
+export type TabType = 'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'users' | 'maintenance' | 'fleet';
 
 interface SidebarProps {
     activeTab: TabType;
@@ -56,6 +57,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 { id: 'dashboard', label: 'Dashboard', icon: Home },
                 { id: 'table', label: 'Tabla de Flota', icon: LayoutDashboard },
                 { id: 'map', label: 'Mapa en Vivo', icon: MapIcon },
+                { id: 'fleet', label: 'Gestión de Flota', icon: Truck },
             ]
         },
         {

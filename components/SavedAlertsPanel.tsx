@@ -94,6 +94,7 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
       filteredAndSearchedAlerts,
       [
         { header: 'Tipo', key: 'type', width: 20 },
+        { header: 'Plataforma GPS', key: 'source', width: 15 },
         { header: 'Placa', key: 'plate', width: 12 },
         { header: 'Contrato', key: 'contract', width: 15 },
         { header: 'Estado', key: 'status', width: 12 },
@@ -216,6 +217,19 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
     return (
       <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border ${styles[status as keyof typeof styles]}`}>
         {labels[status as keyof typeof labels]}
+      </span>
+    );
+  };
+
+  const getPlatformBadge = (source: string) => {
+    const isColtrack = source === 'COLTRACK';
+    return (
+      <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+        isColtrack
+          ? 'bg-purple-100 text-purple-800 border border-purple-300'
+          : 'bg-teal-100 text-teal-800 border border-teal-300'
+      }`}>
+        {source}
       </span>
     );
   };
@@ -353,6 +367,7 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
               <tr>
                 <th className="px-2 py-2 text-center text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">Acciones</th>
                 <th className="px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">Tipo</th>
+                <th className="px-2 py-2 text-center text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">GPS</th>
                 <th className="px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">Placa/Contrato</th>
                 <th className="px-2 py-2 text-center text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">Estado</th>
                 <th className="px-2 py-2 text-center text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">Severidad</th>
@@ -400,6 +415,11 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
                       {getSeverityIcon(alert.severity)}
                       <span className="font-semibold text-slate-900 text-[11px]">{alert.type}</span>
                     </div>
+                  </td>
+
+                  {/* Plataforma GPS */}
+                  <td className="px-2 py-1.5 text-center whitespace-nowrap">
+                    {getPlatformBadge(alert.source)}
                   </td>
 
                   {/* Placa/Contrato */}
