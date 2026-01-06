@@ -1,14 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { AlertTriangle, AlertCircle, Bell, BellRing, CheckCircle, Clock, MapPin, User, Gauge, FileDown, Search, Calendar, Database, Info, Save, Copy, MessageCircle } from 'lucide-react';
+import { AlertTriangle, AlertCircle, Bell, BellRing, CheckCircle, Clock, MapPin, User, Gauge, FileDown, Search, Calendar, Database, Info, Save, Copy, MessageCircle, FolderCheck } from 'lucide-react';
 import { Alert } from '../types';
 import {
   getAllAutoSavedAlerts,
   getFilteredAutoSavedAlerts,
-  SavedAlert
+  SavedAlert,
+  markAlertAsMovedToHistory
 } from '../services/databaseService';
 import { usePagination } from '../hooks/usePagination';
 import { PaginationControls } from './PaginationControls';
 import { useExportToExcel } from '../hooks/useExportToExcel';
+import { useAuth } from '../contexts/AuthContext';
 
 interface SavedAlertsPanelProps {
   onRefresh?: () => void;
@@ -20,10 +22,12 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
   const [alerts, setAlerts] = useState<SavedAlert[]>([]);
   const [loading, setLoading] = useState(true);
   const [showInfo, setShowInfo] = useState(false);
+  const { user } = useAuth();
 
   // Filters
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'pending' | 'in_progress' | 'resolved'>('ALL');
   const [severityFilter, setSeverityFilter] = useState<'ALL' | 'critical' | 'high' | 'medium' | 'low'>('ALL');
+  const [movedFilter, setMovedFilter] = useState<'ALL' | 'MOVED' | 'NOT_MOVED'>('NOT_MOVED'); // Default: hide moved alerts
   const [searchText, setSearchText] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -31,6 +35,10 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
 
   // Filtrado adicional del lado del cliente (búsqueda y fechas)
   const filteredAndSearchedAlerts = alerts.filter(alert => {
+    // 🔄 FILTRO DE ALERTAS MOVIDAS AL HISTORIAL
+    if (movedFilter === 'MOVED' && !alert.moved_to_history) return false;
+    if (movedFilter === 'NOT_MOVED' && alert.moved_to_history) return false;
+
     // 🔍 BÚSQUEDA DE TEXTO - Mejorada con manejo de null/undefined
     if (searchText && searchText.trim()) {
       const search = searchText.toLowerCase().trim();
@@ -134,8 +142,8 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
     setLoading(false);
   };
 
-  const handleSaveWrapper = (savedAlert: SavedAlert) => {
-    if (!onSaveAlert) return;
+  const handleSaveWrapper = async (savedAlert: SavedAlert) => {
+    if (!onSaveAlert || !user) return;
 
     // Convert SavedAlert to Alert for compatibility
     const alert: Alert = {
@@ -156,7 +164,18 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
       sent: false // Defaults
     };
 
+    // Call the parent handler to save to history
     onSaveAlert(alert);
+
+    // Mark the alert as moved to history in saved_alerts table
+    const result = await markAlertAsMovedToHistory(savedAlert.id, user.email);
+
+    if (result.success) {
+      // Reload alerts to show updated state
+      await loadAlerts();
+    } else {
+      console.error('Failed to mark alert as moved:', result.error);
+    }
   };
 
   const handleCopyWrapper = (savedAlert: SavedAlert) => {
@@ -310,6 +329,17 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
             <option value="low">ℹ️ Bajas</option>
           </select>
 
+          {/* Filtro Movidas a Historial */}
+          <select
+            value={movedFilter}
+            onChange={(e) => setMovedFilter(e.target.value as any)}
+            className="px-2 py-1.5 text-xs border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-sky-500"
+          >
+            <option value="NOT_MOVED">🆕 Sin mover</option>
+            <option value="ALL">📂 Todas</option>
+            <option value="MOVED">✅ En Historial</option>
+          </select>
+
           {/* Fecha Inicio */}
           <div className="flex items-center gap-1">
             <span className="text-xs text-slate-600">Desde:</span>
@@ -380,24 +410,33 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {pagination.paginatedData.map((alert, index) => (
+              {pagination.paginatedData.map((alert, index) => {
+                const isMovedToHistory = alert.moved_to_history;
+                return (
                 <tr
                   key={alert.id}
-                  className={`${index % 2 === 0 ? 'bg-white' : 'bg-slate-50'} hover:bg-blue-50 transition-colors`}
+                  className={`${index % 2 === 0 ? 'bg-white' : 'bg-slate-50'} ${isMovedToHistory ? 'opacity-60 bg-green-50/30' : ''} hover:bg-blue-50 transition-colors`}
                 >
                   {/* Acciones */}
                   <td className="px-2 py-1.5 text-center whitespace-nowrap bg-gray-50/50">
                     <div className="flex items-center justify-center gap-1">
                       {onSaveAlert && (
-                        <button
-                          onClick={() => handleSaveWrapper(alert)}
-                          className="p-1.5 rounded text-white bg-green-600 hover:bg-green-700 transition-colors shadow-sm"
-                          title="Mover a Historial (Seguimiento)"
-                        >
-                          <Save className="w-3.5 h-3.5" />
-                        </button>
+                        isMovedToHistory ? (
+                          <div className="px-2 py-1 bg-green-100 text-green-800 rounded border border-green-300 flex items-center gap-1">
+                            <FolderCheck className="w-3 h-3" />
+                            <span className="text-[9px] font-bold">En Historial</span>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => handleSaveWrapper(alert)}
+                            className="p-1.5 rounded text-white bg-green-600 hover:bg-green-700 transition-colors shadow-sm"
+                            title="Mover a Historial (Seguimiento)"
+                          >
+                            <Save className="w-3.5 h-3.5" />
+                          </button>
+                        )
                       )}
-                      {onCopyAlert && (
+                      {onCopyAlert && !isMovedToHistory && (
                         <button
                           onClick={() => handleCopyWrapper(alert)}
                           className="p-1.5 rounded text-white bg-sky-500 hover:bg-sky-600 transition-colors shadow-sm"
@@ -489,7 +528,8 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
                     </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
 
