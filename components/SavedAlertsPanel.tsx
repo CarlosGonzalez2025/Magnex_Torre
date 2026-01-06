@@ -145,6 +145,20 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
   const handleSaveWrapper = async (savedAlert: SavedAlert) => {
     if (!onSaveAlert || !user) return;
 
+    // 🚀 ACTUALIZACIÓN OPTIMISTA: Actualizar UI inmediatamente
+    setAlerts(prevAlerts =>
+      prevAlerts.map(alert =>
+        alert.id === savedAlert.id
+          ? {
+              ...alert,
+              moved_to_history: true,
+              moved_at: new Date().toISOString(),
+              moved_by: user.email
+            }
+          : alert
+      )
+    );
+
     // Convert SavedAlert to Alert for compatibility
     const alert: Alert = {
       id: savedAlert.alert_id, // Use the original Alert ID
@@ -167,15 +181,26 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
     // Call the parent handler to save to history
     onSaveAlert(alert);
 
-    // Mark the alert as moved to history in saved_alerts table
-    const result = await markAlertAsMovedToHistory(savedAlert.id, user.email);
+    // 🔄 Actualizar BD en segundo plano (sin bloquear la UI)
+    markAlertAsMovedToHistory(savedAlert.id, user.email).then(result => {
+      if (!result.success) {
+        console.error('Failed to mark alert as moved:', result.error);
 
-    if (result.success) {
-      // Reload alerts to show updated state
-      await loadAlerts();
-    } else {
-      console.error('Failed to mark alert as moved:', result.error);
-    }
+        // ⚠️ ROLLBACK: Si falla, revertir el cambio visual
+        setAlerts(prevAlerts =>
+          prevAlerts.map(alert =>
+            alert.id === savedAlert.id
+              ? {
+                  ...alert,
+                  moved_to_history: false,
+                  moved_at: undefined,
+                  moved_by: undefined
+                }
+              : alert
+          )
+        );
+      }
+    });
   };
 
   const handleCopyWrapper = (savedAlert: SavedAlert) => {
