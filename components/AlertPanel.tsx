@@ -49,6 +49,19 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
     }
   };
 
+  const getPlatformBadge = (source: string) => {
+    const isColtrack = source === 'COLTRACK';
+    return (
+      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
+        isColtrack
+          ? 'bg-purple-100 text-purple-800 border border-purple-300'
+          : 'bg-teal-100 text-teal-800 border border-teal-300'
+      }`}>
+        {source}
+      </span>
+    );
+  };
+
   const filteredAlerts = alerts.filter(alert => {
     if (selectedSeverity !== 'ALL' && alert.severity !== selectedSeverity) return false;
     if (selectedType !== 'ALL' && alert.type !== selectedType) return false;
@@ -84,6 +97,7 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
       filteredAlerts,
       [
         { header: 'Tipo', key: 'type', width: 20 },
+        { header: 'Plataforma GPS', key: 'source', width: 15 },
         { header: 'Placa', key: 'plate', width: 12 },
         { header: 'Contrato', key: 'contract', width: 15 },
         { header: 'Severidad', key: 'severity', width: 12 },
@@ -174,6 +188,7 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
               <tr>
                 <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Acciones</th>
                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Tipo</th>
+                <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Plataforma</th>
                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Placa/Contrato</th>
                 <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Severidad</th>
                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Detalles</th>
@@ -231,6 +246,11 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
                       {getSeverityIcon(alert.severity)}
                       <span className="font-semibold text-slate-900">{alert.type}</span>
                     </div>
+                  </td>
+
+                  {/* Plataforma GPS */}
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
+                    {getPlatformBadge(alert.source)}
                   </td>
 
                   {/* Placa/Contrato */}
