@@ -23,6 +23,7 @@ import { UserGuideButton } from './components/UserGuide';
 import { Login } from './components/Login';
 import { Sidebar, TabType } from './components/Sidebar';
 import { FleetManagement } from './components/FleetManagement';
+import { AlertSeverityConfig } from './components/AlertSeverityConfig';
 import { fetchFleetData, FleetResponse } from './services/fleetService';
 import { detectAlerts, saveAlertsToStorage, getAlertsFromStorage, getUnsavedAlerts, markAlertAsSent, markAlertAsSaved, cleanOldAlerts, processVehiclesForIdleDetection } from './services/alertService';
 import { saveAlertToDatabase, autoSaveAlert } from './services/databaseService';
@@ -377,7 +378,8 @@ export default function App() {
                                       activeTab === 'drivers' ? 'Gestión de Conductores' :
                                         activeTab === 'geofences' ? 'Editor de Geocercas' :
                                           activeTab === 'users' ? 'Gestión de Usuarios' :
-                                            activeTab === 'maintenance' ? 'Mantenimiento' : 'Magnex'}
+                                            activeTab === 'maintenance' ? 'Mantenimiento' :
+                                              activeTab === 'alert-config' ? 'Configuración de Alertas' : 'Magnex'}
                 </h2>
                 <div className="ml-4 opacity-80 scale-90 origin-left">
                   {getStatusBadge()}
@@ -582,6 +584,7 @@ export default function App() {
               {activeTab === 'users' && <UserManagement />}
               {activeTab === 'maintenance' && <MaintenancePanel />}
               {activeTab === 'fleet' && <FleetManagement vehicles={vehicles} />}
+              {activeTab === 'alert-config' && <AlertSeverityConfig />}
             </div>
           </div>
         </main>
