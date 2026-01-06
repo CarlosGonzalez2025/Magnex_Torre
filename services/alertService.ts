@@ -1,5 +1,6 @@
 import { Vehicle, Alert, AlertType, AlertSeverity, ApiSource } from '../types';
 import { saveIdleTimeRecord, saveIgnitionEvent } from './towerControlService';
+import { getAlertSeverityMap } from './alertSeverityConfigService';
 
 // Configuración de umbrales
 const ALERT_THRESHOLDS = {
@@ -7,6 +8,38 @@ const ALERT_THRESHOLDS = {
   IDLE_TIME_MINUTES: 10,
   LOW_FUEL: 15, // porcentaje
 };
+
+// 📋 Mapa de configuración de severidad (se carga desde Supabase)
+let severityConfigMap: Map<string, AlertSeverity> = new Map();
+
+// 🔄 Cargar configuración de severidad desde Supabase
+let configLoaded = false;
+async function loadSeverityConfig() {
+  if (!configLoaded) {
+    severityConfigMap = await getAlertSeverityMap();
+    configLoaded = true;
+    console.log(`✅ Configuración de severidad cargada (${severityConfigMap.size} tipos)`);
+  }
+}
+
+// Inicializar configuración al cargar el módulo
+loadSeverityConfig();
+
+/**
+ * Obtener severidad configurada para un tipo de alerta
+ * Si no hay configuración, usa el valor por defecto
+ */
+function getSeverityForType(alertType: AlertType, defaultSeverity: AlertSeverity): AlertSeverity {
+  // Buscar en la configuración
+  const configuredSeverity = severityConfigMap.get(alertType);
+  if (configuredSeverity) {
+    return configuredSeverity;
+  }
+
+  // Si no está configurado, usar el default
+  console.warn(`⚠️ Sin configuración de severidad para: ${alertType}, usando default: ${defaultSeverity}`);
+  return defaultSeverity;
+}
 
 // =====================================================
 // VEHICLE STATE TRACKING FOR IDLE DETECTION
@@ -49,12 +82,12 @@ export function detectAlerts(vehicle: Vehicle): Alert[] {
   const alerts: Alert[] = [];
   const eventUpper = (vehicle.event || '').toUpperCase();
 
-  // 1. EXCESO DE VELOCIDAD (≥80 km/h) - CRÍTICO
+  // 1. EXCESO DE VELOCIDAD (≥80 km/h) - Severidad configurable
   if (vehicle.speed >= ALERT_THRESHOLDS.SPEED_LIMIT) {
     alerts.push(createAlert(
       vehicle,
       AlertType.SPEED_VIOLATION,
-      AlertSeverity.CRITICAL,
+      getSeverityForType(AlertType.SPEED_VIOLATION, AlertSeverity.CRITICAL),
       `Velocidad: ${vehicle.speed} km/h (Límite: ${ALERT_THRESHOLDS.SPEED_LIMIT} km/h)`
     ));
   }
@@ -69,7 +102,7 @@ export function detectAlerts(vehicle: Vehicle): Alert[] {
     alerts.push(createAlert(
       vehicle,
       AlertType.PANIC_BUTTON,
-      AlertSeverity.CRITICAL,
+      getSeverityForType(AlertType.PANIC_BUTTON, AlertSeverity.CRITICAL),
       'Botón de pánico activado - Requiere atención inmediata'
     ));
   }
@@ -83,7 +116,7 @@ export function detectAlerts(vehicle: Vehicle): Alert[] {
     alerts.push(createAlert(
       vehicle,
       AlertType.HARSH_BRAKING,
-      AlertSeverity.MEDIUM,
+      getSeverityForType(AlertType.HARSH_BRAKING, AlertSeverity.HIGH),
       'Frenada brusca detectada'
     ));
   }
@@ -97,7 +130,7 @@ export function detectAlerts(vehicle: Vehicle): Alert[] {
     alerts.push(createAlert(
       vehicle,
       AlertType.HARSH_ACCELERATION,
-      AlertSeverity.MEDIUM,
+      getSeverityForType(AlertType.HARSH_ACCELERATION, AlertSeverity.HIGH),
       'Aceleración brusca detectada'
     ));
   }
@@ -110,10 +143,11 @@ export function detectAlerts(vehicle: Vehicle): Alert[] {
     eventUpper.includes('FUERA DE ZONA')
   ) {
     const isExit = eventUpper.includes('SALIDA') || eventUpper.includes('EXIT') || eventUpper.includes('FUERA');
+    const alertType = isExit ? AlertType.GEOFENCE_EXIT : AlertType.GEOFENCE_ENTRY;
     alerts.push(createAlert(
       vehicle,
-      isExit ? AlertType.GEOFENCE_EXIT : AlertType.GEOFENCE_ENTRY,
-      AlertSeverity.HIGH,
+      alertType,
+      getSeverityForType(alertType, isExit ? AlertSeverity.HIGH : AlertSeverity.MEDIUM),
       `Vehículo ${isExit ? 'salió de' : 'entró a'} zona permitida`
     ));
   }
@@ -127,7 +161,7 @@ export function detectAlerts(vehicle: Vehicle): Alert[] {
     alerts.push(createAlert(
       vehicle,
       AlertType.BATTERY_DISCONNECT,
-      AlertSeverity.CRITICAL,
+      getSeverityForType(AlertType.BATTERY_DISCONNECT, AlertSeverity.CRITICAL),
       'Batería desconectada - Posible manipulación'
     ));
   }
@@ -141,7 +175,7 @@ export function detectAlerts(vehicle: Vehicle): Alert[] {
     alerts.push(createAlert(
       vehicle,
       AlertType.IDLE_EXCESSIVE,
-      AlertSeverity.LOW,
+      getSeverityForType(AlertType.IDLE_EXCESSIVE, AlertSeverity.MEDIUM),
       'Ralentí excesivo detectado'
     ));
   }
@@ -151,7 +185,7 @@ export function detectAlerts(vehicle: Vehicle): Alert[] {
     alerts.push(createAlert(
       vehicle,
       AlertType.GENERAL_ALERT,
-      AlertSeverity.MEDIUM,
+      getSeverityForType(AlertType.GENERAL_ALERT, AlertSeverity.LOW),
       vehicle.event || 'Infracción detectada'
     ));
   }
@@ -164,7 +198,7 @@ export function detectAlerts(vehicle: Vehicle): Alert[] {
         alerts.push(createAlert(
           vehicle,
           AlertType.GENERAL_ALERT,
-          AlertSeverity.MEDIUM,
+          getSeverityForType(AlertType.GENERAL_ALERT, AlertSeverity.LOW),
           vehicle.event || 'Exceso detectado'
         ));
       }
@@ -173,7 +207,7 @@ export function detectAlerts(vehicle: Vehicle): Alert[] {
       alerts.push(createAlert(
         vehicle,
         AlertType.GENERAL_ALERT,
-        AlertSeverity.HIGH,
+        getSeverityForType(AlertType.GENERAL_ALERT, AlertSeverity.LOW),
         vehicle.event || 'Alerta general'
       ));
     }

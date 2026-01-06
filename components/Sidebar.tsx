@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
-export type TabType = 'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'users' | 'maintenance' | 'fleet';
+export type TabType = 'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'users' | 'maintenance' | 'fleet' | 'alert-config';
 
 interface SidebarProps {
     activeTab: TabType;
@@ -92,6 +92,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         items: [
             { id: 'users', label: 'Usuarios', icon: UserIcon },
             { id: 'analytics', label: 'Análisis', icon: BarChart3 },
+            { id: 'alert-config', label: 'Config. Alertas', icon: Settings },
         ]
     } : null;
 
