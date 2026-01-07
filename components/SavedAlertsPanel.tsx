@@ -18,12 +18,6 @@ interface SavedAlertsPanelProps {
   onCopyAlert?: (alert: Alert) => void;
 }
 
-// 💾 Cache constants
-const CACHE_KEY = 'saved_alerts_cache';
-const CACHE_TIMESTAMP_KEY = 'saved_alerts_cache_timestamp';
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minutos
-const MAX_CACHE_ITEMS = 1000; // Máximo de alertas a guardar en caché
-
 export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, onSaveAlert, onCopyAlert }) => {
   const [alerts, setAlerts] = useState<SavedAlert[]>([]);
   const [loading, setLoading] = useState(true);
@@ -125,10 +119,8 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
     );
   };
 
-  const loadAlerts = useCallback(async (silentRefresh = false) => {
-    if (!silentRefresh) {
-      setLoading(true);
-    }
+  const loadAlerts = useCallback(async () => {
+    setLoading(true);
 
     const filters: any = {};
 
@@ -141,23 +133,7 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
 
     if (result.success && result.data) {
       setAlerts(result.data);
-
-      // 💾 Guardar solo las más recientes en caché (máximo MAX_CACHE_ITEMS)
-      const recentAlerts = result.data.slice(0, MAX_CACHE_ITEMS);
-      try {
-        localStorage.setItem(CACHE_KEY, JSON.stringify(recentAlerts));
-        localStorage.setItem(CACHE_TIMESTAMP_KEY, Date.now().toString());
-        console.log(`💾 ${recentAlerts.length} alertas guardadas en caché (de ${result.data.length} totales)`);
-      } catch (error: any) {
-        console.error('Error guardando en caché (quota excedida?):', error);
-        // Si falla, limpiar el caché
-        localStorage.removeItem(CACHE_KEY);
-        localStorage.removeItem(CACHE_TIMESTAMP_KEY);
-      }
-
-      if (silentRefresh) {
-        console.log('✅ Alertas actualizadas en segundo plano');
-      }
+      console.log(`✅ ${result.data.length} alertas cargadas desde servidor`);
     } else {
       console.error('Error loading auto-saved alerts:', result.error);
     }
@@ -166,37 +142,24 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
   }, [statusFilter, severityFilter]);
 
   useEffect(() => {
-    // 🚀 Intentar cargar del caché primero
-    const cachedData = localStorage.getItem(CACHE_KEY);
-    const cacheTimestamp = localStorage.getItem(CACHE_TIMESTAMP_KEY);
-    const now = Date.now();
-
-    if (cachedData && cacheTimestamp) {
-      const cacheAge = now - parseInt(cacheTimestamp);
-
-      if (cacheAge < CACHE_DURATION) {
-        // ✅ Caché válido: Mostrar inmediatamente
-        console.log('📦 Cargando alertas desde caché (sin espera)');
-        setAlerts(JSON.parse(cachedData));
-        setLoading(false);
-
-        // 🔄 Actualizar en segundo plano (sin loading)
-        loadAlerts(true);
-        return;
-      }
+    // 🧹 Limpiar caché antiguo si existe (evitar errors de quota)
+    try {
+      localStorage.removeItem('saved_alerts_cache');
+      localStorage.removeItem('saved_alerts_cache_timestamp');
+    } catch (error) {
+      console.error('Error limpiando caché:', error);
     }
 
-    // ⚠️ Sin caché o caché expirado: Carga normal con loading
-    console.log('🌐 Cargando alertas desde servidor (primera vez)');
-    loadAlerts(false);
+    // 🌐 Cargar alertas desde servidor
+    loadAlerts();
   }, [loadAlerts]);
 
   const handleSaveWrapper = async (savedAlert: SavedAlert) => {
     if (!onSaveAlert || !user) return;
 
     // 🚀 ACTUALIZACIÓN OPTIMISTA: Actualizar UI inmediatamente
-    setAlerts(prevAlerts => {
-      const updatedAlerts = prevAlerts.map(alert =>
+    setAlerts(prevAlerts =>
+      prevAlerts.map(alert =>
         alert.id === savedAlert.id
           ? {
               ...alert,
@@ -205,19 +168,8 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
               moved_by: user.email
             }
           : alert
-      );
-
-      // 💾 Actualizar caché también (solo las más recientes)
-      try {
-        const recentAlerts = updatedAlerts.slice(0, MAX_CACHE_ITEMS);
-        localStorage.setItem(CACHE_KEY, JSON.stringify(recentAlerts));
-        localStorage.setItem(CACHE_TIMESTAMP_KEY, Date.now().toString());
-      } catch (error: any) {
-        console.error('Error actualizando caché:', error);
-      }
-
-      return updatedAlerts;
-    });
+      )
+    );
 
     // Convert SavedAlert to Alert for compatibility
     const alert: Alert = {
@@ -246,9 +198,9 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
       if (!result.success) {
         console.error('Failed to mark alert as moved:', result.error);
 
-        // ⚠️ ROLLBACK: Si falla, revertir el cambio visual y caché
-        setAlerts(prevAlerts => {
-          const revertedAlerts = prevAlerts.map(alert =>
+        // ⚠️ ROLLBACK: Si falla, revertir el cambio visual
+        setAlerts(prevAlerts =>
+          prevAlerts.map(alert =>
             alert.id === savedAlert.id
               ? {
                   ...alert,
@@ -257,19 +209,8 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
                   moved_by: undefined
                 }
               : alert
-          );
-
-          // 💾 Actualizar caché con el rollback (solo las más recientes)
-          try {
-            const recentAlerts = revertedAlerts.slice(0, MAX_CACHE_ITEMS);
-            localStorage.setItem(CACHE_KEY, JSON.stringify(recentAlerts));
-            localStorage.setItem(CACHE_TIMESTAMP_KEY, Date.now().toString());
-          } catch (error: any) {
-            console.error('Error actualizando caché en rollback:', error);
-          }
-
-          return revertedAlerts;
-        });
+          )
+        );
       }
     });
   };
