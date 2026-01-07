@@ -22,6 +22,7 @@ interface SavedAlertsPanelProps {
 const CACHE_KEY = 'saved_alerts_cache';
 const CACHE_TIMESTAMP_KEY = 'saved_alerts_cache_timestamp';
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutos
+const MAX_CACHE_ITEMS = 1000; // Máximo de alertas a guardar en caché
 
 export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, onSaveAlert, onCopyAlert }) => {
   const [alerts, setAlerts] = useState<SavedAlert[]>([]);
@@ -141,9 +142,18 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
     if (result.success && result.data) {
       setAlerts(result.data);
 
-      // 💾 Guardar en caché para próxima visita
-      localStorage.setItem(CACHE_KEY, JSON.stringify(result.data));
-      localStorage.setItem(CACHE_TIMESTAMP_KEY, Date.now().toString());
+      // 💾 Guardar solo las más recientes en caché (máximo MAX_CACHE_ITEMS)
+      const recentAlerts = result.data.slice(0, MAX_CACHE_ITEMS);
+      try {
+        localStorage.setItem(CACHE_KEY, JSON.stringify(recentAlerts));
+        localStorage.setItem(CACHE_TIMESTAMP_KEY, Date.now().toString());
+        console.log(`💾 ${recentAlerts.length} alertas guardadas en caché (de ${result.data.length} totales)`);
+      } catch (error: any) {
+        console.error('Error guardando en caché (quota excedida?):', error);
+        // Si falla, limpiar el caché
+        localStorage.removeItem(CACHE_KEY);
+        localStorage.removeItem(CACHE_TIMESTAMP_KEY);
+      }
 
       if (silentRefresh) {
         console.log('✅ Alertas actualizadas en segundo plano');
@@ -197,9 +207,14 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
           : alert
       );
 
-      // 💾 Actualizar caché también
-      localStorage.setItem(CACHE_KEY, JSON.stringify(updatedAlerts));
-      localStorage.setItem(CACHE_TIMESTAMP_KEY, Date.now().toString());
+      // 💾 Actualizar caché también (solo las más recientes)
+      try {
+        const recentAlerts = updatedAlerts.slice(0, MAX_CACHE_ITEMS);
+        localStorage.setItem(CACHE_KEY, JSON.stringify(recentAlerts));
+        localStorage.setItem(CACHE_TIMESTAMP_KEY, Date.now().toString());
+      } catch (error: any) {
+        console.error('Error actualizando caché:', error);
+      }
 
       return updatedAlerts;
     });
@@ -244,9 +259,14 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
               : alert
           );
 
-          // 💾 Actualizar caché con el rollback
-          localStorage.setItem(CACHE_KEY, JSON.stringify(revertedAlerts));
-          localStorage.setItem(CACHE_TIMESTAMP_KEY, Date.now().toString());
+          // 💾 Actualizar caché con el rollback (solo las más recientes)
+          try {
+            const recentAlerts = revertedAlerts.slice(0, MAX_CACHE_ITEMS);
+            localStorage.setItem(CACHE_KEY, JSON.stringify(recentAlerts));
+            localStorage.setItem(CACHE_TIMESTAMP_KEY, Date.now().toString());
+          } catch (error: any) {
+            console.error('Error actualizando caché en rollback:', error);
+          }
 
           return revertedAlerts;
         });
