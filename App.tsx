@@ -9,6 +9,7 @@ import FleetMap from './components/FleetMap';
 import { AlertPanel } from './components/AlertPanel';
 import { AlertHistory } from './components/AlertHistory';
 import { HistorialAnalytics } from './components/HistorialAnalytics';
+import { RouteInvestigation } from './components/RouteInvestigation';
 import { SavedAlertsPanel } from './components/SavedAlertsPanel';
 import { Analytics } from './components/Analytics';
 import { Inspections } from './components/Inspections';
@@ -374,7 +375,8 @@ export default function App() {
                             activeTab === 'history' ? 'Historial de Eventos' :
                               activeTab === 'saved' ? 'Alertas Guardadas' :
                                 activeTab === 'history-analytics' ? 'Análisis de Gestión' :
-                                  activeTab === 'analytics' ? 'Análisis y Métricas' :
+                                  activeTab === 'route-investigation' ? 'Investigación de Rutas' :
+                                    activeTab === 'analytics' ? 'Análisis y Métricas' :
                                   activeTab === 'inspections' ? 'Inspecciones' :
                                     activeTab === 'schedules' ? 'Cronogramas' :
                                       activeTab === 'drivers' ? 'Gestión de Conductores' :
@@ -572,6 +574,7 @@ export default function App() {
 
               {activeTab === 'history' && <AlertHistory />}
               {activeTab === 'history-analytics' && <HistorialAnalytics />}
+              {activeTab === 'route-investigation' && <RouteInvestigation />}
               {activeTab === 'saved' && (
                 <SavedAlertsPanel
                   onRefresh={fetchData}
