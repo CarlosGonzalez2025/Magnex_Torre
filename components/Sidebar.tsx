@@ -21,11 +21,12 @@ import {
     AlertTriangle,
     Wrench,
     Shield,
-    Truck
+    Truck,
+    TrendingUp
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
-export type TabType = 'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'users' | 'maintenance' | 'fleet' | 'alert-config';
+export type TabType = 'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'history-analytics' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'users' | 'maintenance' | 'fleet' | 'alert-config';
 
 interface SidebarProps {
     activeTab: TabType;
@@ -68,6 +69,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 { id: 'alerts', label: 'Centro de Alertas', icon: Bell, badge: criticalAlertsCount },
                 { id: 'history', label: 'Historial', icon: History },
                 { id: 'saved', label: 'Auto-Guardadas', icon: Database },
+                { id: 'history-analytics', label: 'Análisis de Gestión', icon: TrendingUp },
             ]
         },
         {
