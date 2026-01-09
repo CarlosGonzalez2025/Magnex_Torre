@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { AlertTriangle, AlertCircle, Bell, BellRing, CheckCircle, Clock, MapPin, User, Gauge, FileText, Plus, Trash2, Edit, X, FileDown, Search, Calendar, History, ShieldAlert } from 'lucide-react';
+import { AlertTriangle, AlertCircle, Bell, BellRing, CheckCircle, Clock, MapPin, User, Gauge, FileText, Plus, Trash2, Edit, X, FileDown, Search, Calendar, History, ShieldAlert, Upload, Paperclip, Eye, Download as DownloadIcon } from 'lucide-react';
 import {
   getAllSavedAlerts,
   getFilteredAlerts,
@@ -9,8 +9,14 @@ import {
   updateActionPlan,
   deleteActionPlan,
   SavedAlertWithPlans,
-  ActionPlan
+  ActionPlan,
+  FileAttachment
 } from '../services/databaseService';
+import {
+  uploadMultipleFiles,
+  formatFileSize,
+  getFileIcon
+} from '../services/fileStorageService';
 import { usePagination } from '../hooks/usePagination';
 import { PaginationControls } from './PaginationControls';
 import { useExportToExcel } from '../hooks/useExportToExcel';
@@ -44,6 +50,9 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
     status: 'pending' as const,
     observations: ''
   });
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
 
   // Filtrado adicional del lado del cliente (búsqueda y fechas)
   const filteredAndSearchedAlerts = alerts.filter(alert => {
@@ -185,6 +194,18 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
       status: 'pending',
       observations: ''
     });
+    setSelectedFiles([]);
+    setIsUploading(false);
+    setUploadProgress({ current: 0, total: 0 });
+  };
+
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    setSelectedFiles(prev => [...prev, ...files]);
+  };
+
+  const handleRemoveFile = (index: number) => {
+    setSelectedFiles(prev => prev.filter((_, i) => i !== index));
   };
 
   const handleAddActionPlan = async () => {
@@ -193,18 +214,54 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
       return;
     }
 
-    const result = await addActionPlan(selectedAlert.id, newActionPlan);
-    if (result.success) {
-      setNewActionPlan({
-        description: '',
-        responsible: '',
-        status: 'pending',
-        observations: ''
-      });
-      loadAlerts();
-      alert('✅ Plan de acción agregado correctamente');
-    } else {
-      alert('❌ Error al agregar plan de acción: ' + result.error);
+    setIsUploading(true);
+    let attachments: FileAttachment[] = [];
+
+    try {
+      // Subir archivos si hay alguno seleccionado
+      if (selectedFiles.length > 0) {
+        const uploadResult = await uploadMultipleFiles(
+          selectedFiles,
+          selectedAlert.id,
+          (current, total) => setUploadProgress({ current, total })
+        );
+
+        if (uploadResult.errors && uploadResult.errors.length > 0) {
+          alert(`⚠️ Algunos archivos no se pudieron subir:\n${uploadResult.errors.join('\n')}`);
+        }
+
+        if (uploadResult.data) {
+          attachments = uploadResult.data;
+        }
+      }
+
+      // Agregar plan de acción con archivos adjuntos
+      const planWithAttachments = {
+        ...newActionPlan,
+        attachments
+      };
+
+      const result = await addActionPlan(selectedAlert.id, planWithAttachments, user?.email || 'Usuario');
+
+      if (result.success) {
+        setNewActionPlan({
+          description: '',
+          responsible: '',
+          status: 'pending',
+          observations: ''
+        });
+        setSelectedFiles([]);
+        loadAlerts();
+        alert(`✅ Plan de acción agregado correctamente${attachments.length > 0 ? ` con ${attachments.length} archivo(s)` : ''}`);
+      } else {
+        alert('❌ Error al agregar plan de acción: ' + result.error);
+      }
+    } catch (error: any) {
+      console.error('Error al agregar plan:', error);
+      alert('❌ Error al agregar plan de acción: ' + error.message);
+    } finally {
+      setIsUploading(false);
+      setUploadProgress({ current: 0, total: 0 });
     }
   };
 
@@ -626,16 +683,111 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
                 />
               </div>
 
+              {/* Campo de Archivos Adjuntos */}
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  <div className="flex items-center gap-2">
+                    <Paperclip className="w-4 h-4" />
+                    Archivos de Evidencia
+                  </div>
+                  <span className="text-xs font-normal text-slate-500">
+                    Imágenes, PDFs, Excel, Word, etc. (Máx. 10 MB por archivo)
+                  </span>
+                </label>
+
+                {/* Input de archivo (oculto) */}
+                <input
+                  type="file"
+                  id="file-upload"
+                  multiple
+                  accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar"
+                  onChange={handleFileSelect}
+                  className="hidden"
+                  disabled={isUploading}
+                />
+
+                {/* Botón de selección */}
+                <label
+                  htmlFor="file-upload"
+                  className={`flex items-center justify-center gap-2 w-full px-4 py-3 border-2 border-dashed rounded-lg cursor-pointer transition-all ${
+                    isUploading
+                      ? 'border-slate-200 bg-slate-50 cursor-not-allowed'
+                      : 'border-slate-300 hover:border-sky-500 hover:bg-sky-50'
+                  }`}
+                >
+                  <Upload className="w-5 h-5 text-slate-600" />
+                  <span className="text-sm font-medium text-slate-700">
+                    {isUploading ? 'Subiendo archivos...' : 'Seleccionar archivos'}
+                  </span>
+                </label>
+
+                {/* Progress bar durante subida */}
+                {isUploading && uploadProgress.total > 0 && (
+                  <div className="mt-2">
+                    <div className="flex justify-between text-xs text-slate-600 mb-1">
+                      <span>Subiendo archivos...</span>
+                      <span>{uploadProgress.current} / {uploadProgress.total}</span>
+                    </div>
+                    <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                      <div
+                        className="bg-sky-600 h-full transition-all duration-300"
+                        style={{ width: `${(uploadProgress.current / uploadProgress.total) * 100}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Lista de archivos seleccionados */}
+                {selectedFiles.length > 0 && !isUploading && (
+                  <div className="mt-3 space-y-2">
+                    <p className="text-xs font-semibold text-slate-700">
+                      {selectedFiles.length} archivo(s) seleccionado(s):
+                    </p>
+                    {selectedFiles.map((file, index) => (
+                      <div
+                        key={index}
+                        className="flex items-center justify-between p-2 bg-slate-50 border border-slate-200 rounded-lg"
+                      >
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          <span className="text-lg">{getFileIcon(file.type)}</span>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-medium text-slate-800 truncate">
+                              {file.name}
+                            </p>
+                            <p className="text-xs text-slate-500">
+                              {formatFileSize(file.size)}
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleRemoveFile(index)}
+                          className="p-1 hover:bg-red-100 rounded text-red-600 transition-colors"
+                          title="Eliminar archivo"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               <div className="flex gap-3 pt-4">
                 <button
                   onClick={handleAddActionPlan}
-                  className="flex-1 px-4 py-2 bg-sky-600 text-white rounded-lg font-medium hover:bg-sky-700 transition-colors"
+                  disabled={isUploading}
+                  className={`flex-1 px-4 py-2 bg-sky-600 text-white rounded-lg font-medium transition-colors ${
+                    isUploading
+                      ? 'opacity-50 cursor-not-allowed'
+                      : 'hover:bg-sky-700'
+                  }`}
                 >
-                  Guardar Plan de Acción
+                  {isUploading ? 'Subiendo...' : 'Guardar Plan de Acción'}
                 </button>
                 <button
                   onClick={() => setShowActionModal(false)}
-                  className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg font-medium hover:bg-slate-300 transition-colors"
+                  disabled={isUploading}
+                  className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg font-medium hover:bg-slate-300 transition-colors disabled:opacity-50"
                 >
                   Cancelar
                 </button>
@@ -649,7 +801,7 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
                 <div className="space-y-2">
                   {selectedAlert.action_plans.map((plan) => (
                     <div key={plan.id} className="bg-white p-3 rounded-lg border border-slate-200 text-sm">
-                      <div className="flex justify-between items-start">
+                      <div className="flex justify-between items-start mb-2">
                         <div className="flex-1">
                           <p className="font-medium text-slate-800">{plan.description}</p>
                           <p className="text-xs text-slate-600 mt-1">Responsable: {plan.responsible}</p>
@@ -665,6 +817,38 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
                             plan.status === 'in_progress' ? 'En Proceso' : 'Pendiente'}
                         </span>
                       </div>
+
+                      {/* Archivos adjuntos */}
+                      {plan.attachments && plan.attachments.length > 0 && (
+                        <div className="mt-3 pt-3 border-t border-slate-200">
+                          <p className="text-xs font-semibold text-slate-700 mb-2 flex items-center gap-1">
+                            <Paperclip className="w-3 h-3" />
+                            {plan.attachments.length} archivo(s) adjunto(s):
+                          </p>
+                          <div className="space-y-1.5">
+                            {plan.attachments.map((file, fileIndex) => (
+                              <a
+                                key={fileIndex}
+                                href={file.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-2 p-2 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded transition-colors group"
+                              >
+                                <span className="text-base">{getFileIcon(file.type)}</span>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-xs font-medium text-slate-800 truncate group-hover:text-sky-600">
+                                    {file.name}
+                                  </p>
+                                  <p className="text-xs text-slate-500">
+                                    {formatFileSize(file.size)} • {new Date(file.uploaded_at).toLocaleDateString('es-CO')}
+                                  </p>
+                                </div>
+                                <DownloadIcon className="w-4 h-4 text-slate-400 group-hover:text-sky-600 flex-shrink-0" />
+                              </a>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>

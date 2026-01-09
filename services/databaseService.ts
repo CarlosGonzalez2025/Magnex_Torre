@@ -28,6 +28,14 @@ export interface SavedAlert {
   moved_by?: string;
 }
 
+export interface FileAttachment {
+  name: string;
+  url: string;
+  type: string;
+  size: number;
+  uploaded_at: string;
+}
+
 export interface ActionPlan {
   id: string;
   alert_history_id: string;
@@ -35,6 +43,7 @@ export interface ActionPlan {
   responsible: string;
   status: 'pending' | 'in_progress' | 'completed';
   observations?: string;
+  attachments?: FileAttachment[];
   created_at: string;
   updated_at: string;
   created_by: string;
@@ -467,6 +476,7 @@ export async function addActionPlan(
     responsible: string;
     status?: 'pending' | 'in_progress' | 'completed';
     observations?: string;
+    attachments?: FileAttachment[];
   },
   createdBy: string = 'Usuario'
 ): Promise<{ success: boolean; data?: ActionPlan; error?: string }> {
@@ -477,6 +487,7 @@ export async function addActionPlan(
       responsible: plan.responsible,
       status: plan.status || 'pending',
       observations: plan.observations || null,
+      attachments: plan.attachments || [],
       created_by: createdBy
     };
 
