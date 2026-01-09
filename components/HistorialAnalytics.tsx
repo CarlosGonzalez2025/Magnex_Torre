@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   BarChart3,
   TrendingUp,
@@ -34,13 +34,16 @@ interface AnalyticsData {
   topVehicles: Array<{ plate: string; count: number }>;
   topDrivers: Array<{ driver: string; count: number }>;
   alertsByType: Array<{ type: string; count: number }>;
-  dailyStats: Array<{ date: string; count: number }>;
+  dailyStats: Array<{ date: string; count: number; dateObj: Date }>;
 }
+
+type DateRangeType = 'today' | 'week' | 'month' | 'custom';
 
 export const HistorialAnalytics: React.FC = () => {
   const [alerts, setAlerts] = useState<SavedAlertWithPlans[]>([]);
   const [loading, setLoading] = useState(true);
-  const [dateRange, setDateRange] = useState<'today' | 'week' | 'month' | 'custom'>('today');
+  const [error, setError] = useState<string | null>(null);
+  const [dateRange, setDateRange] = useState<DateRangeType>('today');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const { exportToExcel } = useExportToExcel();
@@ -51,12 +54,28 @@ export const HistorialAnalytics: React.FC = () => {
 
   const loadData = async () => {
     setLoading(true);
-    const result = await getAllSavedAlerts();
-    if (result.success && result.data) {
-      setAlerts(result.data);
+    setError(null);
+    try {
+      const result = await getAllSavedAlerts();
+      if (result.success && result.data) {
+        setAlerts(result.data);
+      } else {
+        setError('No se pudieron cargar las alertas');
+      }
+    } catch (err) {
+      setError('Error al cargar los datos: ' + (err instanceof Error ? err.message : 'Error desconocido'));
+      console.error('Error loading alerts:', err);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
+
+  // Validar rango de fechas personalizado
+  const isValidCustomRange = useMemo(() => {
+    if (dateRange !== 'custom') return true;
+    if (!startDate || !endDate) return false;
+    return new Date(startDate) <= new Date(endDate);
+  }, [dateRange, startDate, endDate]);
 
   // Filtrar alertas según el rango de fecha seleccionado
   const filteredAlerts = useMemo(() => {
@@ -79,7 +98,7 @@ export const HistorialAnalytics: React.FC = () => {
         filterStartDate.setHours(0, 0, 0, 0);
         break;
       case 'custom':
-        if (!startDate || !endDate) return alerts;
+        if (!startDate || !endDate || !isValidCustomRange) return [];
         filterStartDate = new Date(startDate);
         filterStartDate.setHours(0, 0, 0, 0);
         filterEndDate = new Date(endDate);
@@ -93,10 +112,12 @@ export const HistorialAnalytics: React.FC = () => {
       const alertDate = new Date(alert.timestamp);
       return alertDate >= filterStartDate && alertDate <= filterEndDate;
     });
-  }, [alerts, dateRange, startDate, endDate]);
+  }, [alerts, dateRange, startDate, endDate, isValidCustomRange]);
 
   // Calcular estadísticas
   const analytics: AnalyticsData = useMemo(() => {
+    const totalAlerts = filteredAlerts.length;
+
     // Conteo por severidad
     const criticalAlerts = filteredAlerts.filter(a => a.severity === 'critical').length;
     const highAlerts = filteredAlerts.filter(a => a.severity === 'high').length;
@@ -109,13 +130,16 @@ export const HistorialAnalytics: React.FC = () => {
     const resolvedAlerts = filteredAlerts.filter(a => a.status === 'resolved').length;
 
     // Tiempo promedio de resolución (solo alertas resueltas)
+    // NOTA: Esto asume que existe un campo resolved_at. Si no existe, ajustar según tu modelo de datos
     const resolvedAlertsData = filteredAlerts.filter(a => a.status === 'resolved');
     let averageResolutionTime = 0;
     if (resolvedAlertsData.length > 0) {
       const totalTime = resolvedAlertsData.reduce((sum, alert) => {
-        const created = new Date(alert.saved_at).getTime();
-        const resolved = new Date(alert.timestamp).getTime();
-        return sum + Math.abs(resolved - created);
+        // Usar resolved_at si existe, de lo contrario usar timestamp
+        const created = new Date(alert.saved_at || alert.timestamp).getTime();
+        const resolved = new Date((alert as any).resolved_at || alert.timestamp).getTime();
+        const timeDiff = Math.abs(resolved - created);
+        return sum + timeDiff;
       }, 0);
       averageResolutionTime = totalTime / resolvedAlertsData.length / (1000 * 60 * 60); // En horas
     }
@@ -123,7 +147,9 @@ export const HistorialAnalytics: React.FC = () => {
     // Top 5 vehículos
     const vehicleCounts = new Map<string, number>();
     filteredAlerts.forEach(alert => {
-      vehicleCounts.set(alert.plate, (vehicleCounts.get(alert.plate) || 0) + 1);
+      if (alert.plate) {
+        vehicleCounts.set(alert.plate, (vehicleCounts.get(alert.plate) || 0) + 1);
+      }
     });
     const topVehicles = Array.from(vehicleCounts.entries())
       .map(([plate, count]) => ({ plate, count }))
@@ -133,7 +159,9 @@ export const HistorialAnalytics: React.FC = () => {
     // Top 5 conductores
     const driverCounts = new Map<string, number>();
     filteredAlerts.forEach(alert => {
-      driverCounts.set(alert.driver, (driverCounts.get(alert.driver) || 0) + 1);
+      if (alert.driver) {
+        driverCounts.set(alert.driver, (driverCounts.get(alert.driver) || 0) + 1);
+      }
     });
     const topDrivers = Array.from(driverCounts.entries())
       .map(([driver, count]) => ({ driver, count }))
@@ -143,28 +171,41 @@ export const HistorialAnalytics: React.FC = () => {
     // Alertas por tipo
     const typeCounts = new Map<string, number>();
     filteredAlerts.forEach(alert => {
-      typeCounts.set(alert.type, (typeCounts.get(alert.type) || 0) + 1);
+      if (alert.type) {
+        typeCounts.set(alert.type, (typeCounts.get(alert.type) || 0) + 1);
+      }
     });
     const alertsByType = Array.from(typeCounts.entries())
       .map(([type, count]) => ({ type, count }))
       .sort((a, b) => b.count - a.count);
 
-    // Estadísticas diarias (últimos 7 días del rango)
-    const dailyStats: Array<{ date: string; count: number }> = [];
+    // Estadísticas diarias - optimizado
+    const dailyStats: Array<{ date: string; count: number; dateObj: Date }> = [];
     const daysToShow = dateRange === 'today' ? 1 : 7;
+    
+    // Agrupar alertas por fecha primero (más eficiente)
+    const alertsByDate = new Map<string, number>();
+    filteredAlerts.forEach(alert => {
+      const alertDate = new Date(alert.timestamp);
+      const dateKey = alertDate.toDateString();
+      alertsByDate.set(dateKey, (alertsByDate.get(dateKey) || 0) + 1);
+    });
+
+    // Construir estadísticas diarias
     for (let i = daysToShow - 1; i >= 0; i--) {
       const date = new Date();
       date.setDate(date.getDate() - i);
+      date.setHours(0, 0, 0, 0);
+      
+      const dateKey = date.toDateString();
+      const count = alertsByDate.get(dateKey) || 0;
       const dateStr = date.toLocaleDateString('es-CO', { day: '2-digit', month: 'short' });
-      const count = filteredAlerts.filter(alert => {
-        const alertDate = new Date(alert.timestamp);
-        return alertDate.toDateString() === date.toDateString();
-      }).length;
-      dailyStats.push({ date: dateStr, count });
+      
+      dailyStats.push({ date: dateStr, count, dateObj: date });
     }
 
     return {
-      totalAlerts: filteredAlerts.length,
+      totalAlerts,
       criticalAlerts,
       highAlerts,
       mediumAlerts,
@@ -180,17 +221,39 @@ export const HistorialAnalytics: React.FC = () => {
     };
   }, [filteredAlerts, dateRange]);
 
-  // Calcular porcentajes
-  const resolutionRate = analytics.totalAlerts > 0
-    ? ((analytics.resolvedAlerts / analytics.totalAlerts) * 100).toFixed(1)
-    : '0';
+  // Función auxiliar para calcular porcentajes de forma segura
+  const calculatePercentage = useCallback((value: number, total: number): string => {
+    if (total === 0) return '0.0';
+    return ((value / total) * 100).toFixed(1);
+  }, []);
 
-  const criticalRate = analytics.totalAlerts > 0
-    ? ((analytics.criticalAlerts / analytics.totalAlerts) * 100).toFixed(1)
-    : '0';
+  // Calcular porcentajes con seguridad
+  const resolutionRate = calculatePercentage(analytics.resolvedAlerts, analytics.totalAlerts);
+  const criticalRate = calculatePercentage(analytics.criticalAlerts, analytics.totalAlerts);
+
+  // Obtener etiqueta del rango de fechas
+  const getRangeDateLabel = useCallback((): string => {
+    switch (dateRange) {
+      case 'today':
+        return `Hoy ${new Date().toLocaleDateString('es-CO')}`;
+      case 'week':
+        return 'Últimos 7 días';
+      case 'month':
+        return 'Últimos 30 días';
+      case 'custom':
+        if (startDate && endDate) {
+          return `${new Date(startDate).toLocaleDateString('es-CO')} a ${new Date(endDate).toLocaleDateString('es-CO')}`;
+        }
+        return 'Rango personalizado';
+      default:
+        return '';
+    }
+  }, [dateRange, startDate, endDate]);
 
   // Exportar informe completo a Excel
-  const handleExportReport = () => {
+  const handleExportReport = useCallback(() => {
+    const { totalAlerts } = analytics;
+    
     const reportData = [
       // Encabezado del informe
       {
@@ -227,19 +290,59 @@ export const HistorialAnalytics: React.FC = () => {
 
       // Resumen ejecutivo
       { section: '📊 RESUMEN EJECUTIVO', value1: '', value2: '', value3: '' },
-      { section: 'Total de Alertas', value1: analytics.totalAlerts, value2: '', value3: '' },
-      { section: 'Alertas Pendientes', value1: analytics.pendingAlerts, value2: `${((analytics.pendingAlerts / analytics.totalAlerts) * 100).toFixed(1)}%`, value3: '' },
-      { section: 'Alertas En Proceso', value1: analytics.inProgressAlerts, value2: `${((analytics.inProgressAlerts / analytics.totalAlerts) * 100).toFixed(1)}%`, value3: '' },
-      { section: 'Alertas Resueltas', value1: analytics.resolvedAlerts, value2: `${resolutionRate}%`, value3: '' },
-      { section: 'Tiempo Promedio de Resolución', value1: `${analytics.averageResolutionTime.toFixed(1)} horas`, value2: '', value3: '' },
+      { section: 'Total de Alertas', value1: totalAlerts, value2: '', value3: '' },
+      { 
+        section: 'Alertas Pendientes', 
+        value1: analytics.pendingAlerts, 
+        value2: `${calculatePercentage(analytics.pendingAlerts, totalAlerts)}%`, 
+        value3: '' 
+      },
+      { 
+        section: 'Alertas En Proceso', 
+        value1: analytics.inProgressAlerts, 
+        value2: `${calculatePercentage(analytics.inProgressAlerts, totalAlerts)}%`, 
+        value3: '' 
+      },
+      { 
+        section: 'Alertas Resueltas', 
+        value1: analytics.resolvedAlerts, 
+        value2: `${resolutionRate}%`, 
+        value3: '' 
+      },
+      { 
+        section: 'Tiempo Promedio de Resolución', 
+        value1: `${analytics.averageResolutionTime.toFixed(1)} horas`, 
+        value2: '', 
+        value3: '' 
+      },
       { section: '', value1: '', value2: '', value3: '' },
 
       // Distribución por severidad
       { section: '🚨 DISTRIBUCIÓN POR SEVERIDAD', value1: '', value2: '', value3: '' },
-      { section: 'Críticas', value1: analytics.criticalAlerts, value2: `${criticalRate}%`, value3: '⚠️ Requieren atención inmediata' },
-      { section: 'Altas', value1: analytics.highAlerts, value2: `${((analytics.highAlerts / analytics.totalAlerts) * 100).toFixed(1)}%`, value3: '' },
-      { section: 'Medias', value1: analytics.mediumAlerts, value2: `${((analytics.mediumAlerts / analytics.totalAlerts) * 100).toFixed(1)}%`, value3: '' },
-      { section: 'Bajas', value1: analytics.lowAlerts, value2: `${((analytics.lowAlerts / analytics.totalAlerts) * 100).toFixed(1)}%`, value3: '' },
+      { 
+        section: 'Críticas', 
+        value1: analytics.criticalAlerts, 
+        value2: `${criticalRate}%`, 
+        value3: analytics.criticalAlerts > 0 ? '⚠️ Requieren atención inmediata' : ''
+      },
+      { 
+        section: 'Altas', 
+        value1: analytics.highAlerts, 
+        value2: `${calculatePercentage(analytics.highAlerts, totalAlerts)}%`, 
+        value3: '' 
+      },
+      { 
+        section: 'Medias', 
+        value1: analytics.mediumAlerts, 
+        value2: `${calculatePercentage(analytics.mediumAlerts, totalAlerts)}%`, 
+        value3: '' 
+      },
+      { 
+        section: 'Bajas', 
+        value1: analytics.lowAlerts, 
+        value2: `${calculatePercentage(analytics.lowAlerts, totalAlerts)}%`, 
+        value3: '' 
+      },
       { section: '', value1: '', value2: '', value3: '' },
 
       // Top 5 vehículos
@@ -247,8 +350,8 @@ export const HistorialAnalytics: React.FC = () => {
       ...analytics.topVehicles.map((v, i) => ({
         section: `${i + 1}. ${v.plate}`,
         value1: v.count,
-        value2: `${((v.count / analytics.totalAlerts) * 100).toFixed(1)}%`,
-        value3: '⚠️ Requiere revisión'
+        value2: `${calculatePercentage(v.count, totalAlerts)}%`,
+        value3: v.count >= 5 ? '⚠️ Requiere revisión' : ''
       })),
       { section: '', value1: '', value2: '', value3: '' },
 
@@ -257,8 +360,8 @@ export const HistorialAnalytics: React.FC = () => {
       ...analytics.topDrivers.map((d, i) => ({
         section: `${i + 1}. ${d.driver}`,
         value1: d.count,
-        value2: `${((d.count / analytics.totalAlerts) * 100).toFixed(1)}%`,
-        value3: '⚠️ Capacitación recomendada'
+        value2: `${calculatePercentage(d.count, totalAlerts)}%`,
+        value3: d.count >= 5 ? '⚠️ Capacitación recomendada' : ''
       })),
       { section: '', value1: '', value2: '', value3: '' },
 
@@ -267,7 +370,7 @@ export const HistorialAnalytics: React.FC = () => {
       ...analytics.alertsByType.map(t => ({
         section: t.type,
         value1: t.count,
-        value2: `${((t.count / analytics.totalAlerts) * 100).toFixed(1)}%`,
+        value2: `${calculatePercentage(t.count, totalAlerts)}%`,
         value3: ''
       })),
       { section: '', value1: '', value2: '', value3: '' },
@@ -277,10 +380,12 @@ export const HistorialAnalytics: React.FC = () => {
       ...analytics.dailyStats.map(d => ({
         section: d.date,
         value1: d.count,
-        value2: '',
+        value2: d.count > 0 ? `${calculatePercentage(d.count, totalAlerts)}%` : '',
         value3: ''
       }))
     ];
+
+    const fileName = `Informe_Gestion_${getRangeDateLabel().replace(/\s/g, '_').replace(/\//g, '-')}_${new Date().toLocaleDateString('es-CO').replace(/\//g, '-')}`;
 
     exportToExcel(
       reportData,
@@ -290,30 +395,57 @@ export const HistorialAnalytics: React.FC = () => {
         { header: 'Porcentaje', key: 'value2', width: 15 },
         { header: 'Observaciones', key: 'value3', width: 30 }
       ],
-      `Informe_Gestion_${getRangeDateLabel().replace(/\s/g, '_')}_${new Date().toLocaleDateString('es-CO').replace(/\//g, '-')}`
+      fileName
     );
-  };
+  }, [analytics, calculatePercentage, resolutionRate, criticalRate, getRangeDateLabel, exportToExcel]);
 
-  const getRangeDateLabel = () => {
-    switch (dateRange) {
-      case 'today':
-        return `Hoy ${new Date().toLocaleDateString('es-CO')}`;
-      case 'week':
-        return 'Últimos 7 días';
-      case 'month':
-        return 'Últimos 30 días';
-      case 'custom':
-        return `${startDate} a ${endDate}`;
-      default:
-        return '';
-    }
-  };
-
+  // Renderizado de carga
   if (loading) {
     return (
-      <div className="text-center py-12">
-        <Activity className="w-12 h-12 text-blue-600 mx-auto mb-4 animate-spin" />
+      <div className="text-center py-12" role="status" aria-live="polite">
+        <Activity className="w-12 h-12 text-blue-600 mx-auto mb-4 animate-spin" aria-hidden="true" />
         <p className="text-slate-600">Cargando análisis...</p>
+      </div>
+    );
+  }
+
+  // Renderizado de error
+  if (error) {
+    return (
+      <div className="text-center py-12" role="alert">
+        <AlertCircle className="w-12 h-12 text-red-600 mx-auto mb-4" aria-hidden="true" />
+        <p className="text-red-600 font-semibold mb-2">Error al cargar datos</p>
+        <p className="text-slate-600 text-sm mb-4">{error}</p>
+        <button
+          onClick={loadData}
+          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+        >
+          Reintentar
+        </button>
+      </div>
+    );
+  }
+
+  // Mensaje de rango de fechas inválido
+  if (dateRange === 'custom' && !isValidCustomRange) {
+    return (
+      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center" role="alert">
+        <AlertTriangle className="w-10 h-10 text-yellow-600 mx-auto mb-3" aria-hidden="true" />
+        <p className="text-yellow-800 font-semibold">Rango de fechas inválido</p>
+        <p className="text-yellow-700 text-sm mt-1">
+          Por favor, selecciona fechas válidas. La fecha de inicio debe ser anterior o igual a la fecha de fin.
+        </p>
+      </div>
+    );
+  }
+
+  // Sin datos
+  if (analytics.totalAlerts === 0) {
+    return (
+      <div className="text-center py-12">
+        <BarChart3 className="w-12 h-12 text-slate-400 mx-auto mb-4" aria-hidden="true" />
+        <p className="text-slate-600">No hay alertas en el rango de fechas seleccionado</p>
+        <p className="text-slate-500 text-sm mt-2">{getRangeDateLabel()}</p>
       </div>
     );
   }
@@ -325,7 +457,7 @@ export const HistorialAnalytics: React.FC = () => {
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h2 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
-              <BarChart3 className="w-7 h-7 text-blue-600" />
+              <BarChart3 className="w-7 h-7 text-blue-600" aria-hidden="true" />
               Análisis de Gestión de Alertas
             </h2>
             <p className="text-sm text-slate-600 mt-1">
@@ -337,8 +469,9 @@ export const HistorialAnalytics: React.FC = () => {
             {/* Selector de rango */}
             <select
               value={dateRange}
-              onChange={(e) => setDateRange(e.target.value as any)}
+              onChange={(e) => setDateRange(e.target.value as DateRangeType)}
               className="px-4 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+              aria-label="Seleccionar rango de fechas"
             >
               <option value="today">Hoy</option>
               <option value="week">Últimos 7 días</option>
@@ -352,22 +485,28 @@ export const HistorialAnalytics: React.FC = () => {
                   type="date"
                   value={startDate}
                   onChange={(e) => setStartDate(e.target.value)}
+                  max={endDate || undefined}
                   className="px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  aria-label="Fecha de inicio"
                 />
                 <input
                   type="date"
                   value={endDate}
                   onChange={(e) => setEndDate(e.target.value)}
+                  min={startDate || undefined}
                   className="px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  aria-label="Fecha de fin"
                 />
               </>
             )}
 
             <button
               onClick={handleExportReport}
-              className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium shadow-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={analytics.totalAlerts === 0}
+              aria-label="Exportar informe a Excel"
             >
-              <FileDown className="w-4 h-4" />
+              <FileDown className="w-4 h-4" aria-hidden="true" />
               Exportar Informe
             </button>
           </div>
@@ -381,9 +520,11 @@ export const HistorialAnalytics: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-blue-100 text-sm font-medium">Total Alertas</p>
-              <p className="text-3xl font-bold mt-2">{analytics.totalAlerts}</p>
+              <p className="text-3xl font-bold mt-2" aria-label={`${analytics.totalAlerts} alertas totales`}>
+                {analytics.totalAlerts}
+              </p>
             </div>
-            <Activity className="w-12 h-12 text-blue-200 opacity-80" />
+            <Activity className="w-12 h-12 text-blue-200 opacity-80" aria-hidden="true" />
           </div>
         </div>
 
@@ -392,10 +533,12 @@ export const HistorialAnalytics: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-red-100 text-sm font-medium">Críticas</p>
-              <p className="text-3xl font-bold mt-2">{analytics.criticalAlerts}</p>
+              <p className="text-3xl font-bold mt-2" aria-label={`${analytics.criticalAlerts} alertas críticas`}>
+                {analytics.criticalAlerts}
+              </p>
               <p className="text-red-100 text-xs mt-1">{criticalRate}% del total</p>
             </div>
-            <AlertCircle className="w-12 h-12 text-red-200 opacity-80" />
+            <AlertCircle className="w-12 h-12 text-red-200 opacity-80" aria-hidden="true" />
           </div>
         </div>
 
@@ -404,10 +547,12 @@ export const HistorialAnalytics: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-green-100 text-sm font-medium">Resueltas</p>
-              <p className="text-3xl font-bold mt-2">{analytics.resolvedAlerts}</p>
+              <p className="text-3xl font-bold mt-2" aria-label={`${analytics.resolvedAlerts} alertas resueltas`}>
+                {analytics.resolvedAlerts}
+              </p>
               <p className="text-green-100 text-xs mt-1">{resolutionRate}% del total</p>
             </div>
-            <CheckCircle className="w-12 h-12 text-green-200 opacity-80" />
+            <CheckCircle className="w-12 h-12 text-green-200 opacity-80" aria-hidden="true" />
           </div>
         </div>
 
@@ -416,10 +561,12 @@ export const HistorialAnalytics: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-orange-100 text-sm font-medium">Tiempo Promedio</p>
-              <p className="text-3xl font-bold mt-2">{analytics.averageResolutionTime.toFixed(1)}</p>
+              <p className="text-3xl font-bold mt-2" aria-label={`${analytics.averageResolutionTime.toFixed(1)} horas promedio`}>
+                {analytics.averageResolutionTime.toFixed(1)}
+              </p>
               <p className="text-orange-100 text-xs mt-1">horas de resolución</p>
             </div>
-            <Timer className="w-12 h-12 text-orange-200 opacity-80" />
+            <Timer className="w-12 h-12 text-orange-200 opacity-80" aria-hidden="true" />
           </div>
         </div>
       </div>
@@ -428,48 +575,48 @@ export const HistorialAnalytics: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
           <div className="flex items-center gap-3 mb-4">
-            <Clock className="w-5 h-5 text-yellow-600" />
+            <Clock className="w-5 h-5 text-yellow-600" aria-hidden="true" />
             <h3 className="font-bold text-slate-900">Pendientes</h3>
           </div>
           <p className="text-4xl font-bold text-yellow-600">{analytics.pendingAlerts}</p>
-          <div className="mt-3 h-2 bg-slate-100 rounded-full overflow-hidden">
+          <div className="mt-3 h-2 bg-slate-100 rounded-full overflow-hidden" role="progressbar" aria-valuenow={analytics.pendingAlerts} aria-valuemin={0} aria-valuemax={analytics.totalAlerts}>
             <div
-              className="h-full bg-yellow-500 rounded-full"
-              style={{ width: `${(analytics.pendingAlerts / analytics.totalAlerts) * 100}%` }}
+              className="h-full bg-yellow-500 rounded-full transition-all duration-300"
+              style={{ width: `${calculatePercentage(analytics.pendingAlerts, analytics.totalAlerts)}%` }}
             />
           </div>
           <p className="text-xs text-slate-500 mt-2">
-            {((analytics.pendingAlerts / analytics.totalAlerts) * 100).toFixed(1)}% del total
+            {calculatePercentage(analytics.pendingAlerts, analytics.totalAlerts)}% del total
           </p>
         </div>
 
         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
           <div className="flex items-center gap-3 mb-4">
-            <TrendingUp className="w-5 h-5 text-blue-600" />
+            <TrendingUp className="w-5 h-5 text-blue-600" aria-hidden="true" />
             <h3 className="font-bold text-slate-900">En Proceso</h3>
           </div>
           <p className="text-4xl font-bold text-blue-600">{analytics.inProgressAlerts}</p>
-          <div className="mt-3 h-2 bg-slate-100 rounded-full overflow-hidden">
+          <div className="mt-3 h-2 bg-slate-100 rounded-full overflow-hidden" role="progressbar" aria-valuenow={analytics.inProgressAlerts} aria-valuemin={0} aria-valuemax={analytics.totalAlerts}>
             <div
-              className="h-full bg-blue-500 rounded-full"
-              style={{ width: `${(analytics.inProgressAlerts / analytics.totalAlerts) * 100}%` }}
+              className="h-full bg-blue-500 rounded-full transition-all duration-300"
+              style={{ width: `${calculatePercentage(analytics.inProgressAlerts, analytics.totalAlerts)}%` }}
             />
           </div>
           <p className="text-xs text-slate-500 mt-2">
-            {((analytics.inProgressAlerts / analytics.totalAlerts) * 100).toFixed(1)}% del total
+            {calculatePercentage(analytics.inProgressAlerts, analytics.totalAlerts)}% del total
           </p>
         </div>
 
         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
           <div className="flex items-center gap-3 mb-4">
-            <Award className="w-5 h-5 text-green-600" />
+            <Award className="w-5 h-5 text-green-600" aria-hidden="true" />
             <h3 className="font-bold text-slate-900">Resueltas</h3>
           </div>
           <p className="text-4xl font-bold text-green-600">{analytics.resolvedAlerts}</p>
-          <div className="mt-3 h-2 bg-slate-100 rounded-full overflow-hidden">
+          <div className="mt-3 h-2 bg-slate-100 rounded-full overflow-hidden" role="progressbar" aria-valuenow={analytics.resolvedAlerts} aria-valuemin={0} aria-valuemax={analytics.totalAlerts}>
             <div
-              className="h-full bg-green-500 rounded-full"
-              style={{ width: `${(analytics.resolvedAlerts / analytics.totalAlerts) * 100}%` }}
+              className="h-full bg-green-500 rounded-full transition-all duration-300"
+              style={{ width: `${resolutionRate}%` }}
             />
           </div>
           <p className="text-xs text-slate-500 mt-2">
@@ -481,17 +628,17 @@ export const HistorialAnalytics: React.FC = () => {
       {/* Distribución por Severidad */}
       <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
         <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
-          <AlertTriangle className="w-5 h-5 text-orange-600" />
+          <AlertTriangle className="w-5 h-5 text-orange-600" aria-hidden="true" />
           Distribución por Severidad
         </h3>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
             <p className="text-sm font-semibold text-red-900">Críticas</p>
             <p className="text-3xl font-bold text-red-600 mt-2">{analytics.criticalAlerts}</p>
-            <div className="mt-2 h-1.5 bg-red-100 rounded-full overflow-hidden">
+            <div className="mt-2 h-1.5 bg-red-100 rounded-full overflow-hidden" role="progressbar">
               <div
-                className="h-full bg-red-500 rounded-full"
-                style={{ width: `${(analytics.criticalAlerts / analytics.totalAlerts) * 100}%` }}
+                className="h-full bg-red-500 rounded-full transition-all duration-300"
+                style={{ width: `${calculatePercentage(analytics.criticalAlerts, analytics.totalAlerts)}%` }}
               />
             </div>
           </div>
@@ -499,10 +646,10 @@ export const HistorialAnalytics: React.FC = () => {
           <div className="p-4 bg-orange-50 border border-orange-200 rounded-lg">
             <p className="text-sm font-semibold text-orange-900">Altas</p>
             <p className="text-3xl font-bold text-orange-600 mt-2">{analytics.highAlerts}</p>
-            <div className="mt-2 h-1.5 bg-orange-100 rounded-full overflow-hidden">
+            <div className="mt-2 h-1.5 bg-orange-100 rounded-full overflow-hidden" role="progressbar">
               <div
-                className="h-full bg-orange-500 rounded-full"
-                style={{ width: `${(analytics.highAlerts / analytics.totalAlerts) * 100}%` }}
+                className="h-full bg-orange-500 rounded-full transition-all duration-300"
+                style={{ width: `${calculatePercentage(analytics.highAlerts, analytics.totalAlerts)}%` }}
               />
             </div>
           </div>
@@ -510,10 +657,10 @@ export const HistorialAnalytics: React.FC = () => {
           <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
             <p className="text-sm font-semibold text-yellow-900">Medias</p>
             <p className="text-3xl font-bold text-yellow-600 mt-2">{analytics.mediumAlerts}</p>
-            <div className="mt-2 h-1.5 bg-yellow-100 rounded-full overflow-hidden">
+            <div className="mt-2 h-1.5 bg-yellow-100 rounded-full overflow-hidden" role="progressbar">
               <div
-                className="h-full bg-yellow-500 rounded-full"
-                style={{ width: `${(analytics.mediumAlerts / analytics.totalAlerts) * 100}%` }}
+                className="h-full bg-yellow-500 rounded-full transition-all duration-300"
+                style={{ width: `${calculatePercentage(analytics.mediumAlerts, analytics.totalAlerts)}%` }}
               />
             </div>
           </div>
@@ -521,10 +668,10 @@ export const HistorialAnalytics: React.FC = () => {
           <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
             <p className="text-sm font-semibold text-blue-900">Bajas</p>
             <p className="text-3xl font-bold text-blue-600 mt-2">{analytics.lowAlerts}</p>
-            <div className="mt-2 h-1.5 bg-blue-100 rounded-full overflow-hidden">
+            <div className="mt-2 h-1.5 bg-blue-100 rounded-full overflow-hidden" role="progressbar">
               <div
-                className="h-full bg-blue-500 rounded-full"
-                style={{ width: `${(analytics.lowAlerts / analytics.totalAlerts) * 100}%` }}
+                className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                style={{ width: `${calculatePercentage(analytics.lowAlerts, analytics.totalAlerts)}%` }}
               />
             </div>
           </div>
@@ -536,34 +683,37 @@ export const HistorialAnalytics: React.FC = () => {
         {/* Top 5 Vehículos */}
         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
           <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
-            <Car className="w-5 h-5 text-blue-600" />
+            <Car className="w-5 h-5 text-blue-600" aria-hidden="true" />
             Top 5 Vehículos con Más Alertas
           </h3>
           <div className="space-y-3">
             {analytics.topVehicles.length > 0 ? (
               analytics.topVehicles.map((vehicle, index) => (
                 <div key={vehicle.plate} className="flex items-center gap-3">
-                  <div className={`flex items-center justify-center w-8 h-8 rounded-full font-bold text-white ${
-                    index === 0 ? 'bg-yellow-500' :
-                    index === 1 ? 'bg-slate-400' :
-                    index === 2 ? 'bg-orange-600' :
-                    'bg-slate-300'
-                  }`}>
+                  <div 
+                    className={`flex items-center justify-center w-8 h-8 rounded-full font-bold text-white flex-shrink-0 ${
+                      index === 0 ? 'bg-yellow-500' :
+                      index === 1 ? 'bg-slate-400' :
+                      index === 2 ? 'bg-orange-600' :
+                      'bg-slate-300'
+                    }`}
+                    aria-label={`Posición ${index + 1}`}
+                  >
                     {index + 1}
                   </div>
-                  <div className="flex-1">
-                    <p className="font-semibold text-slate-900">{vehicle.plate}</p>
-                    <div className="mt-1 h-2 bg-slate-100 rounded-full overflow-hidden">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-slate-900 truncate">{vehicle.plate}</p>
+                    <div className="mt-1 h-2 bg-slate-100 rounded-full overflow-hidden" role="progressbar">
                       <div
-                        className="h-full bg-blue-500 rounded-full"
-                        style={{ width: `${(vehicle.count / analytics.totalAlerts) * 100}%` }}
+                        className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                        style={{ width: `${calculatePercentage(vehicle.count, analytics.totalAlerts)}%` }}
                       />
                     </div>
                   </div>
-                  <div className="text-right">
+                  <div className="text-right flex-shrink-0">
                     <p className="text-lg font-bold text-slate-900">{vehicle.count}</p>
                     <p className="text-xs text-slate-500">
-                      {((vehicle.count / analytics.totalAlerts) * 100).toFixed(1)}%
+                      {calculatePercentage(vehicle.count, analytics.totalAlerts)}%
                     </p>
                   </div>
                 </div>
@@ -577,34 +727,39 @@ export const HistorialAnalytics: React.FC = () => {
         {/* Top 5 Conductores */}
         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
           <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
-            <Users className="w-5 h-5 text-purple-600" />
+            <Users className="w-5 h-5 text-purple-600" aria-hidden="true" />
             Top 5 Conductores con Más Alertas
           </h3>
           <div className="space-y-3">
             {analytics.topDrivers.length > 0 ? (
               analytics.topDrivers.map((driver, index) => (
-                <div key={driver.driver} className="flex items-center gap-3">
-                  <div className={`flex items-center justify-center w-8 h-8 rounded-full font-bold text-white ${
-                    index === 0 ? 'bg-yellow-500' :
-                    index === 1 ? 'bg-slate-400' :
-                    index === 2 ? 'bg-orange-600' :
-                    'bg-slate-300'
-                  }`}>
+                <div key={`${driver.driver}-${index}`} className="flex items-center gap-3">
+                  <div 
+                    className={`flex items-center justify-center w-8 h-8 rounded-full font-bold text-white flex-shrink-0 ${
+                      index === 0 ? 'bg-yellow-500' :
+                      index === 1 ? 'bg-slate-400' :
+                      index === 2 ? 'bg-orange-600' :
+                      'bg-slate-300'
+                    }`}
+                    aria-label={`Posición ${index + 1}`}
+                  >
                     {index + 1}
                   </div>
-                  <div className="flex-1">
-                    <p className="font-semibold text-slate-900 truncate">{driver.driver}</p>
-                    <div className="mt-1 h-2 bg-slate-100 rounded-full overflow-hidden">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-slate-900 truncate" title={driver.driver}>
+                      {driver.driver}
+                    </p>
+                    <div className="mt-1 h-2 bg-slate-100 rounded-full overflow-hidden" role="progressbar">
                       <div
-                        className="h-full bg-purple-500 rounded-full"
-                        style={{ width: `${(driver.count / analytics.totalAlerts) * 100}%` }}
+                        className="h-full bg-purple-500 rounded-full transition-all duration-300"
+                        style={{ width: `${calculatePercentage(driver.count, analytics.totalAlerts)}%` }}
                       />
                     </div>
                   </div>
-                  <div className="text-right">
+                  <div className="text-right flex-shrink-0">
                     <p className="text-lg font-bold text-slate-900">{driver.count}</p>
                     <p className="text-xs text-slate-500">
-                      {((driver.count / analytics.totalAlerts) * 100).toFixed(1)}%
+                      {calculatePercentage(driver.count, analytics.totalAlerts)}%
                     </p>
                   </div>
                 </div>
@@ -619,47 +774,54 @@ export const HistorialAnalytics: React.FC = () => {
       {/* Distribución por Tipo de Alerta */}
       <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
         <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
-          <Target className="w-5 h-5 text-green-600" />
+          <Target className="w-5 h-5 text-green-600" aria-hidden="true" />
           Distribución por Tipo de Alerta
         </h3>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          {analytics.alertsByType.map((type, index) => (
-            <div key={type.type} className="p-4 bg-slate-50 border border-slate-200 rounded-lg">
-              <div className="flex items-center justify-between">
-                <p className="text-sm font-semibold text-slate-900 truncate flex-1">{type.type}</p>
-                <p className="text-lg font-bold text-slate-900 ml-2">{type.count}</p>
+          {analytics.alertsByType.length > 0 ? (
+            analytics.alertsByType.map((type, index) => (
+              <div key={`${type.type}-${index}`} className="p-4 bg-slate-50 border border-slate-200 rounded-lg hover:shadow-md transition-shadow">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-semibold text-slate-900 truncate flex-1" title={type.type}>
+                    {type.type}
+                  </p>
+                  <p className="text-lg font-bold text-slate-900 ml-2">{type.count}</p>
+                </div>
+                <div className="mt-2 h-1.5 bg-slate-200 rounded-full overflow-hidden" role="progressbar">
+                  <div
+                    className="h-full bg-green-500 rounded-full transition-all duration-300"
+                    style={{ width: `${calculatePercentage(type.count, analytics.totalAlerts)}%` }}
+                  />
+                </div>
+                <p className="text-xs text-slate-500 mt-1">
+                  {calculatePercentage(type.count, analytics.totalAlerts)}% del total
+                </p>
               </div>
-              <div className="mt-2 h-1.5 bg-slate-200 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-green-500 rounded-full"
-                  style={{ width: `${(type.count / analytics.totalAlerts) * 100}%` }}
-                />
-              </div>
-              <p className="text-xs text-slate-500 mt-1">
-                {((type.count / analytics.totalAlerts) * 100).toFixed(1)}% del total
-              </p>
-            </div>
-          ))}
+            ))
+          ) : (
+            <p className="col-span-full text-center text-slate-400 py-4">No hay datos de tipos de alertas</p>
+          )}
         </div>
       </div>
 
       {/* Tendencia Diaria */}
       <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
         <h3 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
-          <Calendar className="w-5 h-5 text-blue-600" />
+          <Calendar className="w-5 h-5 text-blue-600" aria-hidden="true" />
           Tendencia Diaria
         </h3>
-        <div className="flex items-end justify-between gap-2 h-48">
+        <div className="flex items-end justify-between gap-2 h-48" role="img" aria-label="Gráfico de barras de tendencia diaria de alertas">
           {analytics.dailyStats.map((day, index) => {
-            const maxCount = Math.max(...analytics.dailyStats.map(d => d.count));
-            const height = maxCount > 0 ? (day.count / maxCount) * 100 : 0;
+            const maxCount = Math.max(...analytics.dailyStats.map(d => d.count), 1);
+            const height = (day.count / maxCount) * 100;
             return (
-              <div key={index} className="flex-1 flex flex-col items-center gap-2">
+              <div key={`${day.date}-${index}`} className="flex-1 flex flex-col items-center gap-2">
                 <div className="relative w-full flex items-end justify-center" style={{ height: '160px' }}>
                   <div
-                    className="w-full bg-gradient-to-t from-blue-500 to-blue-400 rounded-t-lg transition-all duration-300 hover:from-blue-600 hover:to-blue-500 cursor-pointer"
-                    style={{ height: `${height}%`, minHeight: day.count > 0 ? '4px' : '0' }}
-                    title={`${day.date}: ${day.count} alertas`}
+                    className="w-full bg-gradient-to-t from-blue-500 to-blue-400 rounded-t-lg transition-all duration-300 hover:from-blue-600 hover:to-blue-500 cursor-pointer shadow-sm"
+                    style={{ height: `${height}%`, minHeight: day.count > 0 ? '8px' : '0' }}
+                    title={`${day.date}: ${day.count} alerta${day.count !== 1 ? 's' : ''}`}
+                    role="presentation"
                   >
                     {day.count > 0 && (
                       <div className="text-center text-white font-bold text-xs pt-1">
