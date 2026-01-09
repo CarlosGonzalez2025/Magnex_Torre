@@ -2,7 +2,7 @@ import React from 'react';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import { Icon } from 'leaflet';
 import { Vehicle, ApiSource } from '../types';
-import { Navigation, Clock, Fuel, User } from 'lucide-react';
+import { Navigation, Clock, Fuel, User, MapPin, Gauge, Calendar, Radio, Info } from 'lucide-react';
 
 // Custom icons based on API source
 // Note: We use the URLs directly. Leaflet CSS is loaded in index.html
@@ -44,38 +44,111 @@ const FleetMap: React.FC<FleetMapProps> = ({ vehicles }) => {
             position={[vehicle.latitude, vehicle.longitude]}
             icon={vehicle.source === ApiSource.FAGOR ? fagorIcon : coltrackIcon}
           >
-            <Popup>
-              <div className="p-1 min-w-[200px]">
-                <div className="border-b pb-2 mb-2">
-                  <div className="flex justify-between items-center">
-                    <h3 className="font-bold text-lg text-slate-800">{vehicle.plate}</h3>
-                    <span className={`text-xs px-2 py-0.5 rounded-full text-white ${vehicle.source === ApiSource.FAGOR ? 'bg-blue-500' : 'bg-green-500'}`}>
+            <Popup maxWidth={350} className="vehicle-popup">
+              <div className="p-2 min-w-[300px]">
+                {/* Header con placa y fuente */}
+                <div className="border-b-2 border-slate-200 pb-3 mb-3">
+                  <div className="flex justify-between items-start mb-2">
+                    <div>
+                      <h3 className="font-bold text-xl text-slate-900">{vehicle.plate}</h3>
+                      {vehicle.contract && vehicle.contract !== 'No asignado' && (
+                        <div className="text-xs text-sky-600 font-semibold mt-1 flex items-center gap-1">
+                          <Info className="w-3 h-3" />
+                          {vehicle.contract}
+                        </div>
+                      )}
+                    </div>
+                    <span className={`text-xs px-3 py-1 rounded-full text-white font-semibold ${vehicle.source === ApiSource.FAGOR ? 'bg-blue-500' : 'bg-green-500'}`}>
+                      <Radio className="w-3 h-3 inline mr-1" />
                       {vehicle.source}
                     </span>
                   </div>
-                  {vehicle.contract && vehicle.contract !== 'No asignado' && (
-                    <div className="text-xs text-sky-600 font-semibold mt-1">
-                      {vehicle.contract}
-                    </div>
-                  )}
+
+                  {/* Estado del vehículo */}
+                  <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-bold ${
+                    vehicle.status === 'En Movimiento' ? 'bg-green-100 text-green-800' :
+                    vehicle.status === 'Detenido' ? 'bg-yellow-100 text-yellow-800' :
+                    vehicle.status === 'Apagado' ? 'bg-red-100 text-red-800' :
+                    'bg-slate-100 text-slate-800'
+                  }`}>
+                    <Navigation className="w-4 h-4" />
+                    {vehicle.status}
+                  </div>
                 </div>
 
-                <div className="space-y-2 text-sm text-slate-600">
-                  <div className="flex items-center gap-2">
-                    <User className="w-4 h-4" />
-                    <span>{vehicle.driver}</span>
+                {/* Información detallada */}
+                <div className="space-y-2.5">
+                  {/* Conductor */}
+                  <div className="flex items-start gap-2 p-2 bg-slate-50 rounded-lg">
+                    <User className="w-4 h-4 text-slate-600 mt-0.5 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-slate-500 font-medium">Conductor</p>
+                      <p className="text-sm text-slate-900 font-semibold truncate">{vehicle.driver}</p>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Navigation className="w-4 h-4" />
-                    <span>{vehicle.status} ({vehicle.speed} km/h)</span>
+
+                  {/* Velocidad */}
+                  <div className="flex items-start gap-2 p-2 bg-slate-50 rounded-lg">
+                    <Gauge className="w-4 h-4 text-slate-600 mt-0.5 flex-shrink-0" />
+                    <div className="flex-1">
+                      <p className="text-xs text-slate-500 font-medium">Velocidad Actual</p>
+                      <p className="text-sm text-slate-900 font-semibold">{vehicle.speed} km/h</p>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Fuel className="w-4 h-4" />
-                    <span>{vehicle.fuelLevel}% Combustible</span>
+
+                  {/* Combustible */}
+                  <div className="flex items-start gap-2 p-2 bg-slate-50 rounded-lg">
+                    <Fuel className="w-4 h-4 text-slate-600 mt-0.5 flex-shrink-0" />
+                    <div className="flex-1">
+                      <p className="text-xs text-slate-500 font-medium">Nivel de Combustible</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <div className="flex-1 h-2 bg-slate-200 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${
+                              vehicle.fuelLevel > 50 ? 'bg-green-500' :
+                              vehicle.fuelLevel > 20 ? 'bg-yellow-500' :
+                              'bg-red-500'
+                            }`}
+                            style={{ width: `${vehicle.fuelLevel}%` }}
+                          />
+                        </div>
+                        <span className="text-sm font-bold text-slate-900">{vehicle.fuelLevel}%</span>
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Clock className="w-4 h-4" />
-                    <span>{new Date(vehicle.lastUpdate).toLocaleTimeString()}</span>
+
+                  {/* Ubicación */}
+                  <div className="flex items-start gap-2 p-2 bg-slate-50 rounded-lg">
+                    <MapPin className="w-4 h-4 text-slate-600 mt-0.5 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-slate-500 font-medium">Coordenadas</p>
+                      <p className="text-xs text-slate-900 font-mono">
+                        {vehicle.latitude.toFixed(6)}, {vehicle.longitude.toFixed(6)}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Última actualización */}
+                  <div className="flex items-start gap-2 p-2 bg-blue-50 rounded-lg border border-blue-200">
+                    <Clock className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
+                    <div className="flex-1">
+                      <p className="text-xs text-blue-700 font-medium">Última Actualización</p>
+                      <p className="text-sm text-blue-900 font-semibold">
+                        {new Date(vehicle.lastUpdate).toLocaleString('es-CO', {
+                          day: '2-digit',
+                          month: 'short',
+                          year: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          second: '2-digit'
+                        })}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* ID del vehículo */}
+                  <div className="text-xs text-slate-400 text-center pt-2 border-t border-slate-200">
+                    ID: {vehicle.id}
                   </div>
                 </div>
               </div>

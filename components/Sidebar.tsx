@@ -22,11 +22,12 @@ import {
     Wrench,
     Shield,
     Truck,
-    TrendingUp
+    TrendingUp,
+    Route
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
-export type TabType = 'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'history-analytics' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'users' | 'maintenance' | 'fleet' | 'alert-config';
+export type TabType = 'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'history-analytics' | 'route-investigation' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'users' | 'maintenance' | 'fleet' | 'alert-config';
 
 interface SidebarProps {
     activeTab: TabType;
@@ -70,6 +71,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 { id: 'history', label: 'Historial', icon: History },
                 { id: 'saved', label: 'Auto-Guardadas', icon: Database },
                 { id: 'history-analytics', label: 'Análisis de Gestión', icon: TrendingUp },
+                { id: 'route-investigation', label: 'Investigación de Rutas', icon: Route },
             ]
         },
         {
