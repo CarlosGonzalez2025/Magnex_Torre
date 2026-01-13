@@ -94,24 +94,150 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
     pageSizeOptions: [10, 20, 50, 100]
   });
 
-  // Función para exportar a Excel
+  // Función para exportar a Excel con TODOS los datos (planes de acción, observaciones, archivos adjuntos)
   const handleExport = () => {
+    // Transformar datos para incluir planes de acción y archivos adjuntos
+    const exportData: any[] = [];
+
+    filteredAndSearchedAlerts.forEach(alert => {
+      // Si la alerta tiene planes de acción, crear una fila por cada plan
+      if (alert.action_plans && alert.action_plans.length > 0) {
+        alert.action_plans.forEach(plan => {
+          // Extraer URLs de archivos adjuntos
+          const attachmentUrls = plan.attachments && plan.attachments.length > 0
+            ? plan.attachments.map(file => `${file.name}: ${file.url}`).join(' | ')
+            : 'Sin archivos';
+
+          // Cantidad de archivos
+          const attachmentCount = plan.attachments?.length || 0;
+
+          exportData.push({
+            // Datos de la Alerta
+            tipo: alert.type,
+            placa: alert.plate,
+            contrato: alert.contract || 'N/A',
+            estado_alerta: alert.status === 'pending' ? 'Pendiente' : alert.status === 'in_progress' ? 'En Proceso' : 'Resuelto',
+            severidad: alert.severity,
+            detalles_alerta: alert.details,
+            conductor: alert.driver,
+            velocidad: alert.speed,
+            ubicacion: alert.location,
+            fecha_alerta: new Date(alert.timestamp).toLocaleString('es-CO', {
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit'
+            }),
+            guardada_el: new Date(alert.saved_at).toLocaleString('es-CO', {
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              hour: '2-digit',
+              minute: '2-digit'
+            }),
+
+            // Datos del Plan de Acción
+            plan_descripcion: plan.description,
+            plan_responsable: plan.responsible,
+            plan_estado: plan.status === 'pending' ? 'Pendiente' : plan.status === 'in_progress' ? 'En Proceso' : 'Completado',
+            plan_observaciones: plan.observations || 'Sin observaciones',
+            plan_creado_el: new Date(plan.created_at).toLocaleString('es-CO', {
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              hour: '2-digit',
+              minute: '2-digit'
+            }),
+            plan_actualizado_el: new Date(plan.updated_at).toLocaleString('es-CO', {
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              hour: '2-digit',
+              minute: '2-digit'
+            }),
+            plan_creado_por: plan.created_by,
+
+            // Datos de Archivos Adjuntos
+            cantidad_archivos: attachmentCount,
+            archivos_adjuntos: attachmentUrls
+          });
+        });
+      } else {
+        // Si no tiene planes de acción, exportar solo la alerta
+        exportData.push({
+          // Datos de la Alerta
+          tipo: alert.type,
+          placa: alert.plate,
+          contrato: alert.contract || 'N/A',
+          estado_alerta: alert.status === 'pending' ? 'Pendiente' : alert.status === 'in_progress' ? 'En Proceso' : 'Resuelto',
+          severidad: alert.severity,
+          detalles_alerta: alert.details,
+          conductor: alert.driver,
+          velocidad: alert.speed,
+          ubicacion: alert.location,
+          fecha_alerta: new Date(alert.timestamp).toLocaleString('es-CO', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+          }),
+          guardada_el: new Date(alert.saved_at).toLocaleString('es-CO', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+          }),
+
+          // Sin Plan de Acción
+          plan_descripcion: 'Sin plan de acción',
+          plan_responsable: 'N/A',
+          plan_estado: 'N/A',
+          plan_observaciones: 'N/A',
+          plan_creado_el: 'N/A',
+          plan_actualizado_el: 'N/A',
+          plan_creado_por: 'N/A',
+          cantidad_archivos: 0,
+          archivos_adjuntos: 'Sin archivos'
+        });
+      }
+    });
+
+    // Definir columnas con anchos óptimos para legibilidad
     exportToExcel(
-      filteredAndSearchedAlerts,
+      exportData,
       [
-        { header: 'Tipo', key: 'type', width: 20 },
-        { header: 'Placa', key: 'plate', width: 12 },
-        { header: 'Contrato', key: 'contract', width: 15 },
-        { header: 'Estado', key: 'status', width: 12 },
-        { header: 'Severidad', key: 'severity', width: 12 },
-        { header: 'Detalles', key: 'details', width: 40 },
-        { header: 'Conductor', key: 'driver', width: 25 },
-        { header: 'Velocidad', key: 'speed', width: 12 },
-        { header: 'Ubicación', key: 'location', width: 40 },
-        { header: 'Fecha', key: 'timestamp', width: 20 },
-        { header: 'Guardada', key: 'saved_at', width: 20 },
+        // Información de Alerta
+        { header: 'Tipo', key: 'tipo', width: 20 },
+        { header: 'Placa', key: 'placa', width: 12 },
+        { header: 'Contrato', key: 'contrato', width: 18 },
+        { header: 'Estado Alerta', key: 'estado_alerta', width: 15 },
+        { header: 'Severidad', key: 'severidad', width: 12 },
+        { header: 'Detalles Alerta', key: 'detalles_alerta', width: 45 },
+        { header: 'Conductor', key: 'conductor', width: 25 },
+        { header: 'Velocidad (km/h)', key: 'velocidad', width: 15 },
+        { header: 'Ubicación', key: 'ubicacion', width: 50 },
+        { header: 'Fecha y Hora Alerta', key: 'fecha_alerta', width: 22 },
+        { header: 'Guardada El', key: 'guardada_el', width: 20 },
+
+        // Información de Plan de Acción
+        { header: 'Plan: Descripción', key: 'plan_descripcion', width: 50 },
+        { header: 'Plan: Responsable', key: 'plan_responsable', width: 25 },
+        { header: 'Plan: Estado', key: 'plan_estado', width: 15 },
+        { header: 'Plan: Observaciones', key: 'plan_observaciones', width: 50 },
+        { header: 'Plan: Creado El', key: 'plan_creado_el', width: 20 },
+        { header: 'Plan: Actualizado El', key: 'plan_actualizado_el', width: 20 },
+        { header: 'Plan: Creado Por', key: 'plan_creado_por', width: 25 },
+
+        // Información de Archivos Adjuntos
+        { header: 'Cantidad Archivos', key: 'cantidad_archivos', width: 18 },
+        { header: 'Archivos Adjuntos (URLs)', key: 'archivos_adjuntos', width: 80 },
       ],
-      `Historial_Alertas_${new Date().toLocaleDateString('es-CO').replace(/\//g, '-')}`
+      `Historial_Completo_${new Date().toLocaleDateString('es-CO').replace(/\//g, '-')}`
     );
   };
 
