@@ -467,7 +467,65 @@ export async function deleteAlert(alertId: string): Promise<{ success: boolean; 
 // ==================== ACTION PLANS FUNCTIONS ====================
 
 /**
+ * Sincroniza el estado de una alerta basándose en el estado de TODOS sus planes de acción
+ * Lógica de negocio:
+ * - Si TODOS los planes están "completed" → Alerta pasa a "resolved"
+ * - Si al menos un plan está "in_progress" → Alerta permanece "in_progress"
+ * - Si todos están "pending" → Alerta está "in_progress" (se está gestionando)
+ * - Si no hay planes → No hace nada (mantiene estado actual)
+ */
+async function syncAlertStatusFromPlans(alertHistoryId: string): Promise<void> {
+  try {
+    // Obtener todos los planes de esta alerta
+    const { data: plans, error } = await supabase
+      .from('action_plans')
+      .select('status')
+      .eq('alert_history_id', alertHistoryId);
+
+    if (error || !plans || plans.length === 0) {
+      console.log('No hay planes para sincronizar estado');
+      return;
+    }
+
+    // Calcular estado de la alerta basándose en los planes
+    const allCompleted = plans.every(plan => plan.status === 'completed');
+    const hasInProgress = plans.some(plan => plan.status === 'in_progress');
+
+    let newAlertStatus: 'pending' | 'in_progress' | 'resolved';
+
+    if (allCompleted) {
+      // Todos los planes completados → Alerta resuelta
+      newAlertStatus = 'resolved';
+    } else if (hasInProgress) {
+      // Al menos un plan en progreso → Alerta en progreso
+      newAlertStatus = 'in_progress';
+    } else {
+      // Todos pendientes → Alerta en progreso (se está gestionando)
+      newAlertStatus = 'in_progress';
+    }
+
+    // Actualizar estado de la alerta
+    const { error: updateError } = await supabase
+      .from('alert_history')
+      .update({
+        status: newAlertStatus,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', alertHistoryId);
+
+    if (updateError) {
+      console.error('Error al sincronizar estado de alerta:', updateError);
+    } else {
+      console.log(`✅ Estado de alerta sincronizado: ${newAlertStatus} (basado en ${plans.length} planes)`);
+    }
+  } catch (error) {
+    console.error('Exception al sincronizar estado:', error);
+  }
+}
+
+/**
  * Add an action plan to an alert
+ * ACTUALIZA AUTOMÁTICAMENTE EL ESTADO DE LA ALERTA
  */
 export async function addActionPlan(
   alertHistoryId: string,
@@ -491,6 +549,7 @@ export async function addActionPlan(
       created_by: createdBy
     };
 
+    // 1. Insertar el plan de acción
     const { data, error } = await supabase
       .from('action_plans')
       .insert(planData)
@@ -500,6 +559,26 @@ export async function addActionPlan(
     if (error) {
       console.error('Error adding action plan:', error);
       return { success: false, error: error.message };
+    }
+
+    // 2. ACTUALIZAR ESTADO DE LA ALERTA AUTOMÁTICAMENTE
+    // Lógica: Si se crea un plan de acción, la alerta debe pasar a "in_progress"
+    // (indica que se está trabajando en la alerta)
+    const alertStatus: 'pending' | 'in_progress' | 'resolved' = 'in_progress';
+
+    const { error: updateError } = await supabase
+      .from('alert_history')
+      .update({
+        status: alertStatus,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', alertHistoryId);
+
+    if (updateError) {
+      console.warn('⚠️ Plan creado pero no se pudo actualizar estado de alerta:', updateError);
+      // No retornar error, el plan se creó correctamente
+    } else {
+      console.log(`✅ Estado de alerta actualizado a "${alertStatus}" tras agregar plan de acción`);
     }
 
     return { success: true, data };
@@ -534,6 +613,7 @@ export async function getActionPlans(alertHistoryId: string): Promise<{ success:
 
 /**
  * Update an action plan
+ * SINCRONIZA AUTOMÁTICAMENTE EL ESTADO DE LA ALERTA
  */
 export async function updateActionPlan(
   planId: string,
@@ -545,6 +625,21 @@ export async function updateActionPlan(
   }
 ): Promise<{ success: boolean; error?: string }> {
   try {
+    // 1. Obtener el alert_history_id del plan antes de actualizarlo
+    const { data: planData, error: fetchError } = await supabase
+      .from('action_plans')
+      .select('alert_history_id')
+      .eq('id', planId)
+      .single();
+
+    if (fetchError || !planData) {
+      console.error('Error fetching plan data:', fetchError);
+      return { success: false, error: fetchError?.message || 'Plan no encontrado' };
+    }
+
+    const alertHistoryId = planData.alert_history_id;
+
+    // 2. Actualizar el plan de acción
     const { error } = await supabase
       .from('action_plans')
       .update(updates)
@@ -555,6 +650,9 @@ export async function updateActionPlan(
       return { success: false, error: error.message };
     }
 
+    // 3. SINCRONIZAR ESTADO DE LA ALERTA basándose en TODOS sus planes
+    await syncAlertStatusFromPlans(alertHistoryId);
+
     return { success: true };
   } catch (error: any) {
     console.error('Exception updating action plan:', error);
@@ -564,9 +662,25 @@ export async function updateActionPlan(
 
 /**
  * Delete an action plan
+ * SINCRONIZA AUTOMÁTICAMENTE EL ESTADO DE LA ALERTA tras eliminar
  */
 export async function deleteActionPlan(planId: string): Promise<{ success: boolean; error?: string }> {
   try {
+    // 1. Obtener el alert_history_id antes de eliminar el plan
+    const { data: planData, error: fetchError } = await supabase
+      .from('action_plans')
+      .select('alert_history_id')
+      .eq('id', planId)
+      .single();
+
+    if (fetchError || !planData) {
+      console.error('Error fetching plan data:', fetchError);
+      return { success: false, error: fetchError?.message || 'Plan no encontrado' };
+    }
+
+    const alertHistoryId = planData.alert_history_id;
+
+    // 2. Eliminar el plan
     const { error } = await supabase
       .from('action_plans')
       .delete()
@@ -577,10 +691,51 @@ export async function deleteActionPlan(planId: string): Promise<{ success: boole
       return { success: false, error: error.message };
     }
 
+    // 3. SINCRONIZAR ESTADO DE LA ALERTA después de eliminar
+    // Si ya no quedan planes, la alerta podría volver a "pending"
+    await syncAlertStatusAfterDeletion(alertHistoryId);
+
     return { success: true };
   } catch (error: any) {
     console.error('Exception deleting action plan:', error);
     return { success: false, error: error.message || 'Error desconocido' };
+  }
+}
+
+/**
+ * Sincroniza el estado de una alerta después de eliminar un plan
+ * Si no quedan planes, la alerta vuelve a "pending"
+ */
+async function syncAlertStatusAfterDeletion(alertHistoryId: string): Promise<void> {
+  try {
+    // Verificar si quedan planes
+    const { data: plans, error } = await supabase
+      .from('action_plans')
+      .select('status')
+      .eq('alert_history_id', alertHistoryId);
+
+    if (error) {
+      console.error('Error al verificar planes restantes:', error);
+      return;
+    }
+
+    if (!plans || plans.length === 0) {
+      // No quedan planes → Volver a "pending"
+      await supabase
+        .from('alert_history')
+        .update({
+          status: 'pending',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', alertHistoryId);
+
+      console.log('✅ Alerta sin planes → Estado actualizado a "pending"');
+    } else {
+      // Aún hay planes → Sincronizar basándose en los planes restantes
+      await syncAlertStatusFromPlans(alertHistoryId);
+    }
+  } catch (error) {
+    console.error('Exception al sincronizar estado tras eliminación:', error);
   }
 }
 
