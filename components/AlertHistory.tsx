@@ -34,7 +34,7 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
   const [showActionModal, setShowActionModal] = useState(false);
 
   // Filters
-  const [statusFilter, setStatusFilter] = useState<'ALL' | 'pending' | 'in_progress' | 'resolved'>('ALL');
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'pending' | 'in_progress' | 'resolved' | 'invalid'>('ALL');
   const [severityFilter, setSeverityFilter] = useState<'ALL' | 'critical' | 'high' | 'medium' | 'low'>('ALL');
   const [searchText, setSearchText] = useState('');
   const [startDate, setStartDate] = useState('');
@@ -137,7 +137,9 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
             tipo: alert.type,
             placa: alert.plate,
             contrato: alert.contract || 'N/A',
-            estado_alerta: alert.status === 'pending' ? 'Pendiente' : alert.status === 'in_progress' ? 'En Proceso' : 'Resuelto',
+            estado_alerta: alert.status === 'pending' ? 'Pendiente' :
+                          alert.status === 'in_progress' ? 'En Proceso' :
+                          alert.status === 'resolved' ? 'Resuelto' : 'Inválida',
             severidad: alert.severity,
             detalles_alerta: alert.details,
             conductor: alert.driver,
@@ -192,7 +194,9 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
           tipo: alert.type,
           placa: alert.plate,
           contrato: alert.contract || 'N/A',
-          estado_alerta: alert.status === 'pending' ? 'Pendiente' : alert.status === 'in_progress' ? 'En Proceso' : 'Resuelto',
+          estado_alerta: alert.status === 'pending' ? 'Pendiente' :
+                        alert.status === 'in_progress' ? 'En Proceso' :
+                        alert.status === 'resolved' ? 'Resuelto' : 'Inválida',
           severidad: alert.severity,
           detalles_alerta: alert.details,
           conductor: alert.driver,
@@ -333,7 +337,7 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
     setLoading(false);
   };
 
-  const handleStatusChange = async (alertId: string, newStatus: 'pending' | 'in_progress' | 'resolved') => {
+  const handleStatusChange = async (alertId: string, newStatus: 'pending' | 'in_progress' | 'resolved' | 'invalid') => {
     const result = await updateAlertStatus(alertId, newStatus);
     if (result.success) {
       loadAlerts();
@@ -550,6 +554,7 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
               <option value="pending">Pendientes</option>
               <option value="in_progress">En Proceso</option>
               <option value="resolved">Resueltas</option>
+              <option value="invalid">Inválidas</option>
             </select>
           </div>
 
@@ -717,6 +722,7 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
                       <option value="pending">Pendiente</option>
                       <option value="in_progress">En Proceso</option>
                       <option value="resolved">Resuelta</option>
+                      <option value="invalid">Inválida</option>
                     </select>
                   </td>
 
