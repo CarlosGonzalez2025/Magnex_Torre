@@ -18,7 +18,7 @@ export interface SavedAlert {
   details: string;
   contract?: string;
   source: string;
-  status: 'pending' | 'in_progress' | 'resolved';
+  status: 'pending' | 'in_progress' | 'resolved' | 'invalid';
   saved_at: string;
   saved_by: string;
   created_at: string;
@@ -372,7 +372,7 @@ export async function getAllSavedAlerts(): Promise<{ success: boolean; data?: Sa
  */
 export async function getFilteredAlerts(
   filters: {
-    status?: 'pending' | 'in_progress' | 'resolved';
+    status?: 'pending' | 'in_progress' | 'resolved' | 'invalid';
     severity?: string;
     startDate?: string;
     endDate?: string;
@@ -419,10 +419,11 @@ export async function getFilteredAlerts(
 
 /**
  * Update alert status
+ * NOTA: El estado 'invalid' se usa para marcar alertas erróneas que no deben procesarse
  */
 export async function updateAlertStatus(
   alertId: string,
-  status: 'pending' | 'in_progress' | 'resolved'
+  status: 'pending' | 'in_progress' | 'resolved' | 'invalid'
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const { error } = await supabase
