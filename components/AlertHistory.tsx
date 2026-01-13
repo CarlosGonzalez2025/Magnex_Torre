@@ -96,13 +96,33 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
 
   // Función para exportar a Excel con TODOS los datos (planes de acción, observaciones, archivos adjuntos)
   const handleExport = () => {
+    // 🔍 DIAGNÓSTICO: Ver qué datos tenemos
+    console.log('=== DIAGNÓSTICO DE EXPORTACIÓN ===');
+    console.log('Total de alertas filtradas:', filteredAndSearchedAlerts.length);
+
+    // Verificar una muestra de alertas
+    if (filteredAndSearchedAlerts.length > 0) {
+      const sampleAlert = filteredAndSearchedAlerts[0];
+      console.log('Muestra de alerta:', {
+        id: sampleAlert.id,
+        plate: sampleAlert.plate,
+        hasActionPlans: !!sampleAlert.action_plans,
+        actionPlansCount: sampleAlert.action_plans?.length || 0,
+        firstPlan: sampleAlert.action_plans?.[0]
+      });
+    }
+
     // Transformar datos para incluir planes de acción y archivos adjuntos
     const exportData: any[] = [];
+    let totalPlansProcessed = 0;
+    let totalAttachmentsProcessed = 0;
 
     filteredAndSearchedAlerts.forEach(alert => {
       // Si la alerta tiene planes de acción, crear una fila por cada plan
       if (alert.action_plans && alert.action_plans.length > 0) {
         alert.action_plans.forEach(plan => {
+          totalPlansProcessed++;
+
           // Extraer URLs de archivos adjuntos
           const attachmentUrls = plan.attachments && plan.attachments.length > 0
             ? plan.attachments.map(file => `${file.name}: ${file.url}`).join(' | ')
@@ -110,6 +130,7 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
 
           // Cantidad de archivos
           const attachmentCount = plan.attachments?.length || 0;
+          totalAttachmentsProcessed += attachmentCount;
 
           exportData.push({
             // Datos de la Alerta
@@ -207,6 +228,33 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
       }
     });
 
+    // 🔍 DIAGNÓSTICO: Resumen de datos procesados
+    console.log('=== RESUMEN DE PROCESAMIENTO ===');
+    console.log('Total de filas para exportar:', exportData.length);
+    console.log('Total de planes de acción procesados:', totalPlansProcessed);
+    console.log('Total de archivos adjuntos procesados:', totalAttachmentsProcessed);
+
+    // Mostrar muestra de una fila con plan de acción
+    const rowWithPlan = exportData.find(row => row.plan_descripcion !== 'Sin plan de acción');
+    if (rowWithPlan) {
+      console.log('Muestra de fila con plan de acción:', {
+        placa: rowWithPlan.placa,
+        plan_descripcion: rowWithPlan.plan_descripcion,
+        plan_responsable: rowWithPlan.plan_responsable,
+        plan_observaciones: rowWithPlan.plan_observaciones,
+        cantidad_archivos: rowWithPlan.cantidad_archivos,
+        archivos_adjuntos: rowWithPlan.archivos_adjuntos
+      });
+    } else {
+      console.warn('⚠️ NO SE ENCONTRARON FILAS CON PLANES DE ACCIÓN');
+    }
+
+    // Validación crítica
+    if (exportData.length === 0) {
+      alert('⚠️ No hay datos para exportar. Verifique los filtros aplicados.');
+      return;
+    }
+
     // Definir columnas con anchos óptimos para legibilidad
     exportToExcel(
       exportData,
@@ -257,6 +305,27 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
       : await getFilteredAlerts(filters);
 
     if (result.success && result.data) {
+      // 🔍 DIAGNÓSTICO: Verificar datos cargados
+      console.log('=== ALERTAS CARGADAS DESDE BD ===');
+      console.log('Total de alertas cargadas:', result.data.length);
+
+      if (result.data.length > 0) {
+        const alertsWithPlans = result.data.filter(a => a.action_plans && a.action_plans.length > 0);
+        console.log('Alertas con planes de acción:', alertsWithPlans.length);
+
+        if (alertsWithPlans.length > 0) {
+          const sampleAlert = alertsWithPlans[0];
+          console.log('Muestra de alerta con planes:', {
+            id: sampleAlert.id,
+            plate: sampleAlert.plate,
+            plansCount: sampleAlert.action_plans.length,
+            firstPlan: sampleAlert.action_plans[0]
+          });
+        } else {
+          console.warn('⚠️ NINGUNA ALERTA TIENE PLANES DE ACCIÓN EN LA BD');
+        }
+      }
+
       setAlerts(result.data);
     } else {
       console.error('Error loading alerts:', result.error);

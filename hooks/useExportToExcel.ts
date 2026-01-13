@@ -12,16 +12,32 @@ export function useExportToExcel() {
     columns: ExportColumn[],
     filename: string
   ) => {
+    console.log('=== useExportToExcel INICIADO ===');
+    console.log('Cantidad de filas recibidas:', data.length);
+    console.log('Cantidad de columnas:', columns.length);
+
     if (data.length === 0) {
       alert('No hay datos para exportar');
       return;
     }
 
+    // Mostrar muestra de datos de entrada
+    if (data.length > 0) {
+      console.log('Primera fila de datos:', data[0]);
+      console.log('Keys disponibles en primera fila:', Object.keys(data[0]));
+    }
+
     // Crear datos formateados para Excel
-    const formattedData = data.map(item => {
+    const formattedData = data.map((item, index) => {
       const row: Record<string, any> = {};
       columns.forEach(col => {
         const value = item[col.key];
+
+        // 🔍 DIAGNÓSTICO: Mostrar valores críticos
+        if (index === 0 && (col.key === 'plan_descripcion' || col.key === 'archivos_adjuntos')) {
+          console.log(`Procesando columna "${col.header}" (key: ${col.key}):`, value);
+        }
+
         // Formatear fechas
         if (value instanceof Date) {
           row[col.header] = value.toLocaleString('es-CO');
@@ -34,6 +50,11 @@ export function useExportToExcel() {
       });
       return row;
     });
+
+    console.log('Datos formateados para Excel:', formattedData.length, 'filas');
+    if (formattedData.length > 0) {
+      console.log('Primera fila formateada:', formattedData[0]);
+    }
 
     // Crear libro de trabajo
     const worksheet = XLSX.utils.json_to_sheet(formattedData);
