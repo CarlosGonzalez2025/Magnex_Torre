@@ -68,7 +68,33 @@ function processFagorFile(workbook: XLSX.WorkBook): ProcessingResult {
 
     // Mapear índices de columnas
     const plateIndex = headers.findIndex((h: string) => h.includes('matrícula'));
-    const alertTypeIndex = 0; // Primera columna (A) - Iconos de estado
+
+    // Buscar columna de tipo de alerta (puede ser "Estado", "Iconos", "Alerta", etc.)
+    let alertTypeIndex = headers.findIndex((h: string) =>
+      h.includes('estado') || h.includes('alerta') || h.includes('tipo')
+    );
+
+    // Si no se encuentra columna específica, buscar en columnas que tengan texto
+    if (alertTypeIndex === -1) {
+      // Intentar detectar automáticamente revisando la primera fila de datos
+      const firstDataRow = rawData[headerRowIndex + 1];
+      if (firstDataRow) {
+        for (let idx = 0; idx < firstDataRow.length; idx++) {
+          const cellValue = firstDataRow[idx];
+          if (cellValue && cellValue.toString().toLowerCase().includes('alrm')) {
+            alertTypeIndex = idx;
+            console.log(`📊 FAGOR - Detectado tipo de alerta en columna ${idx} automáticamente`);
+            break;
+          }
+        }
+      }
+    }
+
+    // Si aún no se encuentra, usar columna 0 como fallback
+    if (alertTypeIndex === -1) {
+      alertTypeIndex = 0;
+    }
+
     const speedIndex = headers.findIndex((h: string) => h.includes('velocidad'));
     const timestampIndex = headers.findIndex((h: string) =>
       h.includes('ult.') || h.includes('pos') || h.includes('fecha')
