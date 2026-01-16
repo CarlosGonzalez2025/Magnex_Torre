@@ -10,6 +10,9 @@ export interface BatchAlert {
   driver?: string;
   severity: 'critical' | 'high' | 'medium';
   is_grave: boolean;
+  location?: string;
+  latitude?: number;
+  longitude?: number;
 }
 
 export interface ProcessingResult {
@@ -143,13 +146,15 @@ function processFagorFile(workbook: XLSX.WorkBook): ProcessingResult {
       h.includes('ult.') || h.includes('pos') || h.includes('fecha')
     );
     const driverIndex = headers.findIndex((h: string) => h.includes('conductor'));
+    const locationIndex = headers.findIndex((h: string) => h.includes('localidad'));
 
     console.log('📊 FAGOR - Índices de columnas:', {
       plate: plateIndex,
       alertType: alertTypeIndex,
       speed: speedIndex,
       timestamp: timestampIndex,
-      driver: driverIndex
+      driver: driverIndex,
+      location: locationIndex
     });
 
     // Mostrar muestra de primera fila de datos para diagnóstico
@@ -195,6 +200,7 @@ function processFagorFile(workbook: XLSX.WorkBook): ProcessingResult {
       const timestamp = parseTimestampToISO(timestampRaw?.toString());
 
       const driver = driverIndex >= 0 ? row[driverIndex]?.toString().trim() : undefined;
+      const location = locationIndex >= 0 ? row[locationIndex]?.toString().trim() : undefined;
 
       // Detectar Falta Grave: "Alrm. de excesos de velocidad"
       // Asegurar que alertType sea string antes de usar métodos
@@ -214,7 +220,8 @@ function processFagorFile(workbook: XLSX.WorkBook): ProcessingResult {
         timestamp,
         driver,
         severity: isGrave ? 'critical' : speed && speed > 100 ? 'high' : 'medium',
-        is_grave: isGrave
+        is_grave: isGrave,
+        location
       });
     }
 
@@ -277,6 +284,18 @@ function processColtrackFile(workbook: XLSX.WorkBook): ProcessingResult {
       const lastName = row['Apellido'] || row['apellido'] || row['Apellido Conductor'] || '';
       const driver = `${firstName} ${lastName}`.trim() || undefined;
 
+      // Capturar coordenadas (latitud y longitud)
+      const latitudeRaw = row['Latitud'] || row['latitud'] || row['LATITUD'] || row['Latitude'] || null;
+      const longitudeRaw = row['Longitud'] || row['longitud'] || row['LONGITUD'] || row['Longitude'] || null;
+      const latitude = latitudeRaw ? parseFloat(latitudeRaw.toString()) : undefined;
+      const longitude = longitudeRaw ? parseFloat(longitudeRaw.toString()) : undefined;
+
+      // Crear string de ubicación si hay coordenadas
+      let location: string | undefined = undefined;
+      if (latitude !== undefined && longitude !== undefined && !isNaN(latitude) && !isNaN(longitude)) {
+        location = `Lat: ${latitude.toFixed(6)}, Lon: ${longitude.toFixed(6)}`;
+      }
+
       if (!plate || !plate.toString().trim()) {
         continue; // Saltar filas sin placa
       }
@@ -297,7 +316,10 @@ function processColtrackFile(workbook: XLSX.WorkBook): ProcessingResult {
         timestamp: timestamp.toString(),
         driver,
         severity: isGrave ? 'critical' : speed && speed > 100 ? 'high' : 'medium',
-        is_grave: isGrave
+        is_grave: isGrave,
+        location,
+        latitude,
+        longitude
       });
     }
 

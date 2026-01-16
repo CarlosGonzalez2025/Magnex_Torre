@@ -28,6 +28,9 @@ CREATE TABLE batch_alerts (
   driver TEXT,
   severity TEXT NOT NULL CHECK (severity IN ('low', 'medium', 'high', 'critical')),
   is_grave BOOLEAN NOT NULL DEFAULT FALSE,
+  location TEXT,
+  latitude NUMERIC(10, 8),
+  longitude NUMERIC(11, 8),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
