@@ -63,6 +63,9 @@ function processFagorFile(workbook: XLSX.WorkBook): ProcessingResult {
       h ? h.toString().trim().toLowerCase() : ''
     );
 
+    console.log('📊 FAGOR - Fila de headers encontrada:', headerRowIndex);
+    console.log('📊 FAGOR - Headers detectados:', headers);
+
     // Mapear índices de columnas
     const plateIndex = headers.findIndex((h: string) => h.includes('matrícula'));
     const alertTypeIndex = 0; // Primera columna (A) - Iconos de estado
@@ -79,6 +82,11 @@ function processFagorFile(workbook: XLSX.WorkBook): ProcessingResult {
       timestamp: timestampIndex,
       driver: driverIndex
     });
+
+    // Mostrar muestra de primera fila de datos para diagnóstico
+    if (rawData.length > headerRowIndex + 1) {
+      console.log('📊 FAGOR - Primera fila de datos:', rawData[headerRowIndex + 1]);
+    }
 
     if (plateIndex === -1) {
       return {
@@ -104,16 +112,23 @@ function processFagorFile(workbook: XLSX.WorkBook): ProcessingResult {
       const plate = row[plateIndex]?.toString().trim();
       if (!plate) continue;
 
-      const alertType = row[alertTypeIndex]?.toString().trim() || 'Sin especificar';
+      // Extraer alertType con manejo robusto de null/undefined
+      const alertTypeRaw = row[alertTypeIndex];
+      const alertType = (alertTypeRaw !== null && alertTypeRaw !== undefined)
+        ? alertTypeRaw.toString().trim()
+        : 'Sin especificar';
+
       const speedRaw = speedIndex >= 0 ? row[speedIndex] : null;
       const speed = speedRaw ? parseFloat(speedRaw.toString()) : null;
       const timestamp = timestampIndex >= 0 ? row[timestampIndex]?.toString() || new Date().toISOString() : new Date().toISOString();
       const driver = driverIndex >= 0 ? row[driverIndex]?.toString().trim() : undefined;
 
       // Detectar Falta Grave: "Alrm. de excesos de velocidad"
-      const isGrave = alertType.toLowerCase().includes('alrm') &&
-                      alertType.toLowerCase().includes('exceso') &&
-                      alertType.toLowerCase().includes('velocidad');
+      // Asegurar que alertType sea string antes de usar métodos
+      const alertTypeLower = alertType ? alertType.toLowerCase() : '';
+      const isGrave = alertTypeLower.includes('alrm') &&
+                      alertTypeLower.includes('exceso') &&
+                      alertTypeLower.includes('velocidad');
 
       if (isGrave) {
         gravesCount++;
@@ -191,8 +206,9 @@ function processColtrackFile(workbook: XLSX.WorkBook): ProcessingResult {
       }
 
       // Detectar Falta Grave: "infraccion" (case insensitive)
-      const isGrave = alertType.toLowerCase().includes('infraccion') ||
-                      alertType.toLowerCase().includes('infracción');
+      const alertTypeLower = alertType ? alertType.toLowerCase() : '';
+      const isGrave = alertTypeLower.includes('infraccion') ||
+                      alertTypeLower.includes('infracción');
 
       if (isGrave) {
         gravesCount++;
