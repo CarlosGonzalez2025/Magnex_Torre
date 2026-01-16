@@ -258,6 +258,9 @@ export default function App() {
     const isSpeedingAlert = alert.type.toLowerCase().includes('velocidad') ||
       alert.type.toLowerCase().includes('speeding');
 
+    // Generar URL de Google Maps con las coordenadas
+    const googleMapsUrl = `https://www.google.com/maps?q=${alert.latitude},${alert.longitude}`;
+
     // Formato con markdown para WhatsApp
     const message = `🚨 *ALERTA DE FLOTA*\n\n` +
       `*Tipo:* ${alert.type}\n` +
@@ -265,7 +268,8 @@ export default function App() {
       `*Conductor:* ${alert.driver}\n` +
       `Detalles: ${alert.details}\n` +
       (isSpeedingAlert ? `*Velocidad:* ${alert.speed} km/h ⚠️\n` : `Velocidad: ${alert.speed} km/h\n`) +
-      `Ubicación: ${alert.location}\n` +
+      `📍 *Ubicación:* ${alert.location}\n` +
+      `🗺️ *Ver en mapa:* ${googleMapsUrl}\n` +
       `Hora: ${new Date(alert.timestamp).toLocaleString()}\n` +
       (alert.contract ? `Contrato: ${alert.contract}\n` : '') +
       `Fuente: ${alert.source}`;
