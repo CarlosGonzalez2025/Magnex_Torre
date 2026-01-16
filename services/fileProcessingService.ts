@@ -20,6 +20,49 @@ export interface ProcessingResult {
   error?: string;
 }
 
+// ==================== UTILITY FUNCTIONS ====================
+
+/**
+ * Convierte fecha en formato DD/MM/YYYY HH:MM:SS a ISO 8601
+ * Soporta múltiples formatos comunes de fecha
+ */
+function parseTimestampToISO(timestamp: string | null | undefined): string {
+  if (!timestamp) {
+    return new Date().toISOString();
+  }
+
+  const timestampStr = timestamp.toString().trim();
+
+  // Intentar parsear formato DD/MM/YYYY HH:MM:SS (FAGOR)
+  const ddmmyyyyPattern = /^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{1,2}):(\d{1,2})$/;
+  const match = timestampStr.match(ddmmyyyyPattern);
+
+  if (match) {
+    const [, day, month, year, hours, minutes, seconds] = match;
+    // Crear fecha en formato ISO: YYYY-MM-DDTHH:MM:SS.000Z
+    const isoDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}T${hours.padStart(2, '0')}:${minutes.padStart(2, '0')}:${seconds.padStart(2, '0')}.000Z`;
+
+    // Validar que la fecha sea válida
+    const dateObj = new Date(isoDate);
+    if (!isNaN(dateObj.getTime())) {
+      return dateObj.toISOString();
+    }
+  }
+
+  // Intentar parsear como fecha ISO directa
+  try {
+    const dateObj = new Date(timestampStr);
+    if (!isNaN(dateObj.getTime())) {
+      return dateObj.toISOString();
+    }
+  } catch (e) {
+    console.warn('⚠️ No se pudo parsear timestamp:', timestampStr);
+  }
+
+  // Fallback: fecha actual
+  return new Date().toISOString();
+}
+
 // ==================== FAGOR PROCESSOR ====================
 
 /**
@@ -146,7 +189,11 @@ function processFagorFile(workbook: XLSX.WorkBook): ProcessingResult {
 
       const speedRaw = speedIndex >= 0 ? row[speedIndex] : null;
       const speed = speedRaw ? parseFloat(speedRaw.toString()) : null;
-      const timestamp = timestampIndex >= 0 ? row[timestampIndex]?.toString() || new Date().toISOString() : new Date().toISOString();
+
+      // Parsear timestamp a formato ISO 8601
+      const timestampRaw = timestampIndex >= 0 ? row[timestampIndex] : null;
+      const timestamp = parseTimestampToISO(timestampRaw?.toString());
+
       const driver = driverIndex >= 0 ? row[driverIndex]?.toString().trim() : undefined;
 
       // Detectar Falta Grave: "Alrm. de excesos de velocidad"
@@ -220,7 +267,10 @@ function processColtrackFile(workbook: XLSX.WorkBook): ProcessingResult {
       const alertType = row['Evento'] || row['evento'] || row['EVENTO'] || 'Sin especificar';
       const speedRaw = row['Max kph'] || row['max kph'] || row['MAX KPH'] || row['Velocidad'] || null;
       const speed = speedRaw ? parseFloat(speedRaw.toString().replace(/[^\d.-]/g, '')) : null;
-      const timestamp = row['Hora Reporte'] || row['hora reporte'] || row['HORA REPORTE'] || row['Fecha'] || new Date().toISOString();
+
+      // Parsear timestamp a formato ISO 8601
+      const timestampRaw = row['Hora Reporte'] || row['hora reporte'] || row['HORA REPORTE'] || row['Fecha'] || null;
+      const timestamp = parseTimestampToISO(timestampRaw);
 
       // Concatenar nombre + apellido del conductor
       const firstName = row['Nombre Conductor'] || row['nombre conductor'] || '';
