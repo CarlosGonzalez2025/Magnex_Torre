@@ -7,6 +7,7 @@ import {
   queryBatchAlerts,
   deleteBatchAlert,
   deleteUpload,
+  deleteAllBatchAlerts,
   AlertFilters,
   BatchAlertRecord
 } from '../services/auditService';
@@ -244,13 +245,30 @@ export const BatchUpload: React.FC = () => {
     const isSpeedingAlert = alert.alert_type.toLowerCase().includes('velocidad') ||
       alert.alert_type.toLowerCase().includes('exceso');
 
-    const message = `🚨 *ALERTA DE FLOTA (AUDITORÍA)*\n\n` +
+    // Generar URL de Google Maps si hay coordenadas
+    let googleMapsUrl = '';
+    if (alert.latitude && alert.longitude) {
+      googleMapsUrl = `https://www.google.com/maps?q=${alert.latitude},${alert.longitude}`;
+    }
+
+    let message = `🚨 *ALERTA DE FLOTA (AUDITORÍA)*\n\n` +
       `*Tipo:* ${alert.alert_type}\n` +
       `*Vehículo:* ${alert.plate}\n` +
       (alert.driver ? `*Conductor:* ${alert.driver}\n` : '') +
       (alert.speed ? (isSpeedingAlert ? `*Velocidad:* ${alert.speed} km/h ⚠️\n` : `Velocidad: ${alert.speed} km/h\n`) : '') +
-      `Hora: ${new Date(alert.timestamp).toLocaleString()}\n` +
-      `Contrato: ${contract}\n` +
+      `Hora: ${new Date(alert.timestamp).toLocaleString()}\n`;
+
+    // Agregar ubicación
+    if (alert.location) {
+      message += `📍 *Ubicación:* ${alert.location}\n`;
+    }
+
+    // Agregar URL de Google Maps si hay coordenadas
+    if (googleMapsUrl) {
+      message += `🗺️ *Ver en mapa:* ${googleMapsUrl}\n`;
+    }
+
+    message += `Contrato: ${contract}\n` +
       `Fuente: ${source}` +
       (alert.is_grave ? `\n\n⚠️ *FALTA GRAVE*` : '');
 
@@ -301,6 +319,32 @@ export const BatchUpload: React.FC = () => {
     const result = await deleteBatchAlert(alertId);
     if (result.success) {
       window.alert('✅ Alerta eliminada');
+      loadSavedAlerts();
+    } else {
+      window.alert('❌ Error: ' + result.error);
+    }
+  };
+
+  const handleDeleteAll = async () => {
+    // Confirmación con prompt de texto para evitar eliminaciones accidentales
+    const confirmText = window.prompt(
+      '⚠️ ADVERTENCIA: Esta acción eliminará TODAS las alertas de auditoría.\n\n' +
+      `Se eliminarán ${savedAlerts.length} registros de la base de datos.\n\n` +
+      'Esta acción NO se puede deshacer.\n\n' +
+      'Para confirmar, escribe: ELIMINAR TODO'
+    );
+
+    if (confirmText !== 'ELIMINAR TODO') {
+      if (confirmText !== null) {
+        window.alert('Operación cancelada. El texto no coincide.');
+      }
+      return;
+    }
+
+    const result = await deleteAllBatchAlerts();
+
+    if (result.success) {
+      window.alert(`✅ ${result.deletedCount} alertas eliminadas exitosamente`);
       loadSavedAlerts();
     } else {
       window.alert('❌ Error: ' + result.error);
@@ -499,6 +543,15 @@ export const BatchUpload: React.FC = () => {
             Análisis de Datos ({savedAlerts.length} registros)
           </h2>
           <div className="flex gap-2">
+            <button
+              onClick={handleDeleteAll}
+              disabled={savedAlerts.length === 0}
+              className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:bg-slate-300 disabled:cursor-not-allowed flex items-center gap-2"
+              title="Eliminar todos los registros de auditoría"
+            >
+              <Trash2 className="w-4 h-4" />
+              Limpiar Todo
+            </button>
             <button
               onClick={handleExport}
               disabled={savedAlerts.length === 0}

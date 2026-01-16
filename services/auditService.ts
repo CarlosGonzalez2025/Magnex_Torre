@@ -113,7 +113,10 @@ export async function saveBatchAlerts(
       timestamp: alert.timestamp,
       driver: alert.driver || null,
       severity: alert.severity,
-      is_grave: alert.is_grave
+      is_grave: alert.is_grave,
+      location: alert.location || null,
+      latitude: alert.latitude || null,
+      longitude: alert.longitude || null
     }));
 
     console.log(`💾 Guardando ${alertsToInsert.length} alertas...`);
@@ -353,6 +356,46 @@ export async function deleteBatchAlert(
 
   } catch (error: any) {
     console.error('❌ Exception eliminando alerta:', error);
+    return { success: false, error: error.message || 'Error desconocido' };
+  }
+}
+
+/**
+ * Elimina TODAS las alertas de la tabla batch_alerts
+ * ⚠️ OPERACIÓN DESTRUCTIVA - Elimina todos los registros
+ */
+export async function deleteAllBatchAlerts(): Promise<{
+  success: boolean;
+  deletedCount?: number;
+  error?: string;
+}> {
+  try {
+    // Contar registros antes de eliminar
+    const { count, error: countError } = await supabase
+      .from('batch_alerts')
+      .select('*', { count: 'exact', head: true });
+
+    if (countError) {
+      console.error('❌ Error contando alertas:', countError);
+      return { success: false, error: countError.message };
+    }
+
+    // Eliminar todos los registros
+    const { error: deleteError } = await supabase
+      .from('batch_alerts')
+      .delete()
+      .neq('id', '00000000-0000-0000-0000-000000000000'); // Condición que siempre es verdadera
+
+    if (deleteError) {
+      console.error('❌ Error eliminando todas las alertas:', deleteError);
+      return { success: false, error: deleteError.message };
+    }
+
+    console.log(`✅ ${count} alertas eliminadas de batch_alerts`);
+    return { success: true, deletedCount: count || 0 };
+
+  } catch (error: any) {
+    console.error('❌ Exception eliminando todas las alertas:', error);
     return { success: false, error: error.message || 'Error desconocido' };
   }
 }
