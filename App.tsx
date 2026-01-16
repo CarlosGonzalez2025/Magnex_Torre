@@ -10,6 +10,7 @@ import { AlertPanel } from './components/AlertPanel';
 import { AlertHistory } from './components/AlertHistory';
 import { HistorialAnalytics } from './components/HistorialAnalytics';
 import { RouteInvestigation } from './components/RouteInvestigation';
+import { BatchUpload } from './components/BatchUpload';
 import { SavedAlertsPanel } from './components/SavedAlertsPanel';
 import { Analytics } from './components/Analytics';
 import { Inspections } from './components/Inspections';
@@ -380,6 +381,7 @@ export default function App() {
                               activeTab === 'saved' ? 'Alertas Guardadas' :
                                 activeTab === 'history-analytics' ? 'Análisis de Gestión' :
                                   activeTab === 'route-investigation' ? 'Investigación de Rutas' :
+                                    activeTab === 'batch-upload' ? 'Auditoría de Flota' :
                                     activeTab === 'analytics' ? 'Análisis y Métricas' :
                                   activeTab === 'inspections' ? 'Inspecciones' :
                                     activeTab === 'schedules' ? 'Cronogramas' :
@@ -579,6 +581,7 @@ export default function App() {
               {activeTab === 'history' && <AlertHistory />}
               {activeTab === 'history-analytics' && <HistorialAnalytics />}
               {activeTab === 'route-investigation' && <RouteInvestigation />}
+              {activeTab === 'batch-upload' && <BatchUpload />}
               {activeTab === 'saved' && (
                 <SavedAlertsPanel
                   onRefresh={fetchData}
