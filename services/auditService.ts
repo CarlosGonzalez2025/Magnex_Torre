@@ -330,3 +330,106 @@ export async function deleteUpload(
     return { success: false, error: error.message || 'Error desconocido' };
   }
 }
+
+/**
+ * Elimina una alerta individual
+ */
+export async function deleteBatchAlert(
+  alertId: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { error } = await supabase
+      .from('batch_alerts')
+      .delete()
+      .eq('id', alertId);
+
+    if (error) {
+      console.error('❌ Error eliminando alerta:', error);
+      return { success: false, error: error.message };
+    }
+
+    console.log('✅ Alerta eliminada:', alertId);
+    return { success: true };
+
+  } catch (error: any) {
+    console.error('❌ Exception eliminando alerta:', error);
+    return { success: false, error: error.message || 'Error desconocido' };
+  }
+}
+
+// ==================== QUERY FUNCTIONS WITH FILTERS ====================
+
+export interface AlertFilters {
+  startDate?: string; // ISO 8601
+  endDate?: string; // ISO 8601
+  plate?: string;
+  alertType?: string;
+  source?: 'FAGOR' | 'COLTRACK';
+  isGrave?: boolean;
+  uploadId?: string;
+}
+
+/**
+ * Consulta alertas con filtros opcionales
+ */
+export async function queryBatchAlerts(
+  filters: AlertFilters = {}
+): Promise<{ success: boolean; data?: BatchAlertRecord[]; error?: string }> {
+  try {
+    let query = supabase
+      .from('batch_alerts')
+      .select(`
+        *,
+        file_uploads (
+          filename,
+          source,
+          upload_date
+        )
+      `);
+
+    // Aplicar filtros
+    if (filters.startDate) {
+      query = query.gte('timestamp', filters.startDate);
+    }
+    if (filters.endDate) {
+      query = query.lte('timestamp', filters.endDate);
+    }
+    if (filters.plate) {
+      query = query.ilike('plate', `%${filters.plate}%`);
+    }
+    if (filters.alertType) {
+      query = query.ilike('alert_type', `%${filters.alertType}%`);
+    }
+    if (filters.isGrave !== undefined) {
+      query = query.eq('is_grave', filters.isGrave);
+    }
+    if (filters.uploadId) {
+      query = query.eq('upload_id', filters.uploadId);
+    }
+
+    // Ordenar por timestamp descendente
+    query = query.order('timestamp', { ascending: false });
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.error('❌ Error consultando alertas:', error);
+      return { success: false, error: error.message };
+    }
+
+    // Filtrar por source si se especificó (viene del join con file_uploads)
+    let filteredData = data as any[];
+    if (filters.source && filteredData) {
+      filteredData = filteredData.filter(
+        (alert: any) => alert.file_uploads?.source === filters.source
+      );
+    }
+
+    console.log(`✅ Consulta exitosa: ${filteredData?.length || 0} alertas`);
+    return { success: true, data: filteredData as BatchAlertRecord[] };
+
+  } catch (error: any) {
+    console.error('❌ Exception consultando alertas:', error);
+    return { success: false, error: error.message || 'Error desconocido' };
+  }
+}

@@ -1,47 +1,95 @@
-import React, { useState, useRef } from 'react';
-import { Upload, AlertTriangle, CheckCircle, FileText, Trash2, Download, Database } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Upload, AlertTriangle, CheckCircle, FileText, Trash2, Download, Database, Search, Filter, Copy, Save, X, ChevronDown, ChevronUp } from 'lucide-react';
 import { processFile, validateFile, BatchAlert } from '../services/fileProcessingService';
 import {
   createFileUploadRecord,
   saveBatchAlerts,
-  getAllFileUploads,
-  FileUploadRecord
+  queryBatchAlerts,
+  deleteBatchAlert,
+  deleteUpload,
+  AlertFilters,
+  BatchAlertRecord
 } from '../services/auditService';
+import { saveAlertToDatabase } from '../services/databaseService';
+import { fetchFleetData } from '../services/fleetService';
+import { Alert } from '../types';
 import { useExportToExcel } from '../hooks/useExportToExcel';
 
 export const BatchUpload: React.FC = () => {
-  // State
+  // ==================== STATE ====================
+
+  // Upload Section
   const [selectedSource, setSelectedSource] = useState<'FAGOR' | 'COLTRACK'>('FAGOR');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [processedAlerts, setProcessedAlerts] = useState<BatchAlert[]>([]);
-  const [graveAlerts, setGraveAlerts] = useState<BatchAlert[]>([]);
-  const [totalRows, setTotalRows] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [uploadHistory, setUploadHistory] = useState<FileUploadRecord[]>([]);
-  const [showHistory, setShowHistory] = useState(false);
+  const [uploadCollapsed, setUploadCollapsed] = useState(false);
+
+  // Analysis Section
+  const [savedAlerts, setSavedAlerts] = useState<BatchAlertRecord[]>([]);
+  const [isQuerying, setIsQuerying] = useState(false);
+  const [vehicleContracts, setVehicleContracts] = useState<Map<string, string>>(new Map());
+
+  // Filters
+  const [filters, setFilters] = useState<AlertFilters>({});
+  const [plateSearch, setPlateSearch] = useState('');
+  const [alertTypeSearch, setAlertTypeSearch] = useState('');
+  const [sourceFilter, setSourceFilter] = useState<'ALL' | 'FAGOR' | 'COLTRACK'>('ALL');
+  const [graveFilter, setGraveFilter] = useState<'ALL' | 'true' | 'false'>('ALL');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { exportToExcel } = useExportToExcel();
+
+  // ==================== FETCH VEHICLE CONTRACTS ====================
+
+  useEffect(() => {
+    loadVehicleContracts();
+    loadSavedAlerts();
+  }, []);
+
+  const loadVehicleContracts = async () => {
+    try {
+      const result = await fetchFleetData();
+      const contractsMap = new Map<string, string>();
+
+      result.vehicles.forEach(vehicle => {
+        if (vehicle.contract) {
+          contractsMap.set(vehicle.plate, vehicle.contract);
+        }
+      });
+
+      setVehicleContracts(contractsMap);
+      console.log(`📋 Contratos cargados: ${contractsMap.size} vehículos`);
+    } catch (error) {
+      console.error('Error cargando contratos:', error);
+    }
+  };
+
+  const loadSavedAlerts = async () => {
+    setIsQuerying(true);
+    const result = await queryBatchAlerts(filters);
+    if (result.success && result.data) {
+      setSavedAlerts(result.data);
+    }
+    setIsQuerying(false);
+  };
 
   // ==================== FILE HANDLING ====================
 
   const handleFileSelect = (file: File) => {
     setError(null);
-
-    // Validar archivo
     const validation = validateFile(file, selectedSource);
     if (!validation.valid) {
       setError(validation.error || 'Archivo no válido');
       return;
     }
-
     setSelectedFile(file);
     setProcessedAlerts([]);
-    setGraveAlerts([]);
-    setTotalRows(0);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -49,25 +97,18 @@ export const BatchUpload: React.FC = () => {
     setIsDragging(true);
   };
 
-  const handleDragLeave = () => {
-    setIsDragging(false);
-  };
+  const handleDragLeave = () => setIsDragging(false);
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-
     const file = e.dataTransfer.files[0];
-    if (file) {
-      handleFileSelect(file);
-    }
+    if (file) handleFileSelect(file);
   };
 
   const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      handleFileSelect(file);
-    }
+    if (file) handleFileSelect(file);
   };
 
   // ==================== PROCESSING ====================
@@ -81,7 +122,6 @@ export const BatchUpload: React.FC = () => {
     setIsProcessing(true);
     setError(null);
     setProcessedAlerts([]);
-    setGraveAlerts([]);
 
     try {
       const result = await processFile(selectedFile, selectedSource);
@@ -92,20 +132,14 @@ export const BatchUpload: React.FC = () => {
         return;
       }
 
-      // Filtrar faltas graves
-      const graves = result.data?.filter(alert => alert.is_grave) || [];
-
       setProcessedAlerts(result.data || []);
-      setGraveAlerts(graves);
-      setTotalRows(result.totalRows);
+      setIsProcessing(false);
 
-      alert(`✅ Archivo procesado exitosamente\n\n` +
-            `Total de registros: ${result.totalRows}\n` +
-            `Faltas Graves detectadas: ${result.gravesDetected}`);
+      // Auto-collapse upload section after processing
+      setUploadCollapsed(true);
 
     } catch (error: any) {
-      setError(`Error procesando archivo: ${error.message}`);
-    } finally {
+      setError(error.message || 'Error desconocido');
       setIsProcessing(false);
     }
   };
@@ -152,396 +186,528 @@ export const BatchUpload: React.FC = () => {
         return;
       }
 
-      alert(`✅ Datos guardados exitosamente en la base de datos\n\n` +
-            `Total guardado: ${saveResult.insertedCount} alertas\n` +
-            `Faltas Graves: ${graveAlerts.length}`);
+      window.alert(`✅ ${saveResult.insertedCount} alertas guardadas exitosamente`);
 
-      // Limpiar formulario
-      setSelectedFile(null);
+      // Limpiar y recargar
       setProcessedAlerts([]);
-      setGraveAlerts([]);
-      setTotalRows(0);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
-
-      // Recargar historial
-      loadUploadHistory();
+      setSelectedFile(null);
+      loadSavedAlerts();
+      setIsSaving(false);
 
     } catch (error: any) {
-      setError(`Error guardando en base de datos: ${error.message}`);
-    } finally {
+      setError(error.message || 'Error desconocido');
       setIsSaving(false);
+    }
+  };
+
+  // ==================== QUERY & FILTER ====================
+
+  const handleApplyFilters = async () => {
+    const newFilters: AlertFilters = {};
+
+    if (plateSearch.trim()) newFilters.plate = plateSearch.trim();
+    if (alertTypeSearch.trim()) newFilters.alertType = alertTypeSearch.trim();
+    if (sourceFilter !== 'ALL') newFilters.source = sourceFilter as 'FAGOR' | 'COLTRACK';
+    if (graveFilter !== 'ALL') newFilters.isGrave = graveFilter === 'true';
+    if (startDate) newFilters.startDate = new Date(startDate).toISOString();
+    if (endDate) newFilters.endDate = new Date(endDate).toISOString();
+
+    setFilters(newFilters);
+    setIsQuerying(true);
+
+    const result = await queryBatchAlerts(newFilters);
+    if (result.success && result.data) {
+      setSavedAlerts(result.data);
+    }
+
+    setIsQuerying(false);
+  };
+
+  const handleClearFilters = () => {
+    setPlateSearch('');
+    setAlertTypeSearch('');
+    setSourceFilter('ALL');
+    setGraveFilter('ALL');
+    setStartDate('');
+    setEndDate('');
+    setFilters({});
+    loadSavedAlerts();
+  };
+
+  // ==================== COPY MESSAGE ====================
+
+  const handleCopyMessage = (alert: BatchAlertRecord) => {
+    const contract = vehicleContracts.get(alert.plate) || 'Sin contrato';
+    const source = (alert as any).file_uploads?.source || 'BATCH';
+
+    // Determinar si es exceso de velocidad
+    const isSpeedingAlert = alert.alert_type.toLowerCase().includes('velocidad') ||
+      alert.alert_type.toLowerCase().includes('exceso');
+
+    const message = `🚨 *ALERTA DE FLOTA (AUDITORÍA)*\n\n` +
+      `*Tipo:* ${alert.alert_type}\n` +
+      `*Vehículo:* ${alert.plate}\n` +
+      (alert.driver ? `*Conductor:* ${alert.driver}\n` : '') +
+      (alert.speed ? (isSpeedingAlert ? `*Velocidad:* ${alert.speed} km/h ⚠️\n` : `Velocidad: ${alert.speed} km/h\n`) : '') +
+      `Hora: ${new Date(alert.timestamp).toLocaleString()}\n` +
+      `Contrato: ${contract}\n` +
+      `Fuente: ${source}` +
+      (alert.is_grave ? `\n\n⚠️ *FALTA GRAVE*` : '');
+
+    navigator.clipboard.writeText(message);
+    window.alert('📋 Mensaje copiado al portapapeles');
+  };
+
+  // ==================== SAVE TO MAIN ALERTS ====================
+
+  const handleSaveToMainAlerts = async (batchAlert: BatchAlertRecord) => {
+    const contract = vehicleContracts.get(batchAlert.plate) || '';
+
+    // Convertir BatchAlert a Alert
+    const alert: Alert = {
+      id: `batch-${batchAlert.id}`,
+      type: batchAlert.alert_type,
+      plate: batchAlert.plate,
+      driver: batchAlert.driver || 'Sin asignar',
+      timestamp: batchAlert.timestamp,
+      latitude: 0, // No disponible en batch
+      longitude: 0,
+      speed: batchAlert.speed || 0,
+      location: 'Ver en historial de auditoría',
+      details: `Alerta importada desde ${(batchAlert as any).file_uploads?.source || 'BATCH'}`,
+      contract: contract,
+      source: (batchAlert as any).file_uploads?.source || 'BATCH',
+      severity: batchAlert.severity
+    };
+
+    try {
+      const result = await saveAlertToDatabase(alert, 'Auditoría');
+
+      if (result.success) {
+        window.alert('✅ Alerta guardada en el Historial principal\n\nAhora puedes agregar planes de acción desde el módulo "Historial"');
+      } else {
+        window.alert('❌ Error: ' + result.error);
+      }
+    } catch (error: any) {
+      window.alert('❌ Error: ' + error.message);
+    }
+  };
+
+  // ==================== DELETE ====================
+
+  const handleDeleteAlert = async (alertId: string) => {
+    if (!window.confirm('¿Estás seguro de eliminar esta alerta?')) return;
+
+    const result = await deleteBatchAlert(alertId);
+    if (result.success) {
+      window.alert('✅ Alerta eliminada');
+      loadSavedAlerts();
+    } else {
+      window.alert('❌ Error: ' + result.error);
     }
   };
 
   // ==================== EXPORT ====================
 
-  const handleExportGraves = () => {
-    if (graveAlerts.length === 0) {
-      alert('No hay Faltas Graves para exportar');
-      return;
-    }
-
-    const exportData = graveAlerts.map(alert => ({
+  const handleExport = () => {
+    const dataToExport = savedAlerts.map(alert => ({
+      fecha: new Date(alert.timestamp).toLocaleDateString(),
+      hora: new Date(alert.timestamp).toLocaleTimeString(),
       placa: alert.plate,
-      tipo_alerta: alert.alert_type,
-      velocidad: alert.speed ? `${alert.speed} km/h` : 'N/A',
       conductor: alert.driver || 'N/A',
-      fecha_hora: alert.timestamp,
-      severidad: alert.severity === 'critical' ? 'CRÍTICA' : alert.severity.toUpperCase(),
-      falta_grave: alert.is_grave ? 'SÍ' : 'NO'
+      tipo_alerta: alert.alert_type,
+      velocidad: alert.speed || 'N/A',
+      severidad: alert.severity,
+      falta_grave: alert.is_grave ? 'SÍ' : 'NO',
+      contrato: vehicleContracts.get(alert.plate) || 'Sin contrato',
+      fuente: (alert as any).file_uploads?.source || 'N/A',
+      archivo: (alert as any).file_uploads?.filename || 'N/A'
     }));
 
-    exportToExcel(
-      exportData,
-      [
-        { header: 'Placa', key: 'placa', width: 12 },
-        { header: 'Tipo de Alerta', key: 'tipo_alerta', width: 40 },
-        { header: 'Velocidad', key: 'velocidad', width: 15 },
-        { header: 'Conductor', key: 'conductor', width: 25 },
-        { header: 'Fecha y Hora', key: 'fecha_hora', width: 20 },
-        { header: 'Severidad', key: 'severidad', width: 12 },
-        { header: 'Falta Grave', key: 'falta_grave', width: 12 }
-      ],
-      `Faltas_Graves_${selectedSource}_${new Date().toISOString().split('T')[0]}`
-    );
+    exportToExcel(dataToExport, `auditoria_flota_${new Date().toISOString().split('T')[0]}`);
   };
-
-  // ==================== HISTORY ====================
-
-  const loadUploadHistory = async () => {
-    const result = await getAllFileUploads();
-    if (result.success && result.data) {
-      setUploadHistory(result.data);
-    }
-  };
-
-  React.useEffect(() => {
-    loadUploadHistory();
-  }, []);
 
   // ==================== RENDER ====================
 
+  const gravesCount = savedAlerts.filter(a => a.is_grave).length;
+  const processedGravesCount = processedAlerts.filter(a => a.is_grave).length;
+
   return (
-    <div className="space-y-6 p-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-800">Auditoría de Flota - Carga por Lotes</h1>
-          <p className="text-sm text-slate-600 mt-1">
-            Carga archivos históricos de proveedores GPS para análisis de Faltas Graves
-          </p>
-        </div>
+    <div className="space-y-4">
+      <div className="bg-gradient-to-r from-purple-600 to-indigo-600 text-white p-6 rounded-xl shadow-lg">
+        <h1 className="text-2xl font-bold flex items-center gap-3">
+          <Database className="w-8 h-8" />
+          Auditoría de Flota
+        </h1>
+        <p className="text-purple-100 mt-2">Carga masiva de reportes GPS (FAGOR y COLTRACK)</p>
+      </div>
+
+      {/* ==================== UPLOAD SECTION ==================== */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
         <button
-          onClick={() => setShowHistory(!showHistory)}
-          className="px-4 py-2 bg-slate-600 text-white rounded-lg hover:bg-slate-700 transition-colors flex items-center gap-2"
+          onClick={() => setUploadCollapsed(!uploadCollapsed)}
+          className="w-full px-6 py-4 flex items-center justify-between hover:bg-slate-50 transition-colors"
         >
-          <Database className="w-4 h-4" />
-          {showHistory ? 'Ocultar' : 'Ver'} Historial
+          <div className="flex items-center gap-3">
+            <Upload className="w-5 h-5 text-purple-600" />
+            <span className="font-semibold text-lg">Cargar Archivo</span>
+            {processedAlerts.length > 0 && (
+              <span className="text-sm bg-green-100 text-green-700 px-3 py-1 rounded-full">
+                {processedAlerts.length} alertas procesadas
+              </span>
+            )}
+          </div>
+          {uploadCollapsed ? <ChevronDown className="w-5 h-5" /> : <ChevronUp className="w-5 h-5" />}
         </button>
-      </div>
 
-      {/* Historial de Cargas */}
-      {showHistory && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-          <h3 className="font-bold text-lg text-slate-800 mb-4">Historial de Cargas</h3>
-          {uploadHistory.length === 0 ? (
-            <p className="text-slate-500 text-center py-4">No hay cargas previas</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-100">
-                  <tr>
-                    <th className="px-4 py-2 text-left">Archivo</th>
-                    <th className="px-4 py-2 text-center">Proveedor</th>
-                    <th className="px-4 py-2 text-center">Registros</th>
-                    <th className="px-4 py-2 text-center">Fecha de Carga</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {uploadHistory.map(upload => (
-                    <tr key={upload.id} className="hover:bg-slate-50">
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <FileText className="w-4 h-4 text-slate-600" />
-                          <span className="font-medium text-slate-800">{upload.filename}</span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <span className={`px-2 py-1 rounded text-xs font-semibold ${
-                          upload.source === 'FAGOR' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'
-                        }`}>
-                          {upload.source}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-center font-semibold">{upload.processed_rows}</td>
-                      <td className="px-4 py-3 text-center text-slate-600">
-                        {new Date(upload.upload_date).toLocaleString('es-CO')}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Selector de Proveedor */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-        <label className="block text-sm font-semibold text-slate-700 mb-3">
-          1. Seleccionar Proveedor GPS
-        </label>
-        <div className="grid grid-cols-2 gap-4">
-          <button
-            onClick={() => {
-              setSelectedSource('FAGOR');
-              setSelectedFile(null);
-              setProcessedAlerts([]);
-              setGraveAlerts([]);
-            }}
-            className={`p-4 rounded-lg border-2 transition-all ${
-              selectedSource === 'FAGOR'
-                ? 'border-blue-600 bg-blue-50'
-                : 'border-slate-200 hover:border-slate-300'
-            }`}
-          >
-            <div className="text-center">
-              <div className="text-2xl font-bold text-slate-800">FAGOR</div>
-              <div className="text-xs text-slate-600 mt-1">Excel/CSV con múltiples headers</div>
-              <div className="text-xs text-blue-600 mt-2 font-semibold">
-                Detecta: "Alrm. de excesos de velocidad"
-              </div>
-            </div>
-          </button>
-
-          <button
-            onClick={() => {
-              setSelectedSource('COLTRACK');
-              setSelectedFile(null);
-              setProcessedAlerts([]);
-              setGraveAlerts([]);
-            }}
-            className={`p-4 rounded-lg border-2 transition-all ${
-              selectedSource === 'COLTRACK'
-                ? 'border-purple-600 bg-purple-50'
-                : 'border-slate-200 hover:border-slate-300'
-            }`}
-          >
-            <div className="text-center">
-              <div className="text-2xl font-bold text-slate-800">COLTRACK</div>
-              <div className="text-xs text-slate-600 mt-1">CSV delimitado por "|"</div>
-              <div className="text-xs text-purple-600 mt-2 font-semibold">
-                Detecta: "infraccion"
-              </div>
-            </div>
-          </button>
-        </div>
-      </div>
-
-      {/* Upload Area */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-        <label className="block text-sm font-semibold text-slate-700 mb-3">
-          2. Cargar Archivo ({selectedSource})
-        </label>
-
-        {/* Drag & Drop Area */}
-        <div
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          onClick={() => fileInputRef.current?.click()}
-          className={`border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition-all ${
-            isDragging
-              ? 'border-blue-600 bg-blue-50'
-              : 'border-slate-300 hover:border-slate-400 hover:bg-slate-50'
-          }`}
-        >
-          <Upload className={`w-12 h-12 mx-auto mb-4 ${isDragging ? 'text-blue-600' : 'text-slate-400'}`} />
-          <p className="text-lg font-semibold text-slate-700 mb-2">
-            {isDragging ? 'Suelta el archivo aquí' : 'Arrastra y suelta el archivo'}
-          </p>
-          <p className="text-sm text-slate-500 mb-4">
-            o haz clic para seleccionar
-          </p>
-          <p className="text-xs text-slate-400">
-            Formatos: .xlsx, .xls, .csv (máximo 10 MB)
-          </p>
-        </div>
-
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".xlsx,.xls,.csv"
-          onChange={handleFileInputChange}
-          className="hidden"
-        />
-
-        {/* Selected File */}
-        {selectedFile && (
-          <div className="mt-4 p-4 bg-slate-50 rounded-lg border border-slate-200">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <FileText className="w-8 h-8 text-blue-600" />
-                <div>
-                  <p className="font-semibold text-slate-800">{selectedFile.name}</p>
-                  <p className="text-xs text-slate-500">
-                    {(selectedFile.size / 1024).toFixed(2)} KB
-                  </p>
-                </div>
-              </div>
+        {!uploadCollapsed && (
+          <div className="p-6 border-t border-slate-200">
+            {/* Source Selection */}
+            <div className="flex gap-4 mb-4">
               <button
-                onClick={() => {
-                  setSelectedFile(null);
-                  setProcessedAlerts([]);
-                  setGraveAlerts([]);
-                  if (fileInputRef.current) fileInputRef.current.value = '';
-                }}
-                className="p-2 hover:bg-red-100 rounded text-red-600"
+                onClick={() => setSelectedSource('FAGOR')}
+                className={`flex-1 py-2 px-4 rounded-lg font-medium transition-colors ${
+                  selectedSource === 'FAGOR'
+                    ? 'bg-purple-600 text-white'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
               >
-                <Trash2 className="w-5 h-5" />
+                📊 FAGOR (.xlsx)
+              </button>
+              <button
+                onClick={() => setSelectedSource('COLTRACK')}
+                className={`flex-1 py-2 px-4 rounded-lg font-medium transition-colors ${
+                  selectedSource === 'COLTRACK'
+                    ? 'bg-purple-600 text-white'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                📄 COLTRACK (.csv)
               </button>
             </div>
-          </div>
-        )}
 
-        {/* Error Display */}
-        {error && (
-          <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
-            <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
-            <div>
-              <p className="font-semibold text-red-800">Error</p>
-              <p className="text-sm text-red-700">{error}</p>
+            {/* Drag & Drop Area */}
+            <div
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              onClick={() => fileInputRef.current?.click()}
+              className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
+                isDragging
+                  ? 'border-purple-500 bg-purple-50'
+                  : 'border-slate-300 hover:border-purple-400 hover:bg-slate-50'
+              }`}
+            >
+              <Upload className="w-12 h-12 mx-auto text-slate-400 mb-3" />
+              <p className="text-slate-600 font-medium mb-1">
+                {selectedFile ? selectedFile.name : 'Arrastra y suelta el archivo'}
+              </p>
+              <p className="text-sm text-slate-500">
+                o haz clic para seleccionar ({selectedSource === 'FAGOR' ? '.xlsx, .xls' : '.csv'} - máximo 10 MB)
+              </p>
             </div>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={selectedSource === 'FAGOR' ? '.xlsx,.xls' : '.csv'}
+              onChange={handleFileInputChange}
+              className="hidden"
+            />
+
+            {error && (
+              <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2">
+                <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+                <div className="text-red-700 text-sm">{error}</div>
+              </div>
+            )}
+
+            {/* Action Buttons */}
+            <div className="mt-4 flex gap-3">
+              <button
+                onClick={handleProcessFile}
+                disabled={!selectedFile || isProcessing}
+                className={`flex-1 py-3 px-6 rounded-lg font-bold transition-all flex items-center justify-center gap-2 ${
+                  !selectedFile || isProcessing
+                    ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                    : 'bg-blue-600 text-white hover:bg-blue-700'
+                }`}
+              >
+                {isProcessing ? (
+                  <>
+                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    Procesando...
+                  </>
+                ) : (
+                  <>
+                    <FileText className="w-5 h-5" />
+                    Procesar Archivo
+                  </>
+                )}
+              </button>
+
+              {processedAlerts.length > 0 && (
+                <button
+                  onClick={handleSaveToDatabase}
+                  disabled={isSaving}
+                  className={`flex-1 py-3 px-6 rounded-lg font-bold transition-all flex items-center justify-center gap-2 ${
+                    isSaving
+                      ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                      : 'bg-green-600 text-white hover:bg-green-700'
+                  }`}
+                >
+                  {isSaving ? (
+                    <>
+                      <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      Guardando...
+                    </>
+                  ) : (
+                    <>
+                      <Database className="w-5 h-5" />
+                      Guardar en Base de Datos ({processedAlerts.length})
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+
+            {processedAlerts.length > 0 && (
+              <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="font-semibold text-green-800">
+                      ✅ {processedAlerts.length} alertas procesadas
+                    </p>
+                    {processedGravesCount > 0 && (
+                      <p className="text-sm text-green-700 mt-1">
+                        ⚠️ {processedGravesCount} Faltas Graves detectadas
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
-
-        {/* Process Button */}
-        <div className="mt-6">
-          <button
-            onClick={handleProcessFile}
-            disabled={!selectedFile || isProcessing}
-            className={`w-full py-3 px-6 rounded-lg font-semibold transition-all flex items-center justify-center gap-2 ${
-              !selectedFile || isProcessing
-                ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
-                : 'bg-blue-600 text-white hover:bg-blue-700'
-            }`}
-          >
-            {isProcessing ? (
-              <>
-                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                Procesando archivo...
-              </>
-            ) : (
-              <>
-                <FileText className="w-5 h-5" />
-                3. Procesar Archivo
-              </>
-            )}
-          </button>
-        </div>
       </div>
 
-      {/* Preview - Faltas Graves */}
-      {graveAlerts.length > 0 && (
-        <div className="bg-white rounded-xl border border-red-200 shadow-sm p-6">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <AlertTriangle className="w-6 h-6 text-red-600" />
-              <div>
-                <h3 className="font-bold text-lg text-slate-800">
-                  Faltas Graves Detectadas
-                </h3>
-                <p className="text-sm text-slate-600">
-                  {graveAlerts.length} de {totalRows} registros
-                </p>
-              </div>
-            </div>
+      {/* ==================== ANALYSIS SECTION ==================== */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold flex items-center gap-2">
+            <Search className="w-6 h-6 text-purple-600" />
+            Análisis de Datos ({savedAlerts.length} registros)
+          </h2>
+          <div className="flex gap-2">
             <button
-              onClick={handleExportGraves}
-              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2"
+              onClick={handleExport}
+              disabled={savedAlerts.length === 0}
+              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-slate-300 disabled:cursor-not-allowed flex items-center gap-2"
             >
               <Download className="w-4 h-4" />
-              Exportar a Excel
+              Exportar Excel
             </button>
           </div>
+        </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-red-50">
+        {/* Filters */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6 p-4 bg-slate-50 rounded-lg">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Placa</label>
+            <input
+              type="text"
+              value={plateSearch}
+              onChange={(e) => setPlateSearch(e.target.value)}
+              placeholder="Ej: ABC123"
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Tipo de Alerta</label>
+            <input
+              type="text"
+              value={alertTypeSearch}
+              onChange={(e) => setAlertTypeSearch(e.target.value)}
+              placeholder="Ej: velocidad"
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Fuente</label>
+            <select
+              value={sourceFilter}
+              onChange={(e) => setSourceFilter(e.target.value as any)}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+            >
+              <option value="ALL">Todas</option>
+              <option value="FAGOR">FAGOR</option>
+              <option value="COLTRACK">COLTRACK</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Faltas Graves</label>
+            <select
+              value={graveFilter}
+              onChange={(e) => setGraveFilter(e.target.value as any)}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+            >
+              <option value="ALL">Todas</option>
+              <option value="true">Solo Graves</option>
+              <option value="false">Solo No Graves</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Fecha Desde</label>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Fecha Hasta</label>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+            />
+          </div>
+
+          <div className="flex items-end gap-2 md:col-span-2">
+            <button
+              onClick={handleApplyFilters}
+              disabled={isQuerying}
+              className="flex-1 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:bg-slate-300 flex items-center justify-center gap-2"
+            >
+              <Filter className="w-4 h-4" />
+              Aplicar Filtros
+            </button>
+            <button
+              onClick={handleClearFilters}
+              className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg hover:bg-slate-300 flex items-center gap-2"
+            >
+              <X className="w-4 h-4" />
+              Limpiar
+            </button>
+          </div>
+        </div>
+
+        {/* Stats Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <p className="text-sm text-blue-700 font-medium">Total Alertas</p>
+            <p className="text-3xl font-bold text-blue-900">{savedAlerts.length}</p>
+          </div>
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+            <p className="text-sm text-red-700 font-medium">Faltas Graves</p>
+            <p className="text-3xl font-bold text-red-900">{gravesCount}</p>
+          </div>
+          <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+            <p className="text-sm text-green-700 font-medium">Vehículos Únicos</p>
+            <p className="text-3xl font-bold text-green-900">
+              {new Set(savedAlerts.map(a => a.plate)).size}
+            </p>
+          </div>
+        </div>
+
+        {/* Alerts Table */}
+        {isQuerying ? (
+          <div className="text-center py-12">
+            <div className="w-12 h-12 border-4 border-purple-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+            <p className="text-slate-600">Consultando base de datos...</p>
+          </div>
+        ) : savedAlerts.length === 0 ? (
+          <div className="text-center py-12 bg-slate-50 rounded-lg">
+            <Database className="w-16 h-16 text-slate-400 mx-auto mb-4" />
+            <p className="text-slate-600 font-medium">No hay alertas guardadas</p>
+            <p className="text-sm text-slate-500 mt-1">Carga un archivo para comenzar</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto border border-slate-200 rounded-lg">
+            <table className="w-full">
+              <thead className="bg-slate-100">
                 <tr>
-                  <th className="px-4 py-2 text-left text-xs font-bold text-red-800">Placa</th>
-                  <th className="px-4 py-2 text-left text-xs font-bold text-red-800">Tipo de Alerta</th>
-                  <th className="px-4 py-2 text-center text-xs font-bold text-red-800">Velocidad</th>
-                  <th className="px-4 py-2 text-left text-xs font-bold text-red-800">Conductor</th>
-                  <th className="px-4 py-2 text-center text-xs font-bold text-red-800">Fecha/Hora</th>
-                  <th className="px-4 py-2 text-center text-xs font-bold text-red-800">Severidad</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Fecha/Hora</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Placa</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Conductor</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Tipo de Alerta</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Vel.</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Contrato</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Grave</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Acciones</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
-                {graveAlerts.slice(0, 50).map((alert, index) => (
-                  <tr key={index} className="hover:bg-red-50">
-                    <td className="px-4 py-3 font-semibold text-slate-800">{alert.plate}</td>
-                    <td className="px-4 py-3 text-slate-700">{alert.alert_type}</td>
-                    <td className="px-4 py-3 text-center">
-                      {alert.speed ? (
-                        <span className="font-semibold text-red-700">{alert.speed} km/h</span>
+              <tbody className="divide-y divide-slate-200">
+                {savedAlerts.map((alert) => (
+                  <tr key={alert.id} className="hover:bg-slate-50">
+                    <td className="px-4 py-3 text-sm text-slate-700">
+                      {new Date(alert.timestamp).toLocaleString('es-CO', {
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </td>
+                    <td className="px-4 py-3 text-sm font-semibold text-slate-900">{alert.plate}</td>
+                    <td className="px-4 py-3 text-sm text-slate-700">{alert.driver || 'N/A'}</td>
+                    <td className="px-4 py-3 text-sm text-slate-700">{alert.alert_type}</td>
+                    <td className="px-4 py-3 text-sm text-slate-700">
+                      {alert.speed ? `${alert.speed} km/h` : 'N/A'}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-slate-700">
+                      {vehicleContracts.get(alert.plate) || 'Sin contrato'}
+                    </td>
+                    <td className="px-4 py-3 text-sm">
+                      {alert.is_grave ? (
+                        <span className="px-2 py-1 bg-red-100 text-red-700 rounded-full text-xs font-medium">
+                          SÍ
+                        </span>
                       ) : (
-                        <span className="text-slate-400">N/A</span>
+                        <span className="px-2 py-1 bg-slate-100 text-slate-600 rounded-full text-xs font-medium">
+                          NO
+                        </span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-slate-700">{alert.driver || 'N/A'}</td>
-                    <td className="px-4 py-3 text-center text-slate-600 text-xs">
-                      {alert.timestamp}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <span className="px-2 py-1 bg-red-100 text-red-700 rounded text-xs font-semibold">
-                        {alert.severity.toUpperCase()}
-                      </span>
+                    <td className="px-4 py-3">
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => handleCopyMessage(alert)}
+                          className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                          title="Copiar mensaje"
+                        >
+                          <Copy className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleSaveToMainAlerts(alert)}
+                          className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                          title="Guardar en Historial"
+                        >
+                          <Save className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteAlert(alert.id)}
+                          className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                          title="Eliminar"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            {graveAlerts.length > 50 && (
-              <p className="text-center text-sm text-slate-500 mt-4">
-                Mostrando primeras 50 de {graveAlerts.length} faltas graves
-              </p>
-            )}
           </div>
-        </div>
-      )}
-
-      {/* Save Button */}
-      {processedAlerts.length > 0 && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-          <button
-            onClick={handleSaveToDatabase}
-            disabled={isSaving}
-            className={`w-full py-4 px-6 rounded-lg font-bold text-lg transition-all flex items-center justify-center gap-3 ${
-              isSaving
-                ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
-                : 'bg-green-600 text-white hover:bg-green-700'
-            }`}
-          >
-            {isSaving ? (
-              <>
-                <div className="w-6 h-6 border-3 border-white border-t-transparent rounded-full animate-spin" />
-                Guardando en Base de Datos...
-              </>
-            ) : (
-              <>
-                <CheckCircle className="w-6 h-6" />
-                4. Guardar en Base de Datos ({processedAlerts.length} alertas)
-              </>
-            )}
-          </button>
-          <p className="text-center text-sm text-slate-500 mt-3">
-            Se guardarán {totalRows} registros, incluyendo {graveAlerts.length} Faltas Graves
-          </p>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 };
