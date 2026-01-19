@@ -60,15 +60,31 @@ export const BatchUpload: React.FC = () => {
 
       result.vehicles.forEach(vehicle => {
         if (vehicle.contract) {
-          contractsMap.set(vehicle.plate, vehicle.contract);
+          // Normalizar placa: mayúsculas y sin espacios
+          const normalizedPlate = vehicle.plate.toUpperCase().replace(/\s+/g, '');
+          contractsMap.set(normalizedPlate, vehicle.contract);
         }
       });
 
       setVehicleContracts(contractsMap);
       console.log(`📋 Contratos cargados: ${contractsMap.size} vehículos`);
+      console.log('📋 Muestra de contratos:', Array.from(contractsMap.entries()).slice(0, 5));
     } catch (error) {
       console.error('Error cargando contratos:', error);
     }
+  };
+
+  // Helper function to get contract by plate
+  const getContractByPlate = (plate: string): string => {
+    // Normalizar placa de búsqueda: mayúsculas y sin espacios
+    const normalizedPlate = plate.toUpperCase().replace(/\s+/g, '');
+    const contract = vehicleContracts.get(normalizedPlate);
+
+    if (!contract) {
+      console.warn(`⚠️ No se encontró contrato para placa: ${plate} (normalizada: ${normalizedPlate})`);
+    }
+
+    return contract || 'Sin contrato';
   };
 
   const loadSavedAlerts = async () => {
@@ -238,7 +254,7 @@ export const BatchUpload: React.FC = () => {
   // ==================== COPY MESSAGE ====================
 
   const handleCopyMessage = (alert: BatchAlertRecord) => {
-    const contract = vehicleContracts.get(alert.plate) || 'Sin contrato';
+    const contract = getContractByPlate(alert.plate);
     const source = (alert as any).file_uploads?.source || 'BATCH';
 
     // Determinar si es exceso de velocidad
@@ -279,7 +295,7 @@ export const BatchUpload: React.FC = () => {
   // ==================== SAVE TO MAIN ALERTS ====================
 
   const handleSaveToMainAlerts = async (batchAlert: BatchAlertRecord) => {
-    const contract = vehicleContracts.get(batchAlert.plate) || '';
+    const contract = getContractByPlate(batchAlert.plate);
 
     // Convertir BatchAlert a Alert
     const alert: Alert = {
@@ -363,7 +379,7 @@ export const BatchUpload: React.FC = () => {
       velocidad: alert.speed || 'N/A',
       severidad: alert.severity,
       falta_grave: alert.is_grave ? 'SÍ' : 'NO',
-      contrato: vehicleContracts.get(alert.plate) || 'Sin contrato',
+      contrato: getContractByPlate(alert.plate),
       fuente: (alert as any).file_uploads?.source || 'N/A',
       archivo: (alert as any).file_uploads?.filename || 'N/A'
     }));
@@ -716,7 +732,7 @@ export const BatchUpload: React.FC = () => {
                       {alert.speed ? `${alert.speed} km/h` : 'N/A'}
                     </td>
                     <td className="px-4 py-3 text-sm text-slate-700">
-                      {vehicleContracts.get(alert.plate) || 'Sin contrato'}
+                      {getContractByPlate(alert.plate)}
                     </td>
                     <td className="px-4 py-3 text-sm">
                       {alert.is_grave ? (
