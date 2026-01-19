@@ -92,6 +92,15 @@ export const BatchUpload: React.FC = () => {
     const result = await queryBatchAlerts(filters);
     if (result.success && result.data) {
       setSavedAlerts(result.data);
+
+      // Debug: Mostrar primeras 3 placas para verificar matching
+      if (result.data.length > 0) {
+        console.log('🔍 Debug - Primeras 3 placas en alertas:', result.data.slice(0, 3).map(a => ({
+          placa_original: a.plate,
+          placa_normalizada: a.plate.toUpperCase().replace(/\s+/g, ''),
+          contrato_encontrado: getContractByPlate(a.plate)
+        })));
+      }
     }
     setIsQuerying(false);
   };
@@ -297,17 +306,22 @@ export const BatchUpload: React.FC = () => {
   const handleSaveToMainAlerts = async (batchAlert: BatchAlertRecord) => {
     const contract = getContractByPlate(batchAlert.plate);
 
+    // Generar vehicleId desde la placa normalizada
+    const normalizedPlate = batchAlert.plate.toUpperCase().replace(/\s+/g, '');
+    const vehicleId = `vehicle-${normalizedPlate}`;
+
     // Convertir BatchAlert a Alert
     const alert: Alert = {
       id: `batch-${batchAlert.id}`,
+      vehicleId: vehicleId,
       type: batchAlert.alert_type,
       plate: batchAlert.plate,
       driver: batchAlert.driver || 'Sin asignar',
       timestamp: batchAlert.timestamp,
-      latitude: 0, // No disponible en batch
-      longitude: 0,
+      latitude: batchAlert.latitude || 0,
+      longitude: batchAlert.longitude || 0,
       speed: batchAlert.speed || 0,
-      location: 'Ver en historial de auditoría',
+      location: batchAlert.location || 'Ver en historial de auditoría',
       details: `Alerta importada desde ${(batchAlert as any).file_uploads?.source || 'BATCH'}`,
       contract: contract,
       source: (batchAlert as any).file_uploads?.source || 'BATCH',
