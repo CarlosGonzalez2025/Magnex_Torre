@@ -442,6 +442,13 @@ export async function queryBatchAlerts(
         uploadsMap.set(upload.id, upload);
       });
       console.log(`📦 File uploads cargados: ${uploadsMap.size} registros`);
+
+      // Debug: Mostrar distribución de sources en file_uploads
+      const uploadSources = uploadsData.reduce((acc: any, upload: any) => {
+        acc[upload.source] = (acc[upload.source] || 0) + 1;
+        return acc;
+      }, {});
+      console.log('📊 Distribución de file_uploads por source:', uploadSources);
     }
 
     // Ahora consultar batch_alerts (sin join, más rápido y confiable)
@@ -477,8 +484,13 @@ export async function queryBatchAlerts(
     // Ordenar por timestamp descendente
     query = query.order('timestamp', { ascending: false });
 
-    // Aumentar el límite a 10000 registros (ajusta según necesites)
-    query = query.limit(10000);
+    // SOLUCIÓN: Usar range para obtener todos los registros explícitamente
+    // range(0, 99999) obtiene desde el registro 0 hasta el 100000
+    const MAX_RECORDS = 100000;
+    query = query.range(0, MAX_RECORDS - 1);
+
+    console.log(`🚨 IMPORTANTE: Usando .range(0, ${MAX_RECORDS - 1}) para obtener TODOS los registros`);
+    console.log('⏳ Ejecutando consulta a batch_alerts...');
 
     const { data, error, count } = await query;
 
@@ -490,6 +502,20 @@ export async function queryBatchAlerts(
     console.log('🔍 Debug - Total registros obtenidos de BD:', data?.length || 0);
     console.log('🔍 Debug - Total registros en tabla (count):', count || 0);
 
+    // Debug: Mostrar timestamps de primeras y últimas alertas
+    if (data && data.length > 0) {
+      console.log('📅 Primera alerta (más reciente):', {
+        plate: data[0].plate,
+        timestamp: data[0].timestamp,
+        alert_type: data[0].alert_type
+      });
+      console.log('📅 Última alerta (más antigua):', {
+        plate: data[data.length - 1].plate,
+        timestamp: data[data.length - 1].timestamp,
+        alert_type: data[data.length - 1].alert_type
+      });
+    }
+
     // Enriquecer alertas con datos de file_uploads (join manual)
     let enrichedData = data?.map((alert: any) => {
       const uploadInfo = uploadsMap.get(alert.upload_id);
@@ -498,6 +524,12 @@ export async function queryBatchAlerts(
         file_uploads: uploadInfo || null
       };
     }) || [];
+
+    // Debug: Contar alertas sin file_upload
+    const alertsWithoutUpload = enrichedData.filter(a => !a.file_uploads).length;
+    if (alertsWithoutUpload > 0) {
+      console.warn(`⚠️ ${alertsWithoutUpload} alertas NO tienen file_upload asociado`);
+    }
 
     // Debug: Verificar sources
     if (enrichedData.length > 0) {
