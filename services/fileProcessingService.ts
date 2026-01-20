@@ -183,8 +183,11 @@ function processFagorFile(workbook: XLSX.WorkBook): ProcessingResult {
         continue;
       }
 
-      const plate = row[plateIndex]?.toString().trim();
-      if (!plate) continue;
+      const plateRaw = row[plateIndex]?.toString().trim();
+      if (!plateRaw) continue;
+
+      // Normalizar placa: mayúsculas y sin espacios
+      const plate = plateRaw.toUpperCase().replace(/\s+/g, '');
 
       // Extraer alertType con manejo robusto de null/undefined
       const alertTypeRaw = row[alertTypeIndex];
@@ -226,6 +229,11 @@ function processFagorFile(workbook: XLSX.WorkBook): ProcessingResult {
     }
 
     console.log(`✅ FAGOR procesado: ${alerts.length} alertas, ${gravesCount} graves`);
+
+    // Debug: Mostrar primeras 3 placas normalizadas
+    if (alerts.length > 0) {
+      console.log('🔍 Primeras 3 placas procesadas:', alerts.slice(0, 3).map(a => a.plate));
+    }
 
     return {
       success: true,
@@ -270,7 +278,9 @@ function processColtrackFile(workbook: XLSX.WorkBook): ProcessingResult {
 
     for (const row of rawData) {
       // Mapear columnas (case insensitive)
-      const plate = row['Nombre'] || row['nombre'] || row['NOMBRE'] || '';
+      const plateRaw = row['Nombre'] || row['nombre'] || row['NOMBRE'] || '';
+      // Normalizar placa: mayúsculas y sin espacios
+      const plate = plateRaw ? plateRaw.toString().toUpperCase().replace(/\s+/g, '') : '';
       const alertType = row['Evento'] || row['evento'] || row['EVENTO'] || 'Sin especificar';
       const speedRaw = row['Max kph'] || row['max kph'] || row['MAX KPH'] || row['Velocidad'] || null;
       const speed = speedRaw ? parseFloat(speedRaw.toString().replace(/[^\d.-]/g, '')) : null;
@@ -310,7 +320,7 @@ function processColtrackFile(workbook: XLSX.WorkBook): ProcessingResult {
       }
 
       alerts.push({
-        plate: plate.toString().trim(),
+        plate: plate, // Ya está normalizada
         alert_type: alertType.toString().trim(),
         speed,
         timestamp: timestamp.toString(),
@@ -324,6 +334,11 @@ function processColtrackFile(workbook: XLSX.WorkBook): ProcessingResult {
     }
 
     console.log(`✅ COLTRACK procesado: ${alerts.length} alertas, ${gravesCount} graves`);
+
+    // Debug: Mostrar primeras 3 placas normalizadas
+    if (alerts.length > 0) {
+      console.log('🔍 Primeras 3 placas procesadas:', alerts.slice(0, 3).map(a => a.plate));
+    }
 
     return {
       success: true,
