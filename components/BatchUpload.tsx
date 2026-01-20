@@ -34,6 +34,10 @@ export const BatchUpload: React.FC = () => {
   const [isQuerying, setIsQuerying] = useState(false);
   const [vehicleContracts, setVehicleContracts] = useState<Map<string, string>>(new Map());
 
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(20);
+
   // Filters
   const [filters, setFilters] = useState<AlertFilters>({});
   const [plateSearch, setPlateSearch] = useState('');
@@ -281,6 +285,7 @@ export const BatchUpload: React.FC = () => {
       setStartDate('');
       setEndDate('');
       setFilters({});
+      setCurrentPage(1); // Volver a página 1
 
       // Limpiar y recargar TODOS los datos
       setProcessedAlerts([]);
@@ -331,6 +336,7 @@ export const BatchUpload: React.FC = () => {
       console.log('📊 Distribución después de filtros:', sourceCounts);
 
       setSavedAlerts(result.data);
+      setCurrentPage(1); // Volver a página 1 después de filtrar
 
       // Debug: Verificar matching después de filtrar
       if (result.data.length > 0 && result.data.length <= 5) {
@@ -356,6 +362,7 @@ export const BatchUpload: React.FC = () => {
     setStartDate('');
     setEndDate('');
     setFilters({});
+    setCurrentPage(1); // Volver a página 1
     // Recargar todos los datos sin filtros
     loadSavedAlerts();
   };
@@ -858,23 +865,28 @@ export const BatchUpload: React.FC = () => {
             <p className="text-sm text-slate-500 mt-1">Carga un archivo para comenzar</p>
           </div>
         ) : (
-          <div className="overflow-x-auto border border-slate-200 rounded-lg">
-            <table className="w-full">
-              <thead className="bg-slate-100">
-                <tr>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Fecha/Hora</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Placa</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Conductor</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Tipo de Alerta</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Vel.</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Contrato</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Plataforma</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Grave</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Acciones</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200">
-                {savedAlerts.map((alert) => (
+          <>
+            <div className="overflow-x-auto border border-slate-200 rounded-lg">
+              <table className="w-full">
+                <thead className="bg-slate-100">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Fecha/Hora</th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Placa</th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Conductor</th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Tipo de Alerta</th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Vel.</th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Contrato</th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Plataforma</th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Grave</th>
+                    <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {(() => {
+                    const startIndex = (currentPage - 1) * itemsPerPage;
+                    const endIndex = startIndex + itemsPerPage;
+                    const paginatedAlerts = savedAlerts.slice(startIndex, endIndex);
+                    return paginatedAlerts.map((alert) => (
                   <tr key={alert.id} className="hover:bg-slate-50">
                     <td className="px-4 py-3 text-sm text-slate-700">
                       {new Date(alert.timestamp).toLocaleString('es-CO', {
@@ -942,10 +954,73 @@ export const BatchUpload: React.FC = () => {
                       </div>
                     </td>
                   </tr>
-                ))}
+                    ));
+                  })()}
               </tbody>
             </table>
           </div>
+
+          {/* Pagination Controls */}
+          <div className="mt-4 flex items-center justify-between px-4 py-3 bg-slate-50 border border-slate-200 rounded-lg">
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <label className="text-sm text-slate-700 font-medium">Registros por página:</label>
+                <select
+                  value={itemsPerPage}
+                  onChange={(e) => {
+                    setItemsPerPage(Number(e.target.value));
+                    setCurrentPage(1);
+                  }}
+                  className="px-2 py-1 border border-slate-300 rounded text-sm"
+                >
+                  <option value={10}>10</option>
+                  <option value={20}>20</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                </select>
+              </div>
+              <div className="text-sm text-slate-600">
+                Mostrando {Math.min((currentPage - 1) * itemsPerPage + 1, savedAlerts.length)} a {Math.min(currentPage * itemsPerPage, savedAlerts.length)} de {savedAlerts.length} registros
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCurrentPage(1)}
+                disabled={currentPage === 1}
+                className="px-3 py-1 border border-slate-300 rounded hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+              >
+                ««
+              </button>
+              <button
+                onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                disabled={currentPage === 1}
+                className="px-3 py-1 border border-slate-300 rounded hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+              >
+                ‹
+              </button>
+
+              <span className="px-4 text-sm text-slate-700">
+                Página {currentPage} de {Math.ceil(savedAlerts.length / itemsPerPage)}
+              </span>
+
+              <button
+                onClick={() => setCurrentPage(prev => Math.min(Math.ceil(savedAlerts.length / itemsPerPage), prev + 1))}
+                disabled={currentPage >= Math.ceil(savedAlerts.length / itemsPerPage)}
+                className="px-3 py-1 border border-slate-300 rounded hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+              >
+                ›
+              </button>
+              <button
+                onClick={() => setCurrentPage(Math.ceil(savedAlerts.length / itemsPerPage))}
+                disabled={currentPage >= Math.ceil(savedAlerts.length / itemsPerPage)}
+                className="px-3 py-1 border border-slate-300 rounded hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+              >
+                »»
+              </button>
+            </div>
+          </div>
+          </>
         )}
       </div>
     </div>
