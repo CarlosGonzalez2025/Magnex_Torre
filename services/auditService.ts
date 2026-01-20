@@ -53,7 +53,12 @@ export async function createFileUploadRecord(
       return { success: false, error: error.message };
     }
 
-    console.log('✅ Registro de carga creado:', data.id);
+    console.log('✅ Registro de carga creado:', {
+      uploadId: data.id,
+      filename,
+      source,
+      processedRows
+    });
     return { success: true, uploadId: data.id };
 
   } catch (error: any) {
@@ -119,7 +124,8 @@ export async function saveBatchAlerts(
       longitude: alert.longitude || null
     }));
 
-    console.log(`💾 Guardando ${alertsToInsert.length} alertas...`);
+    console.log(`💾 Guardando ${alertsToInsert.length} alertas con upload_id: ${uploadId}`);
+    console.log('🔍 Primera alerta a insertar:', alertsToInsert[0]);
 
     // Insertar en batch (Supabase soporta hasta 1000 filas por request)
     // Si hay más de 1000, dividir en chunks
@@ -463,6 +469,28 @@ export async function queryBatchAlerts(
     if (error) {
       console.error('❌ Error consultando alertas:', error);
       return { success: false, error: error.message };
+    }
+
+    console.log('🔍 Debug - Total registros obtenidos de BD:', data?.length || 0);
+
+    // Debug: Verificar sources de las primeras alertas
+    if (data && data.length > 0) {
+      const sourceCounts = data.reduce((acc: any, item: any) => {
+        const source = item.file_uploads?.source || 'SIN_SOURCE';
+        acc[source] = (acc[source] || 0) + 1;
+        return acc;
+      }, {});
+      console.log('📊 Distribución por source:', sourceCounts);
+
+      // Mostrar primeras 3 alertas con su source
+      console.log('🔍 Primeras 3 alertas:', data.slice(0, 3).map((item: any) => ({
+        id: item.id,
+        plate: item.plate,
+        alert_type: item.alert_type,
+        upload_id: item.upload_id,
+        file_uploads_exists: !!item.file_uploads,
+        source: item.file_uploads?.source || 'NO_SOURCE'
+      })));
     }
 
     // Filtrar por source si se especificó (viene del join con file_uploads)
