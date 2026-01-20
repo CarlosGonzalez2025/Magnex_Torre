@@ -49,12 +49,18 @@ export const BatchUpload: React.FC = () => {
   // ==================== FETCH VEHICLE CONTRACTS ====================
 
   useEffect(() => {
-    loadVehicleContracts();
-    loadSavedAlerts();
+    // Cargar contratos primero, luego cargar alertas
+    const initializeData = async () => {
+      await loadVehicleContracts(); // Esperar a que termine
+      await loadSavedAlerts(); // Luego cargar alertas
+    };
+
+    initializeData();
   }, []);
 
   const loadVehicleContracts = async () => {
     try {
+      console.log('⏳ Cargando contratos desde Google Sheets...');
       const result = await fetchFleetData();
       const contractsMap = new Map<string, string>();
 
@@ -67,10 +73,13 @@ export const BatchUpload: React.FC = () => {
       });
 
       setVehicleContracts(contractsMap);
-      console.log(`📋 Contratos cargados: ${contractsMap.size} vehículos`);
+      console.log(`✅ Contratos cargados: ${contractsMap.size} vehículos`);
       console.log('📋 Muestra de contratos:', Array.from(contractsMap.entries()).slice(0, 5));
+
+      // Pequeño delay para asegurar que el estado se actualice
+      await new Promise(resolve => setTimeout(resolve, 100));
     } catch (error) {
-      console.error('Error cargando contratos:', error);
+      console.error('❌ Error cargando contratos:', error);
     }
   };
 
@@ -89,6 +98,7 @@ export const BatchUpload: React.FC = () => {
 
   const loadSavedAlerts = async () => {
     setIsQuerying(true);
+    console.log('⏳ Consultando alertas de batch_alerts...');
     const result = await queryBatchAlerts(filters);
     if (result.success && result.data) {
       setSavedAlerts(result.data);
@@ -98,7 +108,8 @@ export const BatchUpload: React.FC = () => {
         console.log('🔍 Debug - Primeras 3 placas en alertas:', result.data.slice(0, 3).map(a => ({
           placa_original: a.plate,
           placa_normalizada: a.plate.toUpperCase().replace(/\s+/g, ''),
-          contrato_encontrado: getContractByPlate(a.plate)
+          contrato_encontrado: getContractByPlate(a.plate),
+          vehicleContracts_size: vehicleContracts.size
         })));
       }
     }
@@ -241,9 +252,20 @@ export const BatchUpload: React.FC = () => {
     setFilters(newFilters);
     setIsQuerying(true);
 
+    console.log('🔍 Aplicando filtros...', newFilters);
+    console.log(`📋 Contratos disponibles para matching: ${vehicleContracts.size}`);
+
     const result = await queryBatchAlerts(newFilters);
     if (result.success && result.data) {
       setSavedAlerts(result.data);
+
+      // Debug: Verificar matching después de filtrar
+      if (result.data.length > 0 && result.data.length <= 5) {
+        console.log('🔍 Matching de todas las alertas filtradas:', result.data.map(a => ({
+          placa: a.plate,
+          contrato: getContractByPlate(a.plate)
+        })));
+      }
     }
 
     setIsQuerying(false);
