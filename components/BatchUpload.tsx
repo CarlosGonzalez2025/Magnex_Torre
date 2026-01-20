@@ -297,34 +297,41 @@ export const BatchUpload: React.FC = () => {
 
     // Determinar si es exceso de velocidad
     const isSpeedingAlert = alert.alert_type.toLowerCase().includes('velocidad') ||
-      alert.alert_type.toLowerCase().includes('exceso');
+      alert.alert_type.toLowerCase().includes('exceso') ||
+      alert.alert_type.toLowerCase().includes('infraccion');
+
+    // Generar detalles según el tipo de alerta
+    let details = '';
+    if (alert.speed) {
+      details = `Velocidad: ${alert.speed} km/h`;
+      // Si podemos extraer el límite del tipo de alerta, lo agregamos
+      const limitMatch = alert.alert_type.match(/\d+\s*km\/h/i);
+      if (limitMatch) {
+        const limit = limitMatch[0];
+        details = `Velocidad: ${alert.speed} km/h (Límite: ${limit})`;
+      }
+    } else {
+      details = alert.alert_type;
+    }
 
     // Generar URL de Google Maps si hay coordenadas
-    let googleMapsUrl = '';
+    let googleMapsUrl = 'Desconocido';
     if (alert.latitude && alert.longitude) {
       googleMapsUrl = `https://www.google.com/maps?q=${alert.latitude},${alert.longitude}`;
     }
 
-    let message = `🚨 *ALERTA DE FLOTA (AUDITORÍA)*\n\n` +
+    // Formato idéntico al de los otros módulos (App.tsx)
+    const message = `🚨 *ALERTA DE FLOTA*\n\n` +
       `*Tipo:* ${alert.alert_type}\n` +
       `*Vehículo:* ${alert.plate}\n` +
-      (alert.driver ? `*Conductor:* ${alert.driver}\n` : '') +
+      `*Conductor:* ${alert.driver || 'Sin asignar'}\n` +
+      `Detalles: ${details}\n` +
       (alert.speed ? (isSpeedingAlert ? `*Velocidad:* ${alert.speed} km/h ⚠️\n` : `Velocidad: ${alert.speed} km/h\n`) : '') +
-      `Hora: ${new Date(alert.timestamp).toLocaleString()}\n`;
-
-    // Agregar ubicación
-    if (alert.location) {
-      message += `📍 *Ubicación:* ${alert.location}\n`;
-    }
-
-    // Agregar URL de Google Maps si hay coordenadas
-    if (googleMapsUrl) {
-      message += `🗺️ *Ver en mapa:* ${googleMapsUrl}\n`;
-    }
-
-    message += `Contrato: ${contract}\n` +
-      `Fuente: ${source}` +
-      (alert.is_grave ? `\n\n⚠️ *FALTA GRAVE*` : '');
+      `📍 *Ubicación:* ${alert.location || 'Desconocido'}\n` +
+      `🗺️ *Ver en mapa:* ${googleMapsUrl}\n` +
+      `Hora: ${new Date(alert.timestamp).toLocaleString()}\n` +
+      (contract && contract !== 'Sin contrato' ? `Contrato: ${contract}\n` : '') +
+      `Fuente: ${source}`;
 
     navigator.clipboard.writeText(message);
     window.alert('📋 Mensaje copiado al portapapeles');
