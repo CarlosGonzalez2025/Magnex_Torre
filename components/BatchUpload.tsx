@@ -131,8 +131,19 @@ export const BatchUpload: React.FC = () => {
   const loadSavedAlerts = async () => {
     setIsQuerying(true);
     console.log('⏳ Consultando alertas de batch_alerts...');
+    console.log('🔍 Filtros aplicados:', filters);
     const result = await queryBatchAlerts(filters);
     if (result.success && result.data) {
+      console.log(`✅ Alertas recibidas: ${result.data.length}`);
+
+      // Contar por source
+      const sourceCounts = result.data.reduce((acc: any, alert: any) => {
+        const source = alert.file_uploads?.source || 'SIN_SOURCE';
+        acc[source] = (acc[source] || 0) + 1;
+        return acc;
+      }, {});
+      console.log('📊 Distribución por source en UI:', sourceCounts);
+
       setSavedAlerts(result.data);
 
       // Debug: Mostrar primeras 3 placas para verificar matching
@@ -141,9 +152,12 @@ export const BatchUpload: React.FC = () => {
           placa_original: a.plate,
           placa_normalizada: a.plate.toUpperCase().replace(/\s+/g, ''),
           contrato_encontrado: getContractByPlate(a.plate),
-          vehicleContracts_size: vehicleContracts.size
+          vehicleContracts_size: vehicleContracts.size,
+          source: (a as any).file_uploads?.source || 'NO_SOURCE'
         })));
       }
+    } else {
+      console.error('❌ Error cargando alertas:', result.error);
     }
     setIsQuerying(false);
   };
