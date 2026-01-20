@@ -296,14 +296,28 @@ export const BatchUpload: React.FC = () => {
     if (startDate) newFilters.startDate = new Date(startDate).toISOString();
     if (endDate) newFilters.endDate = new Date(endDate).toISOString();
 
+    console.log('🔍 ========== APLICANDO FILTROS ==========');
+    console.log('🔍 Filtros a aplicar:', newFilters);
+    console.log('🔍 Source filter actual:', sourceFilter);
+    console.log('🔍 Tipos seleccionados:', selectedAlertTypes);
+
     setFilters(newFilters);
     setIsQuerying(true);
 
-    console.log('🔍 Aplicando filtros...', newFilters);
     console.log(`📋 Contratos disponibles para matching: ${vehicleContracts.size}`);
 
     const result = await queryBatchAlerts(newFilters);
     if (result.success && result.data) {
+      console.log(`✅ Resultado de filtros: ${result.data.length} alertas`);
+
+      // Contar por source DESPUÉS de aplicar filtros
+      const sourceCounts = result.data.reduce((acc: any, alert: any) => {
+        const source = alert.file_uploads?.source || 'SIN_SOURCE';
+        acc[source] = (acc[source] || 0) + 1;
+        return acc;
+      }, {});
+      console.log('📊 Distribución después de filtros:', sourceCounts);
+
       setSavedAlerts(result.data);
 
       // Debug: Verificar matching después de filtrar
@@ -313,6 +327,8 @@ export const BatchUpload: React.FC = () => {
           contrato: getContractByPlate(a.plate)
         })));
       }
+    } else {
+      console.error('❌ Error aplicando filtros:', result.error);
     }
 
     setIsQuerying(false);
