@@ -64,7 +64,14 @@ export const BatchUpload: React.FC = () => {
       const result = await fetchFleetData();
       const contractsMap = new Map<string, string>();
 
-      result.vehicles.forEach(vehicle => {
+      console.log('📊 Resultado de fetchFleetData:', {
+        source: result.source,
+        totalVehicles: result.data?.length || 0,
+        vehicleCounts: result.vehicleCounts
+      });
+
+      // CORRECCIÓN: usar result.data en lugar de result.vehicles
+      result.data.forEach(vehicle => {
         if (vehicle.contract) {
           // Normalizar placa: mayúsculas y sin espacios
           const normalizedPlate = vehicle.plate.toUpperCase().replace(/\s+/g, '');
