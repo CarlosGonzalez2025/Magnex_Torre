@@ -406,7 +406,8 @@ export interface AlertFilters {
   startDate?: string; // ISO 8601
   endDate?: string; // ISO 8601
   plate?: string;
-  alertType?: string;
+  alertType?: string; // Para búsqueda por texto (deprecated, usar alertTypes)
+  alertTypes?: string[]; // Para selección múltiple de tipos exactos
   source?: 'FAGOR' | 'COLTRACK';
   isGrave?: boolean;
   uploadId?: string;
@@ -443,6 +444,10 @@ export async function queryBatchAlerts(
     if (filters.alertType) {
       query = query.ilike('alert_type', `%${filters.alertType}%`);
     }
+    // Filtro de múltiples tipos de alerta
+    if (filters.alertTypes && filters.alertTypes.length > 0) {
+      query = query.in('alert_type', filters.alertTypes);
+    }
     if (filters.isGrave !== undefined) {
       query = query.eq('is_grave', filters.isGrave);
     }
@@ -473,6 +478,33 @@ export async function queryBatchAlerts(
 
   } catch (error: any) {
     console.error('❌ Exception consultando alertas:', error);
+    return { success: false, error: error.message || 'Error desconocido' };
+  }
+}
+
+/**
+ * Obtiene todos los tipos de alerta únicos de la base de datos
+ */
+export async function getUniqueAlertTypes(): Promise<{ success: boolean; data?: string[]; error?: string }> {
+  try {
+    const { data, error } = await supabase
+      .from('batch_alerts')
+      .select('alert_type')
+      .order('alert_type', { ascending: true });
+
+    if (error) {
+      console.error('❌ Error obteniendo tipos de alerta:', error);
+      return { success: false, error: error.message };
+    }
+
+    // Extraer valores únicos
+    const uniqueTypes = [...new Set(data.map(item => item.alert_type))];
+
+    console.log(`✅ Tipos de alerta únicos: ${uniqueTypes.length}`);
+    return { success: true, data: uniqueTypes };
+
+  } catch (error: any) {
+    console.error('❌ Exception obteniendo tipos de alerta:', error);
     return { success: false, error: error.message || 'Error desconocido' };
   }
 }
