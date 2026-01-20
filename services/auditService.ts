@@ -25,6 +25,44 @@ export interface AuditSummary {
   recent_uploads: FileUploadRecord[];
 }
 
+// ==================== PAGINATION HELPER ====================
+
+/**
+ * Obtiene TODOS los registros usando paginación automática
+ * Resuelve el límite de 1000 registros de Supabase
+ */
+async function fetchAllRecords<T>(
+  query: any,
+  pageSize: number = 1000
+): Promise<T[]> {
+  let allRecords: T[] = [];
+  let from = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    const to = from + pageSize - 1;
+    
+    const { data, error } = await query.range(from, to);
+
+    if (error) {
+      throw error;
+    }
+
+    if (data && data.length > 0) {
+      allRecords = allRecords.concat(data);
+      console.log(`📦 Obtenidos ${data.length} registros (total acumulado: ${allRecords.length})`);
+      
+      // Si obtuvimos menos registros que el tamaño de página, ya no hay más
+      hasMore = data.length === pageSize;
+      from += pageSize;
+    } else {
+      hasMore = false;
+    }
+  }
+
+  return allRecords;
+}
+
 // ==================== FILE UPLOAD FUNCTIONS ====================
 
 /**
@@ -68,7 +106,7 @@ export async function createFileUploadRecord(
 }
 
 /**
- * Obtiene todos los registros de carga
+ * Obtiene todos los registros de carga (SIN LÍMITE)
  */
 export async function getAllFileUploads(): Promise<{
   success: boolean;
@@ -76,17 +114,15 @@ export async function getAllFileUploads(): Promise<{
   error?: string;
 }> {
   try {
-    const { data, error } = await supabase
+    const query = supabase
       .from('file_uploads')
       .select('*')
       .order('upload_date', { ascending: false });
 
-    if (error) {
-      console.error('❌ Error obteniendo registros:', error);
-      return { success: false, error: error.message };
-    }
+    const data = await fetchAllRecords<FileUploadRecord>(query);
 
-    return { success: true, data: data as FileUploadRecord[] };
+    console.log(`✅ Total file_uploads obtenidos: ${data.length}`);
+    return { success: true, data };
 
   } catch (error: any) {
     console.error('❌ Exception obteniendo registros:', error);
@@ -98,7 +134,7 @@ export async function getAllFileUploads(): Promise<{
 
 /**
  * Guarda alertas procesadas en batch_alerts
- * Usa transacción para insertar múltiples filas
+ * Maneja automáticamente grandes volúmenes dividiéndolos en chunks
  */
 export async function saveBatchAlerts(
   uploadId: string,
@@ -125,10 +161,8 @@ export async function saveBatchAlerts(
     }));
 
     console.log(`💾 Guardando ${alertsToInsert.length} alertas con upload_id: ${uploadId}`);
-    console.log('🔍 Primera alerta a insertar:', alertsToInsert[0]);
 
-    // Insertar en batch (Supabase soporta hasta 1000 filas por request)
-    // Si hay más de 1000, dividir en chunks
+    // Insertar en chunks de 1000 (límite de Supabase)
     const chunkSize = 1000;
     let totalInserted = 0;
 
@@ -141,12 +175,12 @@ export async function saveBatchAlerts(
         .select();
 
       if (error) {
-        console.error(`❌ Error insertando chunk ${i / chunkSize + 1}:`, error);
+        console.error(`❌ Error insertando chunk ${Math.floor(i / chunkSize) + 1}:`, error);
         return { success: false, error: error.message };
       }
 
       totalInserted += data.length;
-      console.log(`✅ Chunk ${i / chunkSize + 1} guardado: ${data.length} filas`);
+      console.log(`✅ Chunk ${Math.floor(i / chunkSize) + 1}/${Math.ceil(alertsToInsert.length / chunkSize)} guardado: ${data.length} filas`);
     }
 
     console.log(`✅ Total insertado: ${totalInserted} alertas`);
@@ -159,24 +193,22 @@ export async function saveBatchAlerts(
 }
 
 /**
- * Obtiene alertas de una carga específica
+ * Obtiene alertas de una carga específica (SIN LÍMITE)
  */
 export async function getAlertsByUploadId(
   uploadId: string
 ): Promise<{ success: boolean; data?: BatchAlertRecord[]; error?: string }> {
   try {
-    const { data, error } = await supabase
+    const query = supabase
       .from('batch_alerts')
       .select('*')
       .eq('upload_id', uploadId)
       .order('timestamp', { ascending: false });
 
-    if (error) {
-      console.error('❌ Error obteniendo alertas:', error);
-      return { success: false, error: error.message };
-    }
+    const data = await fetchAllRecords<BatchAlertRecord>(query);
 
-    return { success: true, data: data as BatchAlertRecord[] };
+    console.log(`✅ Total alertas obtenidas para upload ${uploadId}: ${data.length}`);
+    return { success: true, data };
 
   } catch (error: any) {
     console.error('❌ Exception obteniendo alertas:', error);
@@ -185,25 +217,23 @@ export async function getAlertsByUploadId(
 }
 
 /**
- * Obtiene solo Faltas Graves de una carga
+ * Obtiene solo Faltas Graves de una carga (SIN LÍMITE)
  */
 export async function getGraveAlertsByUploadId(
   uploadId: string
 ): Promise<{ success: boolean; data?: BatchAlertRecord[]; error?: string }> {
   try {
-    const { data, error } = await supabase
+    const query = supabase
       .from('batch_alerts')
       .select('*')
       .eq('upload_id', uploadId)
       .eq('is_grave', true)
       .order('timestamp', { ascending: false });
 
-    if (error) {
-      console.error('❌ Error obteniendo faltas graves:', error);
-      return { success: false, error: error.message };
-    }
+    const data = await fetchAllRecords<BatchAlertRecord>(query);
 
-    return { success: true, data: data as BatchAlertRecord[] };
+    console.log(`✅ Total faltas graves para upload ${uploadId}: ${data.length}`);
+    return { success: true, data };
 
   } catch (error: any) {
     console.error('❌ Exception obteniendo faltas graves:', error);
@@ -212,7 +242,7 @@ export async function getGraveAlertsByUploadId(
 }
 
 /**
- * Obtiene todas las Faltas Graves (de todas las cargas)
+ * Obtiene todas las Faltas Graves (SIN LÍMITE)
  */
 export async function getAllGraveAlerts(): Promise<{
   success: boolean;
@@ -220,7 +250,7 @@ export async function getAllGraveAlerts(): Promise<{
   error?: string;
 }> {
   try {
-    const { data, error } = await supabase
+    const query = supabase
       .from('batch_alerts')
       .select(`
         *,
@@ -233,12 +263,10 @@ export async function getAllGraveAlerts(): Promise<{
       .eq('is_grave', true)
       .order('timestamp', { ascending: false });
 
-    if (error) {
-      console.error('❌ Error obteniendo todas las faltas graves:', error);
-      return { success: false, error: error.message };
-    }
+    const data = await fetchAllRecords<any>(query);
 
-    return { success: true, data: data as any };
+    console.log(`✅ Total faltas graves en el sistema: ${data.length}`);
+    return { success: true, data };
 
   } catch (error: any) {
     console.error('❌ Exception obteniendo faltas graves:', error);
@@ -257,7 +285,7 @@ export async function getAuditSummary(): Promise<{
   error?: string;
 }> {
   try {
-    // Obtener uploads recientes
+    // Obtener uploads recientes (primeros 10)
     const { data: uploads, error: uploadsError } = await supabase
       .from('file_uploads')
       .select('*')
@@ -266,6 +294,15 @@ export async function getAuditSummary(): Promise<{
 
     if (uploadsError) {
       return { success: false, error: uploadsError.message };
+    }
+
+    // Contar total de uploads (sin límite)
+    const { count: totalUploadsCount, error: totalUploadsError } = await supabase
+      .from('file_uploads')
+      .select('*', { count: 'exact', head: true });
+
+    if (totalUploadsError) {
+      return { success: false, error: totalUploadsError.message };
     }
 
     // Contar total de alertas
@@ -288,7 +325,7 @@ export async function getAuditSummary(): Promise<{
     }
 
     const summary: AuditSummary = {
-      total_uploads: uploads.length,
+      total_uploads: totalUploadsCount || 0,
       total_alerts: totalAlerts || 0,
       total_graves: totalGraves || 0,
       recent_uploads: uploads as FileUploadRecord[]
@@ -309,15 +346,30 @@ export async function deleteUpload(
   uploadId: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    // Primero eliminar alertas asociadas
-    const { error: alertsError } = await supabase
-      .from('batch_alerts')
-      .delete()
-      .eq('upload_id', uploadId);
+    // Primero eliminar alertas asociadas (en chunks si son muchas)
+    let hasMore = true;
+    let deletedTotal = 0;
 
-    if (alertsError) {
-      console.error('❌ Error eliminando alertas:', alertsError);
-      return { success: false, error: alertsError.message };
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from('batch_alerts')
+        .delete()
+        .eq('upload_id', uploadId)
+        .limit(1000)
+        .select();
+
+      if (error) {
+        console.error('❌ Error eliminando alertas:', error);
+        return { success: false, error: error.message };
+      }
+
+      const deletedCount = data?.length || 0;
+      deletedTotal += deletedCount;
+      hasMore = deletedCount === 1000;
+
+      if (deletedCount > 0) {
+        console.log(`🗑️ Eliminadas ${deletedCount} alertas (total: ${deletedTotal})`);
+      }
     }
 
     // Luego eliminar el registro de carga
@@ -331,7 +383,7 @@ export async function deleteUpload(
       return { success: false, error: uploadError.message };
     }
 
-    console.log('✅ Carga eliminada:', uploadId);
+    console.log(`✅ Carga eliminada: ${uploadId} (${deletedTotal} alertas eliminadas)`);
     return { success: true };
 
   } catch (error: any) {
@@ -368,7 +420,7 @@ export async function deleteBatchAlert(
 
 /**
  * Elimina TODAS las alertas de la tabla batch_alerts
- * ⚠️ OPERACIÓN DESTRUCTIVA - Elimina todos los registros
+ * ⚠️ OPERACIÓN DESTRUCTIVA - Usa paginación para eliminar grandes volúmenes
  */
 export async function deleteAllBatchAlerts(): Promise<{
   success: boolean;
@@ -386,19 +438,34 @@ export async function deleteAllBatchAlerts(): Promise<{
       return { success: false, error: countError.message };
     }
 
-    // Eliminar todos los registros
-    const { error: deleteError } = await supabase
-      .from('batch_alerts')
-      .delete()
-      .neq('id', '00000000-0000-0000-0000-000000000000'); // Condición que siempre es verdadera
+    const totalToDelete = count || 0;
+    let deletedTotal = 0;
+    let hasMore = true;
 
-    if (deleteError) {
-      console.error('❌ Error eliminando todas las alertas:', deleteError);
-      return { success: false, error: deleteError.message };
+    console.log(`⚠️ Iniciando eliminación de ${totalToDelete} alertas...`);
+
+    // Eliminar en chunks de 1000
+    while (hasMore) {
+      const { data, error: deleteError } = await supabase
+        .from('batch_alerts')
+        .delete()
+        .limit(1000)
+        .select();
+
+      if (deleteError) {
+        console.error('❌ Error eliminando alertas:', deleteError);
+        return { success: false, error: deleteError.message };
+      }
+
+      const deletedCount = data?.length || 0;
+      deletedTotal += deletedCount;
+      hasMore = deletedCount === 1000;
+
+      console.log(`🗑️ Eliminadas ${deletedCount} alertas (progreso: ${deletedTotal}/${totalToDelete})`);
     }
 
-    console.log(`✅ ${count} alertas eliminadas de batch_alerts`);
-    return { success: true, deletedCount: count || 0 };
+    console.log(`✅ ${deletedTotal} alertas eliminadas de batch_alerts`);
+    return { success: true, deletedCount: deletedTotal };
 
   } catch (error: any) {
     console.error('❌ Exception eliminando todas las alertas:', error);
@@ -409,24 +476,24 @@ export async function deleteAllBatchAlerts(): Promise<{
 // ==================== QUERY FUNCTIONS WITH FILTERS ====================
 
 export interface AlertFilters {
-  startDate?: string; // ISO 8601
-  endDate?: string; // ISO 8601
+  startDate?: string;
+  endDate?: string;
   plate?: string;
-  alertType?: string; // Para búsqueda por texto (deprecated, usar alertTypes)
-  alertTypes?: string[]; // Para selección múltiple de tipos exactos
+  alertType?: string;
+  alertTypes?: string[];
   source?: 'FAGOR' | 'COLTRACK';
   isGrave?: boolean;
   uploadId?: string;
 }
 
 /**
- * Consulta alertas con filtros opcionales
+ * Consulta alertas con filtros opcionales (SIN LÍMITE DE 1000 REGISTROS)
  */
 export async function queryBatchAlerts(
   filters: AlertFilters = {}
 ): Promise<{ success: boolean; data?: BatchAlertRecord[]; error?: string }> {
   try {
-    // SOLUCIÓN: Primero obtener todos los file_uploads para hacer el join manualmente
+    // Obtener file_uploads para join manual
     const { data: uploadsData, error: uploadsError } = await supabase
       .from('file_uploads')
       .select('id, filename, source, upload_date');
@@ -435,27 +502,19 @@ export async function queryBatchAlerts(
       console.error('❌ Error obteniendo file_uploads:', uploadsError);
     }
 
-    // Crear un Map de upload_id → file_uploads para lookup rápido
+    // Crear Map para lookup rápido
     const uploadsMap = new Map<string, any>();
     if (uploadsData) {
       uploadsData.forEach(upload => {
         uploadsMap.set(upload.id, upload);
       });
       console.log(`📦 File uploads cargados: ${uploadsMap.size} registros`);
-
-      // Debug: Mostrar distribución de sources en file_uploads
-      const uploadSources = uploadsData.reduce((acc: any, upload: any) => {
-        acc[upload.source] = (acc[upload.source] || 0) + 1;
-        return acc;
-      }, {});
-      console.log('📊 Distribución de file_uploads por source:', uploadSources);
     }
 
-    // Ahora consultar batch_alerts (sin join, más rápido y confiable)
-    // IMPORTANTE: Supabase limita por defecto a 1000 registros, aumentar el límite
+    // Construir query base
     let query = supabase
       .from('batch_alerts')
-      .select('*', { count: 'exact' }); // count para saber el total
+      .select('*');
 
     // Aplicar filtros
     if (filters.startDate) {
@@ -470,7 +529,6 @@ export async function queryBatchAlerts(
     if (filters.alertType) {
       query = query.ilike('alert_type', `%${filters.alertType}%`);
     }
-    // Filtro de múltiples tipos de alerta
     if (filters.alertTypes && filters.alertTypes.length > 0) {
       query = query.in('alert_type', filters.alertTypes);
     }
@@ -481,87 +539,35 @@ export async function queryBatchAlerts(
       query = query.eq('upload_id', filters.uploadId);
     }
 
-    // Ordenar por timestamp descendente
+    // Ordenar
     query = query.order('timestamp', { ascending: false });
 
-    // SOLUCIÓN: Usar range para obtener todos los registros explícitamente
-    // range(0, 99999) obtiene desde el registro 0 hasta el 100000
-    const MAX_RECORDS = 100000;
-    query = query.range(0, MAX_RECORDS - 1);
+    console.log('⏳ Ejecutando consulta con paginación automática...');
 
-    console.log(`🚨 IMPORTANTE: Usando .range(0, ${MAX_RECORDS - 1}) para obtener TODOS los registros`);
-    console.log('⏳ Ejecutando consulta a batch_alerts...');
+    // Usar fetchAllRecords para obtener TODOS los registros
+    const data = await fetchAllRecords<any>(query);
 
-    const { data, error, count } = await query;
+    console.log(`✅ Total registros obtenidos: ${data.length}`);
 
-    if (error) {
-      console.error('❌ Error consultando alertas:', error);
-      return { success: false, error: error.message };
-    }
-
-    console.log('🔍 Debug - Total registros obtenidos de BD:', data?.length || 0);
-    console.log('🔍 Debug - Total registros en tabla (count):', count || 0);
-
-    // Debug: Mostrar timestamps de primeras y últimas alertas
-    if (data && data.length > 0) {
-      console.log('📅 Primera alerta (más reciente):', {
-        plate: data[0].plate,
-        timestamp: data[0].timestamp,
-        alert_type: data[0].alert_type
-      });
-      console.log('📅 Última alerta (más antigua):', {
-        plate: data[data.length - 1].plate,
-        timestamp: data[data.length - 1].timestamp,
-        alert_type: data[data.length - 1].alert_type
-      });
-    }
-
-    // Enriquecer alertas con datos de file_uploads (join manual)
-    let enrichedData = data?.map((alert: any) => {
+    // Enriquecer con file_uploads
+    let enrichedData = data.map((alert: any) => {
       const uploadInfo = uploadsMap.get(alert.upload_id);
       return {
         ...alert,
         file_uploads: uploadInfo || null
       };
-    }) || [];
-
-    // Debug: Contar alertas sin file_upload
-    const alertsWithoutUpload = enrichedData.filter(a => !a.file_uploads).length;
-    if (alertsWithoutUpload > 0) {
-      console.warn(`⚠️ ${alertsWithoutUpload} alertas NO tienen file_upload asociado`);
-    }
-
-    // Debug: Verificar sources
-    if (enrichedData.length > 0) {
-      const sourceCounts = enrichedData.reduce((acc: any, item: any) => {
-        const source = item.file_uploads?.source || 'SIN_SOURCE';
-        acc[source] = (acc[source] || 0) + 1;
-        return acc;
-      }, {});
-      console.log('📊 Distribución por source (después de join manual):', sourceCounts);
-
-      // Mostrar primeras 3 alertas con su source
-      console.log('🔍 Primeras 3 alertas:', enrichedData.slice(0, 3).map((item: any) => ({
-        id: item.id,
-        plate: item.plate,
-        alert_type: item.alert_type,
-        upload_id: item.upload_id,
-        file_uploads_exists: !!item.file_uploads,
-        source: item.file_uploads?.source || 'NO_SOURCE'
-      })));
-    }
+    });
 
     // Filtrar por source si se especificó
-    let filteredData = enrichedData;
-    if (filters.source && filteredData) {
-      filteredData = filteredData.filter(
+    if (filters.source) {
+      enrichedData = enrichedData.filter(
         (alert: any) => alert.file_uploads?.source === filters.source
       );
-      console.log(`✅ Filtrado por source '${filters.source}': ${filteredData.length} alertas`);
+      console.log(`✅ Filtrado por source '${filters.source}': ${enrichedData.length} alertas`);
     }
 
-    console.log(`✅ Consulta exitosa: ${filteredData?.length || 0} alertas`);
-    return { success: true, data: filteredData as BatchAlertRecord[] };
+    console.log(`✅ Consulta exitosa: ${enrichedData.length} alertas`);
+    return { success: true, data: enrichedData as BatchAlertRecord[] };
 
   } catch (error: any) {
     console.error('❌ Exception consultando alertas:', error);
@@ -570,19 +576,20 @@ export async function queryBatchAlerts(
 }
 
 /**
- * Obtiene todos los tipos de alerta únicos de la base de datos
+ * Obtiene todos los tipos de alerta únicos (SIN LÍMITE)
  */
-export async function getUniqueAlertTypes(): Promise<{ success: boolean; data?: string[]; error?: string }> {
+export async function getUniqueAlertTypes(): Promise<{ 
+  success: boolean; 
+  data?: string[]; 
+  error?: string 
+}> {
   try {
-    const { data, error } = await supabase
+    const query = supabase
       .from('batch_alerts')
       .select('alert_type')
       .order('alert_type', { ascending: true });
 
-    if (error) {
-      console.error('❌ Error obteniendo tipos de alerta:', error);
-      return { success: false, error: error.message };
-    }
+    const data = await fetchAllRecords<{ alert_type: string }>(query);
 
     // Extraer valores únicos
     const uniqueTypes = [...new Set(data.map(item => item.alert_type))];
