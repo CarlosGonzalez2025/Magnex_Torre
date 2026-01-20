@@ -484,11 +484,14 @@ export async function queryBatchAlerts(
     // Ordenar por timestamp descendente
     query = query.order('timestamp', { ascending: false });
 
-    // Aumentar el límite significativamente para incluir todos los datos
-    // Si tienes más de 50000 registros, considera implementar paginación en BD
-    query = query.limit(50000);
+    // SOLUCIÓN: Usar range para obtener todos los registros explícitamente
+    // range(0, 99999) obtiene desde el registro 0 hasta el 100000
+    const MAX_RECORDS = 100000;
+    query = query.range(0, MAX_RECORDS - 1);
 
+    console.log(`🚨 IMPORTANTE: Usando .range(0, ${MAX_RECORDS - 1}) para obtener TODOS los registros`);
     console.log('⏳ Ejecutando consulta a batch_alerts...');
+
     const { data, error, count } = await query;
 
     if (error) {
