@@ -48,6 +48,7 @@ export const BatchUpload: React.FC = () => {
   const [endDate, setEndDate] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const alertTypeDropdownRef = useRef<HTMLDivElement>(null);
   const { exportToExcel } = useExportToExcel();
 
   // ==================== FETCH VEHICLE CONTRACTS ====================
@@ -61,6 +62,20 @@ export const BatchUpload: React.FC = () => {
     };
 
     initializeData();
+  }, []);
+
+  // Cerrar dropdown cuando se hace clic fuera
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (alertTypeDropdownRef.current && !alertTypeDropdownRef.current.contains(event.target as Node)) {
+        setShowAlertTypeDropdown(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
   }, []);
 
   const loadVehicleContracts = async () => {
@@ -672,7 +687,7 @@ export const BatchUpload: React.FC = () => {
             />
           </div>
 
-          <div className="relative">
+          <div className="relative" ref={alertTypeDropdownRef}>
             <label className="block text-sm font-medium text-slate-700 mb-1">Tipos de Alerta (Multi-selección)</label>
             <button
               type="button"
