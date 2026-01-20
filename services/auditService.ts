@@ -426,16 +426,28 @@ export async function queryBatchAlerts(
   filters: AlertFilters = {}
 ): Promise<{ success: boolean; data?: BatchAlertRecord[]; error?: string }> {
   try {
+    // SOLUCIÓN: Primero obtener todos los file_uploads para hacer el join manualmente
+    const { data: uploadsData, error: uploadsError } = await supabase
+      .from('file_uploads')
+      .select('id, filename, source, upload_date');
+
+    if (uploadsError) {
+      console.error('❌ Error obteniendo file_uploads:', uploadsError);
+    }
+
+    // Crear un Map de upload_id → file_uploads para lookup rápido
+    const uploadsMap = new Map<string, any>();
+    if (uploadsData) {
+      uploadsData.forEach(upload => {
+        uploadsMap.set(upload.id, upload);
+      });
+      console.log(`📦 File uploads cargados: ${uploadsMap.size} registros`);
+    }
+
+    // Ahora consultar batch_alerts (sin join, más rápido y confiable)
     let query = supabase
       .from('batch_alerts')
-      .select(`
-        *,
-        file_uploads (
-          filename,
-          source,
-          upload_date
-        )
-      `);
+      .select('*');
 
     // Aplicar filtros
     if (filters.startDate) {
@@ -473,17 +485,26 @@ export async function queryBatchAlerts(
 
     console.log('🔍 Debug - Total registros obtenidos de BD:', data?.length || 0);
 
-    // Debug: Verificar sources de las primeras alertas
-    if (data && data.length > 0) {
-      const sourceCounts = data.reduce((acc: any, item: any) => {
+    // Enriquecer alertas con datos de file_uploads (join manual)
+    let enrichedData = data?.map((alert: any) => {
+      const uploadInfo = uploadsMap.get(alert.upload_id);
+      return {
+        ...alert,
+        file_uploads: uploadInfo || null
+      };
+    }) || [];
+
+    // Debug: Verificar sources
+    if (enrichedData.length > 0) {
+      const sourceCounts = enrichedData.reduce((acc: any, item: any) => {
         const source = item.file_uploads?.source || 'SIN_SOURCE';
         acc[source] = (acc[source] || 0) + 1;
         return acc;
       }, {});
-      console.log('📊 Distribución por source:', sourceCounts);
+      console.log('📊 Distribución por source (después de join manual):', sourceCounts);
 
       // Mostrar primeras 3 alertas con su source
-      console.log('🔍 Primeras 3 alertas:', data.slice(0, 3).map((item: any) => ({
+      console.log('🔍 Primeras 3 alertas:', enrichedData.slice(0, 3).map((item: any) => ({
         id: item.id,
         plate: item.plate,
         alert_type: item.alert_type,
@@ -493,12 +514,13 @@ export async function queryBatchAlerts(
       })));
     }
 
-    // Filtrar por source si se especificó (viene del join con file_uploads)
-    let filteredData = data as any[];
+    // Filtrar por source si se especificó
+    let filteredData = enrichedData;
     if (filters.source && filteredData) {
       filteredData = filteredData.filter(
         (alert: any) => alert.file_uploads?.source === filters.source
       );
+      console.log(`✅ Filtrado por source '${filters.source}': ${filteredData.length} alertas`);
     }
 
     console.log(`✅ Consulta exitosa: ${filteredData?.length || 0} alertas`);
