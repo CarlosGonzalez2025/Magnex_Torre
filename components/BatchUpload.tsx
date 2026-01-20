@@ -131,8 +131,9 @@ export const BatchUpload: React.FC = () => {
   const loadSavedAlerts = async () => {
     setIsQuerying(true);
     console.log('⏳ Consultando alertas de batch_alerts...');
-    console.log('🔍 Filtros aplicados:', filters);
-    const result = await queryBatchAlerts(filters);
+    console.log('🔍 Cargando SIN FILTROS (todos los datos)');
+    // IMPORTANTE: Cargar SIN filtros para mostrar todos los datos
+    const result = await queryBatchAlerts({});
     if (result.success && result.data) {
       console.log(`✅ Alertas recibidas: ${result.data.length}`);
 
@@ -271,9 +272,20 @@ export const BatchUpload: React.FC = () => {
 
       window.alert(`✅ ${saveResult.insertedCount} alertas guardadas exitosamente`);
 
-      // Limpiar y recargar
+      // Limpiar filtros y estado de carga
+      setPlateSearch('');
+      setAlertTypeSearch('');
+      setSelectedAlertTypes([]);
+      setSourceFilter('ALL');
+      setGraveFilter('ALL');
+      setStartDate('');
+      setEndDate('');
+      setFilters({});
+
+      // Limpiar y recargar TODOS los datos
       setProcessedAlerts([]);
       setSelectedFile(null);
+      console.log('🔄 Recargando todos los datos después de guardar...');
       loadSavedAlerts();
       setIsSaving(false);
 
@@ -335,6 +347,7 @@ export const BatchUpload: React.FC = () => {
   };
 
   const handleClearFilters = () => {
+    console.log('🧹 Limpiando filtros...');
     setPlateSearch('');
     setAlertTypeSearch('');
     setSelectedAlertTypes([]);
@@ -343,6 +356,7 @@ export const BatchUpload: React.FC = () => {
     setStartDate('');
     setEndDate('');
     setFilters({});
+    // Recargar todos los datos sin filtros
     loadSavedAlerts();
   };
 
