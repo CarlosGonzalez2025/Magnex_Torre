@@ -8,6 +8,7 @@ import {
   deleteBatchAlert,
   deleteUpload,
   deleteAllBatchAlerts,
+  getUniqueAlertTypes,
   AlertFilters,
   BatchAlertRecord
 } from '../services/auditService';
@@ -38,6 +39,9 @@ export const BatchUpload: React.FC = () => {
   const [filters, setFilters] = useState<AlertFilters>({});
   const [plateSearch, setPlateSearch] = useState('');
   const [alertTypeSearch, setAlertTypeSearch] = useState('');
+  const [availableAlertTypes, setAvailableAlertTypes] = useState<string[]>([]);
+  const [selectedAlertTypes, setSelectedAlertTypes] = useState<string[]>([]);
+  const [showAlertTypeDropdown, setShowAlertTypeDropdown] = useState(false);
   const [sourceFilter, setSourceFilter] = useState<'ALL' | 'FAGOR' | 'COLTRACK'>('ALL');
   const [graveFilter, setGraveFilter] = useState<'ALL' | 'true' | 'false'>('ALL');
   const [startDate, setStartDate] = useState('');
@@ -49,9 +53,10 @@ export const BatchUpload: React.FC = () => {
   // ==================== FETCH VEHICLE CONTRACTS ====================
 
   useEffect(() => {
-    // Cargar contratos primero, luego cargar alertas
+    // Cargar contratos, tipos de alerta y alertas guardadas
     const initializeData = async () => {
       await loadVehicleContracts(); // Esperar a que termine
+      await loadAlertTypes(); // Cargar tipos de alerta disponibles
       await loadSavedAlerts(); // Luego cargar alertas
     };
 
@@ -87,6 +92,19 @@ export const BatchUpload: React.FC = () => {
       await new Promise(resolve => setTimeout(resolve, 100));
     } catch (error) {
       console.error('❌ Error cargando contratos:', error);
+    }
+  };
+
+  const loadAlertTypes = async () => {
+    try {
+      console.log('⏳ Cargando tipos de alerta...');
+      const result = await getUniqueAlertTypes();
+      if (result.success && result.data) {
+        setAvailableAlertTypes(result.data);
+        console.log(`✅ Tipos de alerta cargados: ${result.data.length}`);
+      }
+    } catch (error) {
+      console.error('❌ Error cargando tipos de alerta:', error);
     }
   };
 
@@ -251,6 +269,7 @@ export const BatchUpload: React.FC = () => {
 
     if (plateSearch.trim()) newFilters.plate = plateSearch.trim();
     if (alertTypeSearch.trim()) newFilters.alertType = alertTypeSearch.trim();
+    if (selectedAlertTypes.length > 0) newFilters.alertTypes = selectedAlertTypes;
     if (sourceFilter !== 'ALL') newFilters.source = sourceFilter as 'FAGOR' | 'COLTRACK';
     if (graveFilter !== 'ALL') newFilters.isGrave = graveFilter === 'true';
     if (startDate) newFilters.startDate = new Date(startDate).toISOString();
@@ -281,12 +300,23 @@ export const BatchUpload: React.FC = () => {
   const handleClearFilters = () => {
     setPlateSearch('');
     setAlertTypeSearch('');
+    setSelectedAlertTypes([]);
     setSourceFilter('ALL');
     setGraveFilter('ALL');
     setStartDate('');
     setEndDate('');
     setFilters({});
     loadSavedAlerts();
+  };
+
+  // ==================== MULTI-SELECT HANDLER ====================
+
+  const toggleAlertType = (alertType: string) => {
+    setSelectedAlertTypes(prev =>
+      prev.includes(alertType)
+        ? prev.filter(t => t !== alertType)
+        : [...prev, alertType]
+    );
   };
 
   // ==================== COPY MESSAGE ====================
@@ -642,15 +672,43 @@ export const BatchUpload: React.FC = () => {
             />
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Tipo de Alerta</label>
-            <input
-              type="text"
-              value={alertTypeSearch}
-              onChange={(e) => setAlertTypeSearch(e.target.value)}
-              placeholder="Ej: velocidad"
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-            />
+          <div className="relative">
+            <label className="block text-sm font-medium text-slate-700 mb-1">Tipos de Alerta (Multi-selección)</label>
+            <button
+              type="button"
+              onClick={() => setShowAlertTypeDropdown(!showAlertTypeDropdown)}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white text-left flex items-center justify-between"
+            >
+              <span className="text-sm text-slate-700">
+                {selectedAlertTypes.length === 0
+                  ? 'Seleccionar tipos...'
+                  : `${selectedAlertTypes.length} tipo${selectedAlertTypes.length > 1 ? 's' : ''} seleccionado${selectedAlertTypes.length > 1 ? 's' : ''}`}
+              </span>
+              <ChevronDown className="w-4 h-4 text-slate-400" />
+            </button>
+
+            {showAlertTypeDropdown && (
+              <div className="absolute z-10 mt-1 w-full bg-white border border-slate-300 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                {availableAlertTypes.length === 0 ? (
+                  <div className="px-3 py-2 text-sm text-slate-500">No hay tipos de alerta disponibles</div>
+                ) : (
+                  availableAlertTypes.map((alertType) => (
+                    <label
+                      key={alertType}
+                      className="flex items-center px-3 py-2 hover:bg-slate-50 cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedAlertTypes.includes(alertType)}
+                        onChange={() => toggleAlertType(alertType)}
+                        className="mr-2 h-4 w-4 text-purple-600 border-slate-300 rounded focus:ring-purple-500"
+                      />
+                      <span className="text-sm text-slate-700">{alertType}</span>
+                    </label>
+                  ))
+                )}
+              </div>
+            )}
           </div>
 
           <div>
@@ -759,6 +817,7 @@ export const BatchUpload: React.FC = () => {
                   <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Tipo de Alerta</th>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Vel.</th>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Contrato</th>
+                  <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Plataforma</th>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Grave</th>
                   <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Acciones</th>
                 </tr>
@@ -783,6 +842,17 @@ export const BatchUpload: React.FC = () => {
                     </td>
                     <td className="px-4 py-3 text-sm text-slate-700">
                       {getContractByPlate(alert.plate)}
+                    </td>
+                    <td className="px-4 py-3 text-sm">
+                      {(() => {
+                        const source = (alert as any).file_uploads?.source || 'N/A';
+                        const bgColor = source === 'COLTRACK' ? 'bg-blue-100 text-blue-700' : source === 'FAGOR' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-600';
+                        return (
+                          <span className={`px-2 py-1 ${bgColor} rounded-full text-xs font-medium`}>
+                            {source}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="px-4 py-3 text-sm">
                       {alert.is_grave ? (
