@@ -8,7 +8,6 @@ import {
   deleteBatchAlert,
   deleteUpload,
   deleteAllBatchAlerts,
-  getUniqueAlertTypes,
   AlertFilters,
   BatchAlertRecord
 } from '../services/auditService';
@@ -54,15 +53,21 @@ export const BatchUpload: React.FC = () => {
   // ==================== FETCH VEHICLE CONTRACTS ====================
 
   useEffect(() => {
-    // Cargar contratos, tipos de alerta y alertas guardadas
+    // Cargar contratos y alertas guardadas
     const initializeData = async () => {
       await loadVehicleContracts(); // Esperar a que termine
-      await loadAlertTypes(); // Cargar tipos de alerta disponibles
       await loadSavedAlerts(); // Luego cargar alertas
     };
 
     initializeData();
   }, []);
+
+  // Actualizar tipos de alerta disponibles cada vez que cambien las alertas guardadas
+  useEffect(() => {
+    const uniqueTypes = [...new Set(savedAlerts.map(alert => alert.alert_type))].sort();
+    setAvailableAlertTypes(uniqueTypes);
+    console.log(`✅ Tipos de alerta actualizados: ${uniqueTypes.length} tipos únicos`);
+  }, [savedAlerts]);
 
   // Cerrar dropdown cuando se hace clic fuera
   useEffect(() => {
@@ -107,19 +112,6 @@ export const BatchUpload: React.FC = () => {
       await new Promise(resolve => setTimeout(resolve, 100));
     } catch (error) {
       console.error('❌ Error cargando contratos:', error);
-    }
-  };
-
-  const loadAlertTypes = async () => {
-    try {
-      console.log('⏳ Cargando tipos de alerta...');
-      const result = await getUniqueAlertTypes();
-      if (result.success && result.data) {
-        setAvailableAlertTypes(result.data);
-        console.log(`✅ Tipos de alerta cargados: ${result.data.length}`);
-      }
-    } catch (error) {
-      console.error('❌ Error cargando tipos de alerta:', error);
     }
   };
 
