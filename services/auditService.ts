@@ -445,9 +445,10 @@ export async function queryBatchAlerts(
     }
 
     // Ahora consultar batch_alerts (sin join, más rápido y confiable)
+    // IMPORTANTE: Supabase limita por defecto a 1000 registros, aumentar el límite
     let query = supabase
       .from('batch_alerts')
-      .select('*');
+      .select('*', { count: 'exact' }); // count para saber el total
 
     // Aplicar filtros
     if (filters.startDate) {
@@ -476,7 +477,10 @@ export async function queryBatchAlerts(
     // Ordenar por timestamp descendente
     query = query.order('timestamp', { ascending: false });
 
-    const { data, error } = await query;
+    // Aumentar el límite a 10000 registros (ajusta según necesites)
+    query = query.limit(10000);
+
+    const { data, error, count } = await query;
 
     if (error) {
       console.error('❌ Error consultando alertas:', error);
@@ -484,6 +488,7 @@ export async function queryBatchAlerts(
     }
 
     console.log('🔍 Debug - Total registros obtenidos de BD:', data?.length || 0);
+    console.log('🔍 Debug - Total registros en tabla (count):', count || 0);
 
     // Enriquecer alertas con datos de file_uploads (join manual)
     let enrichedData = data?.map((alert: any) => {
