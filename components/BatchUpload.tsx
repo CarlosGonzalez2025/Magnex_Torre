@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, AlertTriangle, CheckCircle, FileText, Trash2, Download, Database, Search, Filter, Copy, Save, X, ChevronDown, ChevronUp } from 'lucide-react';
+import { Upload, AlertTriangle, CheckCircle, FileText, Trash2, Download, Database, Search, Filter, Copy, Save, X, ChevronDown, ChevronUp, TrendingUp, BarChart3, PieChart } from 'lucide-react';
 import { processFile, validateFile, BatchAlert } from '../services/fileProcessingService';
 import {
   createFileUploadRecord,
@@ -9,7 +9,15 @@ import {
   deleteUpload,
   deleteAllBatchAlerts,
   AlertFilters,
-  BatchAlertRecord
+  BatchAlertRecord,
+  // 🆕 NUEVAS FUNCIONES DE ANÁLISIS
+  getDetailedAuditAnalysis,
+  getVehicleDetailedStats,
+  getDriverDetailedStats,
+  DetailedAuditAnalysis,
+  VehicleDetailedStats,
+  DriverDetailedStats,
+  exportAnalysisToCSV
 } from '../services/auditService';
 import { saveAlertToDatabase } from '../services/databaseService';
 import { fetchFleetData } from '../services/fleetService';
@@ -33,6 +41,13 @@ export const BatchUpload: React.FC = () => {
   const [savedAlerts, setSavedAlerts] = useState<BatchAlertRecord[]>([]);
   const [isQuerying, setIsQuerying] = useState(false);
   const [vehicleContracts, setVehicleContracts] = useState<Map<string, string>>(new Map());
+
+  // 🆕 ANÁLISIS DETALLADO
+  const [detailedAnalysis, setDetailedAnalysis] = useState<DetailedAuditAnalysis | null>(null);
+  const [isLoadingAnalysis, setIsLoadingAnalysis] = useState(false);
+  const [showAnalysis, setShowAnalysis] = useState(false);
+  const [selectedVehicleStats, setSelectedVehicleStats] = useState<VehicleDetailedStats | null>(null);
+  const [selectedDriverStats, setSelectedDriverStats] = useState<DriverDetailedStats | null>(null);
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -61,16 +76,16 @@ export const BatchUpload: React.FC = () => {
   // ==================== FETCH VEHICLE CONTRACTS ====================
 
   useEffect(() => {
-    // Cargar contratos y alertas guardadas
     const initializeData = async () => {
-      await loadVehicleContracts(); // Esperar a que termine
-      await loadSavedAlerts(); // Luego cargar alertas
+      await loadVehicleContracts();
+      await loadSavedAlerts();
+      // 🆕 Cargar análisis inicial
+      await loadDetailedAnalysis();
     };
 
     initializeData();
   }, []);
 
-  // Actualizar tipos de alerta disponibles cada vez que cambien las alertas guardadas
   useEffect(() => {
     const uniqueTypes = [...new Set(savedAlerts.map(alert => alert.alert_type))].sort();
     setAvailableAlertTypes(uniqueTypes);
@@ -120,10 +135,8 @@ export const BatchUpload: React.FC = () => {
         vehicleCounts: result.vehicleCounts
       });
 
-      // CORRECCIÓN: usar result.data en lugar de result.vehicles
       result.data.forEach(vehicle => {
         if (vehicle.contract) {
-          // Normalizar placa: mayúsculas y sin espacios
           const normalizedPlate = vehicle.plate.toUpperCase().replace(/\s+/g, '');
           contractsMap.set(normalizedPlate, vehicle.contract);
         }
@@ -133,16 +146,13 @@ export const BatchUpload: React.FC = () => {
       console.log(`✅ Contratos cargados: ${contractsMap.size} vehículos`);
       console.log('📋 Muestra de contratos:', Array.from(contractsMap.entries()).slice(0, 5));
 
-      // Pequeño delay para asegurar que el estado se actualice
       await new Promise(resolve => setTimeout(resolve, 100));
     } catch (error) {
       console.error('❌ Error cargando contratos:', error);
     }
   };
 
-  // Helper function to get contract by plate
   const getContractByPlate = (plate: string): string => {
-    // Normalizar placa de búsqueda: mayúsculas y sin espacios
     const normalizedPlate = plate.toUpperCase().replace(/\s+/g, '');
     const contract = vehicleContracts.get(normalizedPlate);
 
@@ -157,12 +167,11 @@ export const BatchUpload: React.FC = () => {
     setIsQuerying(true);
     console.log('⏳ Consultando alertas de batch_alerts...');
     console.log('🔍 Cargando SIN FILTROS (todos los datos)');
-    // IMPORTANTE: Cargar SIN filtros para mostrar todos los datos
+    
     const result = await queryBatchAlerts({});
     if (result.success && result.data) {
       console.log(`✅ Alertas recibidas: ${result.data.length}`);
 
-      // Contar por source
       const sourceCounts = result.data.reduce((acc: any, alert: any) => {
         const source = alert.file_uploads?.source || 'SIN_SOURCE';
         acc[source] = (acc[source] || 0) + 1;
@@ -172,7 +181,6 @@ export const BatchUpload: React.FC = () => {
 
       setSavedAlerts(result.data);
 
-      // Debug: Mostrar primeras 3 placas para verificar matching
       if (result.data.length > 0) {
         console.log('🔍 Debug - Primeras 3 placas en alertas:', result.data.slice(0, 3).map(a => ({
           placa_original: a.plate,
@@ -186,6 +194,42 @@ export const BatchUpload: React.FC = () => {
       console.error('❌ Error cargando alertas:', result.error);
     }
     setIsQuerying(false);
+  };
+
+  // 🆕 CARGAR ANÁLISIS DETALLADO
+  const loadDetailedAnalysis = async (customFilters?: AlertFilters) => {
+    setIsLoadingAnalysis(true);
+    console.log('📊 Generando análisis detallado...');
+
+    const result = await getDetailedAuditAnalysis(customFilters || filters);
+    if (result.success && result.data) {
+      setDetailedAnalysis(result.data);
+      console.log('✅ Análisis detallado cargado:', result.data);
+    } else {
+      console.error('❌ Error generando análisis:', result.error);
+    }
+
+    setIsLoadingAnalysis(false);
+  };
+
+  // 🆕 VER DETALLES DE VEHÍCULO
+  const handleViewVehicleStats = async (plate: string) => {
+    const result = await getVehicleDetailedStats(plate);
+    if (result.success && result.data) {
+      setSelectedVehicleStats(result.data);
+    } else {
+      window.alert('❌ Error: ' + result.error);
+    }
+  };
+
+  // 🆕 VER DETALLES DE CONDUCTOR
+  const handleViewDriverStats = async (driver: string) => {
+    const result = await getDriverDetailedStats(driver);
+    if (result.success && result.data) {
+      setSelectedDriverStats(result.data);
+    } else {
+      window.alert('❌ Error: ' + result.error);
+    }
   };
 
   // ==================== FILE HANDLING ====================
@@ -244,7 +288,6 @@ export const BatchUpload: React.FC = () => {
       setProcessedAlerts(result.data || []);
       setIsProcessing(false);
 
-      // Auto-collapse upload section after processing
       setUploadCollapsed(true);
 
     } catch (error: any) {
@@ -270,7 +313,6 @@ export const BatchUpload: React.FC = () => {
     setError(null);
 
     try {
-      // 1. Crear registro de carga
       const uploadResult = await createFileUploadRecord(
         selectedFile.name,
         selectedSource,
@@ -283,7 +325,6 @@ export const BatchUpload: React.FC = () => {
         return;
       }
 
-      // 2. Guardar alertas
       const saveResult = await saveBatchAlerts(
         uploadResult.uploadId,
         processedAlerts
@@ -297,7 +338,6 @@ export const BatchUpload: React.FC = () => {
 
       window.alert(`✅ ${saveResult.insertedCount} alertas guardadas exitosamente`);
 
-      // Limpiar filtros y estado de carga
       setPlateSearch('');
       setAlertTypeSearch('');
       setSelectedAlertTypes([]);
@@ -307,13 +347,13 @@ export const BatchUpload: React.FC = () => {
       setStartDate('');
       setEndDate('');
       setFilters({});
-      setCurrentPage(1); // Volver a página 1
+      setCurrentPage(1);
 
-      // Limpiar y recargar TODOS los datos
       setProcessedAlerts([]);
       setSelectedFile(null);
       console.log('🔄 Recargando todos los datos después de guardar...');
-      loadSavedAlerts();
+      await loadSavedAlerts();
+      await loadDetailedAnalysis();
       setIsSaving(false);
 
     } catch (error: any) {
@@ -350,6 +390,7 @@ export const BatchUpload: React.FC = () => {
     if (result.success && result.data) {
       console.log(`✅ Resultado de filtros: ${result.data.length} alertas`);
 
+<<<<<<< HEAD
       // Aplicar filtro de contratos (client-side)
       let filteredData = result.data;
       if (selectedContracts.length > 0) {
@@ -362,22 +403,32 @@ export const BatchUpload: React.FC = () => {
 
       // Contar por source DESPUÉS de aplicar filtros
       const sourceCounts = filteredData.reduce((acc: any, alert: any) => {
+=======
+      const sourceCounts = result.data.reduce((acc: any, alert: any) => {
+>>>>>>> origin/main
         const source = alert.file_uploads?.source || 'SIN_SOURCE';
         acc[source] = (acc[source] || 0) + 1;
         return acc;
       }, {});
       console.log('📊 Distribución después de filtros:', sourceCounts);
 
+<<<<<<< HEAD
       setSavedAlerts(filteredData);
       setCurrentPage(1); // Volver a página 1 después de filtrar
+=======
+      setSavedAlerts(result.data);
+      setCurrentPage(1);
+>>>>>>> origin/main
 
-      // Debug: Verificar matching después de filtrar
       if (result.data.length > 0 && result.data.length <= 5) {
         console.log('🔍 Matching de todas las alertas filtradas:', result.data.map(a => ({
           placa: a.plate,
           contrato: getContractByPlate(a.plate)
         })));
       }
+
+      // 🆕 Actualizar análisis con filtros
+      await loadDetailedAnalysis(newFilters);
     } else {
       console.error('❌ Error aplicando filtros:', result.error);
     }
@@ -396,9 +447,9 @@ export const BatchUpload: React.FC = () => {
     setStartDate('');
     setEndDate('');
     setFilters({});
-    setCurrentPage(1); // Volver a página 1
-    // Recargar todos los datos sin filtros
+    setCurrentPage(1);
     loadSavedAlerts();
+    loadDetailedAnalysis({});
   };
 
   // ==================== MULTI-SELECT HANDLERS ====================
@@ -425,16 +476,13 @@ export const BatchUpload: React.FC = () => {
     const contract = getContractByPlate(alert.plate);
     const source = (alert as any).file_uploads?.source || 'BATCH';
 
-    // Determinar si es exceso de velocidad
     const isSpeedingAlert = alert.alert_type.toLowerCase().includes('velocidad') ||
       alert.alert_type.toLowerCase().includes('exceso') ||
       alert.alert_type.toLowerCase().includes('infraccion');
 
-    // Generar detalles según el tipo de alerta
     let details = '';
     if (alert.speed) {
       details = `Velocidad: ${alert.speed} km/h`;
-      // Si podemos extraer el límite del tipo de alerta, lo agregamos
       const limitMatch = alert.alert_type.match(/\d+\s*km\/h/i);
       if (limitMatch) {
         const limit = limitMatch[0];
@@ -444,13 +492,11 @@ export const BatchUpload: React.FC = () => {
       details = alert.alert_type;
     }
 
-    // Generar URL de Google Maps si hay coordenadas
     let googleMapsUrl = 'Desconocido';
     if (alert.latitude && alert.longitude) {
       googleMapsUrl = `https://www.google.com/maps?q=${alert.latitude},${alert.longitude}`;
     }
 
-    // Formato idéntico al de los otros módulos (App.tsx)
     const message = `🚨 *ALERTA DE FLOTA*\n\n` +
       `*Tipo:* ${alert.alert_type}\n` +
       `*Vehículo:* ${alert.plate}\n` +
@@ -472,11 +518,9 @@ export const BatchUpload: React.FC = () => {
   const handleSaveToMainAlerts = async (batchAlert: BatchAlertRecord) => {
     const contract = getContractByPlate(batchAlert.plate);
 
-    // Generar vehicleId desde la placa normalizada
     const normalizedPlate = batchAlert.plate.toUpperCase().replace(/\s+/g, '');
     const vehicleId = `vehicle-${normalizedPlate}`;
 
-    // Convertir BatchAlert a Alert
     const alert: Alert = {
       id: `batch-${batchAlert.id}`,
       vehicleId: vehicleId,
@@ -516,13 +560,13 @@ export const BatchUpload: React.FC = () => {
     if (result.success) {
       window.alert('✅ Alerta eliminada');
       loadSavedAlerts();
+      loadDetailedAnalysis();
     } else {
       window.alert('❌ Error: ' + result.error);
     }
   };
 
   const handleDeleteAll = async () => {
-    // Confirmación con prompt de texto para evitar eliminaciones accidentales
     const confirmText = window.prompt(
       '⚠️ ADVERTENCIA: Esta acción eliminará TODAS las alertas de auditoría.\n\n' +
       `Se eliminarán ${savedAlerts.length} registros de la base de datos.\n\n` +
@@ -542,6 +586,7 @@ export const BatchUpload: React.FC = () => {
     if (result.success) {
       window.alert(`✅ ${result.deletedCount} alertas eliminadas exitosamente`);
       loadSavedAlerts();
+      setDetailedAnalysis(null);
     } else {
       window.alert('❌ Error: ' + result.error);
     }
@@ -587,6 +632,13 @@ export const BatchUpload: React.FC = () => {
     exportToExcel(dataToExport, columns, `auditoria_flota_${new Date().toISOString().split('T')[0]}`);
   };
 
+  // 🆕 EXPORTAR ANÁLISIS DETALLADO
+  const handleExportAnalysis = () => {
+    if (detailedAnalysis) {
+      exportAnalysisToCSV(detailedAnalysis, `analisis_detallado_${new Date().toISOString().split('T')[0]}.csv`);
+    }
+  };
+
   // ==================== RENDER ====================
 
   const gravesCount = savedAlerts.filter(a => a.is_grave).length;
@@ -601,6 +653,137 @@ export const BatchUpload: React.FC = () => {
         </h1>
         <p className="text-purple-100 mt-2">Carga masiva de reportes GPS (FAGOR y COLTRACK)</p>
       </div>
+
+      {/* 🆕 PANEL DE ANÁLISIS DETALLADO */}
+      {detailedAnalysis && (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
+          <button
+            onClick={() => setShowAnalysis(!showAnalysis)}
+            className="w-full px-6 py-4 flex items-center justify-between hover:bg-slate-50 transition-colors"
+          >
+            <div className="flex items-center gap-3">
+              <BarChart3 className="w-5 h-5 text-indigo-600" />
+              <span className="font-semibold text-lg">Análisis Detallado</span>
+              <span className="text-sm bg-indigo-100 text-indigo-700 px-3 py-1 rounded-full">
+                Métricas Avanzadas
+              </span>
+            </div>
+            {showAnalysis ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+          </button>
+
+          {showAnalysis && (
+            <div className="p-6 border-t border-slate-200 space-y-6">
+              {/* Stats Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4 border border-blue-200">
+                  <p className="text-sm text-blue-700 font-medium">Promedio Alertas/Carga</p>
+                  <p className="text-2xl font-bold text-blue-900">
+                    {detailedAnalysis.overview.avg_alerts_per_upload.toFixed(1)}
+                  </p>
+                </div>
+
+                <div className="bg-gradient-to-br from-red-50 to-red-100 rounded-lg p-4 border border-red-200">
+                  <p className="text-sm text-red-700 font-medium">% Faltas Graves</p>
+                  <p className="text-2xl font-bold text-red-900">
+                    {detailedAnalysis.overview.grave_percentage.toFixed(1)}%
+                  </p>
+                </div>
+
+                <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg p-4 border border-green-200">
+                  <p className="text-sm text-green-700 font-medium">Total Vehículos</p>
+                  <p className="text-2xl font-bold text-green-900">
+                    {detailedAnalysis.vehicles.total_vehicles}
+                  </p>
+                </div>
+
+                <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-lg p-4 border border-purple-200">
+                  <p className="text-sm text-purple-700 font-medium">Velocidad Promedio</p>
+                  <p className="text-2xl font-bold text-purple-900">
+                    {detailedAnalysis.speed_analysis.avg_speed.toFixed(1)} km/h
+                  </p>
+                </div>
+              </div>
+
+              {/* Top Vehicles */}
+              <div className="bg-slate-50 rounded-lg p-4">
+                <h3 className="font-semibold text-slate-800 mb-3 flex items-center gap-2">
+                  <TrendingUp className="w-5 h-5 text-orange-600" />
+                  Top 5 Vehículos con Más Alertas
+                </h3>
+                <div className="space-y-2">
+                  {detailedAnalysis.vehicles.most_alerts.slice(0, 5).map((vehicle, index) => (
+                    <div key={vehicle.plate} className="flex items-center justify-between bg-white p-3 rounded-lg">
+                      <div className="flex items-center gap-3">
+                        <span className="w-6 h-6 bg-orange-100 text-orange-700 rounded-full flex items-center justify-center text-sm font-bold">
+                          {index + 1}
+                        </span>
+                        <button
+                          onClick={() => handleViewVehicleStats(vehicle.plate)}
+                          className="font-semibold text-slate-800 hover:text-indigo-600 transition-colors"
+                        >
+                          {vehicle.plate}
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <span className="text-sm text-slate-600">{vehicle.count} alertas</span>
+                        {vehicle.grave_count > 0 && (
+                          <span className="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full font-medium">
+                            {vehicle.grave_count} graves
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Top Drivers */}
+              <div className="bg-slate-50 rounded-lg p-4">
+                <h3 className="font-semibold text-slate-800 mb-3 flex items-center gap-2">
+                  <PieChart className="w-5 h-5 text-blue-600" />
+                  Top 5 Conductores
+                </h3>
+                <div className="space-y-2">
+                  {detailedAnalysis.drivers.most_incidents.slice(0, 5).map((driver, index) => (
+                    <div key={driver.driver} className="flex items-center justify-between bg-white p-3 rounded-lg">
+                      <div className="flex items-center gap-3">
+                        <span className="w-6 h-6 bg-blue-100 text-blue-700 rounded-full flex items-center justify-center text-sm font-bold">
+                          {index + 1}
+                        </span>
+                        <button
+                          onClick={() => handleViewDriverStats(driver.driver)}
+                          className="font-semibold text-slate-800 hover:text-indigo-600 transition-colors"
+                        >
+                          {driver.driver}
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <span className="text-sm text-slate-600">{driver.count} incidentes</span>
+                        {driver.grave_count > 0 && (
+                          <span className="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full font-medium">
+                            {driver.grave_count} graves
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Export Button */}
+              <div className="flex justify-end">
+                <button
+                  onClick={handleExportAnalysis}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 flex items-center gap-2"
+                >
+                  <Download className="w-4 h-4" />
+                  Exportar Análisis Completo (CSV)
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ==================== UPLOAD SECTION ==================== */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
@@ -988,142 +1171,261 @@ export const BatchUpload: React.FC = () => {
                     const endIndex = startIndex + itemsPerPage;
                     const paginatedAlerts = savedAlerts.slice(startIndex, endIndex);
                     return paginatedAlerts.map((alert) => (
-                  <tr key={alert.id} className="hover:bg-slate-50">
-                    <td className="px-4 py-3 text-sm text-slate-700">
-                      {new Date(alert.timestamp).toLocaleString('es-CO', {
-                        year: 'numeric',
-                        month: '2-digit',
-                        day: '2-digit',
-                        hour: '2-digit',
-                        minute: '2-digit'
-                      })}
-                    </td>
-                    <td className="px-4 py-3 text-sm font-semibold text-slate-900">{alert.plate}</td>
-                    <td className="px-4 py-3 text-sm text-slate-700">{alert.driver || 'N/A'}</td>
-                    <td className="px-4 py-3 text-sm text-slate-700">{alert.alert_type}</td>
-                    <td className="px-4 py-3 text-sm text-slate-700">
-                      {alert.speed ? `${alert.speed} km/h` : 'N/A'}
-                    </td>
-                    <td className="px-4 py-3 text-sm text-slate-700">
-                      {getContractByPlate(alert.plate)}
-                    </td>
-                    <td className="px-4 py-3 text-sm">
-                      {(() => {
-                        const source = (alert as any).file_uploads?.source || 'N/A';
-                        const bgColor = source === 'COLTRACK' ? 'bg-blue-100 text-blue-700' : source === 'FAGOR' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-600';
-                        return (
-                          <span className={`px-2 py-1 ${bgColor} rounded-full text-xs font-medium`}>
-                            {source}
-                          </span>
-                        );
-                      })()}
-                    </td>
-                    <td className="px-4 py-3 text-sm">
-                      {alert.is_grave ? (
-                        <span className="px-2 py-1 bg-red-100 text-red-700 rounded-full text-xs font-medium">
-                          SÍ
-                        </span>
-                      ) : (
-                        <span className="px-2 py-1 bg-slate-100 text-slate-600 rounded-full text-xs font-medium">
-                          NO
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex gap-1">
-                        <button
-                          onClick={() => handleCopyMessage(alert)}
-                          className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                          title="Copiar mensaje"
-                        >
-                          <Copy className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => handleSaveToMainAlerts(alert)}
-                          className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                          title="Guardar en Historial"
-                        >
-                          <Save className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteAlert(alert.id)}
-                          className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                          title="Eliminar"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
+                      <tr key={alert.id} className="hover:bg-slate-50">
+                        <td className="px-4 py-3 text-sm text-slate-700">
+                          {new Date(alert.timestamp).toLocaleString('es-CO', {
+                            year: 'numeric',
+                            month: '2-digit',
+                            day: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </td>
+                        <td className="px-4 py-3 text-sm font-semibold text-slate-900">{alert.plate}</td>
+                        <td className="px-4 py-3 text-sm text-slate-700">{alert.driver || 'N/A'}</td>
+                        <td className="px-4 py-3 text-sm text-slate-700">{alert.alert_type}</td>
+                        <td className="px-4 py-3 text-sm text-slate-700">
+                          {alert.speed ? `${alert.speed} km/h` : 'N/A'}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-slate-700">
+                          {getContractByPlate(alert.plate)}
+                        </td>
+                        <td className="px-4 py-3 text-sm">
+                          {(() => {
+                            const source = (alert as any).file_uploads?.source || 'N/A';
+                            const bgColor = source === 'COLTRACK' ? 'bg-blue-100 text-blue-700' : source === 'FAGOR' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-600';
+                            return (
+                              <span className={`px-2 py-1 ${bgColor} rounded-full text-xs font-medium`}>
+                                {source}
+                              </span>
+                            );
+                          })()}
+                        </td>
+                        <td className="px-4 py-3 text-sm">
+                          {alert.is_grave ? (
+                            <span className="px-2 py-1 bg-red-100 text-red-700 rounded-full text-xs font-medium">
+                              SÍ
+                            </span>
+                          ) : (
+                            <span className="px-2 py-1 bg-slate-100 text-slate-600 rounded-full text-xs font-medium">
+                              NO
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex gap-1">
+                            <button
+                              onClick={() => handleCopyMessage(alert)}
+                              className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                              title="Copiar mensaje"
+                            >
+                              <Copy className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => handleSaveToMainAlerts(alert)}
+                              className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                              title="Guardar en Historial"
+                            >
+                              <Save className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteAlert(alert.id)}
+                              className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                              title="Eliminar"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
                     ));
                   })()}
-              </tbody>
-            </table>
-          </div>
+                </tbody>
+              </table>
+            </div>
 
-          {/* Pagination Controls */}
-          <div className="mt-4 flex items-center justify-between px-4 py-3 bg-slate-50 border border-slate-200 rounded-lg">
-            <div className="flex items-center gap-4">
+            {/* Pagination Controls */}
+            <div className="flex items-center justify-between mt-4">
               <div className="flex items-center gap-2">
-                <label className="text-sm text-slate-700 font-medium">Registros por página:</label>
+                <label className="text-sm text-slate-600">Mostrar:</label>
                 <select
                   value={itemsPerPage}
                   onChange={(e) => {
                     setItemsPerPage(Number(e.target.value));
                     setCurrentPage(1);
                   }}
-                  className="px-2 py-1 border border-slate-300 rounded text-sm"
+                  className="px-3 py-1 border border-slate-300 rounded-lg text-sm"
                 >
-                  <option value={10}>10</option>
                   <option value={20}>20</option>
                   <option value={50}>50</option>
                   <option value={100}>100</option>
+                  <option value={500}>500</option>
                 </select>
+                <span className="text-sm text-slate-600">
+                  Mostrando {((currentPage - 1) * itemsPerPage) + 1} - {Math.min(currentPage * itemsPerPage, savedAlerts.length)} de {savedAlerts.length}
+                </span>
               </div>
-              <div className="text-sm text-slate-600">
-                Mostrando {Math.min((currentPage - 1) * itemsPerPage + 1, savedAlerts.length)} a {Math.min(currentPage * itemsPerPage, savedAlerts.length)} de {savedAlerts.length} registros
+
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setCurrentPage(1)}
+                  disabled={currentPage === 1}
+                  className="px-3 py-1 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                >
+                  Primera
+                </button>
+                <button
+                  onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                  disabled={currentPage === 1}
+                  className="px-3 py-1 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                >
+                  Anterior
+                </button>
+                <span className="px-4 py-1 bg-purple-600 text-white rounded-lg text-sm">
+                  {currentPage}
+                </span>
+                <button
+                  onClick={() => setCurrentPage(prev => Math.min(Math.ceil(savedAlerts.length / itemsPerPage), prev + 1))}
+                  disabled={currentPage >= Math.ceil(savedAlerts.length / itemsPerPage)}
+                  className="px-3 py-1 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                >
+                  Siguiente
+                </button>
+                <button
+                  onClick={() => setCurrentPage(Math.ceil(savedAlerts.length / itemsPerPage))}
+                  disabled={currentPage >= Math.ceil(savedAlerts.length / itemsPerPage)}
+                  className="px-3 py-1 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                >
+                  Última
+                </button>
               </div>
             </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setCurrentPage(1)}
-                disabled={currentPage === 1}
-                className="px-3 py-1 border border-slate-300 rounded hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-              >
-                ««
-              </button>
-              <button
-                onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                disabled={currentPage === 1}
-                className="px-3 py-1 border border-slate-300 rounded hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-              >
-                ‹
-              </button>
-
-              <span className="px-4 text-sm text-slate-700">
-                Página {currentPage} de {Math.ceil(savedAlerts.length / itemsPerPage)}
-              </span>
-
-              <button
-                onClick={() => setCurrentPage(prev => Math.min(Math.ceil(savedAlerts.length / itemsPerPage), prev + 1))}
-                disabled={currentPage >= Math.ceil(savedAlerts.length / itemsPerPage)}
-                className="px-3 py-1 border border-slate-300 rounded hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-              >
-                ›
-              </button>
-              <button
-                onClick={() => setCurrentPage(Math.ceil(savedAlerts.length / itemsPerPage))}
-                disabled={currentPage >= Math.ceil(savedAlerts.length / itemsPerPage)}
-                className="px-3 py-1 border border-slate-300 rounded hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-              >
-                »»
-              </button>
-            </div>
-          </div>
           </>
         )}
       </div>
+
+      {/* 🆕 MODAL DE ESTADÍSTICAS DE VEHÍCULO */}
+      {selectedVehicleStats && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-2xl font-bold">Estadísticas - {selectedVehicleStats.plate}</h2>
+              <button
+                onClick={() => setSelectedVehicleStats(null)}
+                className="p-2 hover:bg-slate-100 rounded-lg"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+              <div className="bg-blue-50 p-4 rounded-lg">
+                <p className="text-sm text-blue-700">Total Alertas</p>
+                <p className="text-2xl font-bold text-blue-900">{selectedVehicleStats.total_alerts}</p>
+              </div>
+              <div className="bg-red-50 p-4 rounded-lg">
+                <p className="text-sm text-red-700">Faltas Graves</p>
+                <p className="text-2xl font-bold text-red-900">{selectedVehicleStats.grave_alerts}</p>
+              </div>
+              <div className="bg-orange-50 p-4 rounded-lg">
+                <p className="text-sm text-orange-700">Risk Score</p>
+                <p className="text-2xl font-bold text-orange-900">{selectedVehicleStats.risk_score}/100</p>
+              </div>
+              <div className="bg-green-50 p-4 rounded-lg">
+                <p className="text-sm text-green-700">Tendencia</p>
+                <p className="text-2xl font-bold text-green-900 capitalize">{selectedVehicleStats.trend}</p>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <h3 className="font-semibold mb-2">Tipos de Alerta</h3>
+                <div className="space-y-1">
+                  {selectedVehicleStats.alert_types.map(type => (
+                    <div key={type.type} className="flex justify-between text-sm">
+                      <span>{type.type}</span>
+                      <span className="font-medium">{type.count}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <h3 className="font-semibold mb-2">Velocidades</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-sm text-slate-600">Promedio</p>
+                    <p className="text-lg font-bold">{selectedVehicleStats.avg_speed.toFixed(1)} km/h</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-slate-600">Máxima</p>
+                    <p className="text-lg font-bold text-red-600">{selectedVehicleStats.max_speed.toFixed(1)} km/h</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 🆕 MODAL DE ESTADÍSTICAS DE CONDUCTOR */}
+      {selectedDriverStats && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-2xl font-bold">Estadísticas - {selectedDriverStats.driver}</h2>
+              <button
+                onClick={() => setSelectedDriverStats(null)}
+                className="p-2 hover:bg-slate-100 rounded-lg"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
+              <div className="bg-blue-50 p-4 rounded-lg">
+                <p className="text-sm text-blue-700">Total Alertas</p>
+                <p className="text-2xl font-bold text-blue-900">{selectedDriverStats.total_alerts}</p>
+              </div>
+              <div className="bg-red-50 p-4 rounded-lg">
+                <p className="text-sm text-red-700">Faltas Graves</p>
+                <p className="text-2xl font-bold text-red-900">{selectedDriverStats.grave_alerts}</p>
+              </div>
+              <div className="bg-green-50 p-4 rounded-lg">
+                <p className="text-sm text-green-700">Safety Score</p>
+                <p className="text-2xl font-bold text-green-900">{selectedDriverStats.safety_score}/100</p>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <h3 className="font-semibold mb-2">Vehículos Conducidos ({selectedDriverStats.vehicles_driven.length})</h3>
+                <div className="flex flex-wrap gap-2">
+                  {selectedDriverStats.vehicles_driven.map(vehicle => (
+                    <span key={vehicle} className="px-3 py-1 bg-slate-100 rounded-full text-sm">
+                      {vehicle}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <h3 className="font-semibold mb-2">Velocidades</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-sm text-slate-600">Promedio</p>
+                    <p className="text-lg font-bold">{selectedDriverStats.avg_speed.toFixed(1)} km/h</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-slate-600">Máxima</p>
+                    <p className="text-lg font-bold text-red-600">{selectedDriverStats.max_speed.toFixed(1)} km/h</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
