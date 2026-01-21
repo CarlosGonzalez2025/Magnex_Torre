@@ -45,6 +45,9 @@ export const BatchUpload: React.FC = () => {
   const [availableAlertTypes, setAvailableAlertTypes] = useState<string[]>([]);
   const [selectedAlertTypes, setSelectedAlertTypes] = useState<string[]>([]);
   const [showAlertTypeDropdown, setShowAlertTypeDropdown] = useState(false);
+  const [availableContracts, setAvailableContracts] = useState<string[]>([]);
+  const [selectedContracts, setSelectedContracts] = useState<string[]>([]);
+  const [showContractDropdown, setShowContractDropdown] = useState(false);
   const [sourceFilter, setSourceFilter] = useState<'ALL' | 'FAGOR' | 'COLTRACK'>('ALL');
   const [graveFilter, setGraveFilter] = useState<'ALL' | 'true' | 'false'>('ALL');
   const [startDate, setStartDate] = useState('');
@@ -52,6 +55,7 @@ export const BatchUpload: React.FC = () => {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const alertTypeDropdownRef = useRef<HTMLDivElement>(null);
+  const contractDropdownRef = useRef<HTMLDivElement>(null);
   const { exportToExcel } = useExportToExcel();
 
   // ==================== FETCH VEHICLE CONTRACTS ====================
@@ -73,11 +77,28 @@ export const BatchUpload: React.FC = () => {
     console.log(`✅ Tipos de alerta actualizados: ${uniqueTypes.length} tipos únicos`);
   }, [savedAlerts]);
 
+  // Actualizar contratos disponibles cada vez que cambien las alertas guardadas
+  useEffect(() => {
+    const contractsSet = new Set<string>();
+    savedAlerts.forEach(alert => {
+      const contract = getContractByPlate(alert.plate);
+      if (contract && contract !== 'Sin contrato') {
+        contractsSet.add(contract);
+      }
+    });
+    const uniqueContracts = [...contractsSet].sort();
+    setAvailableContracts(uniqueContracts);
+    console.log(`✅ Contratos actualizados: ${uniqueContracts.length} contratos únicos`);
+  }, [savedAlerts, vehicleContracts]);
+
   // Cerrar dropdown cuando se hace clic fuera
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (alertTypeDropdownRef.current && !alertTypeDropdownRef.current.contains(event.target as Node)) {
         setShowAlertTypeDropdown(false);
+      }
+      if (contractDropdownRef.current && !contractDropdownRef.current.contains(event.target as Node)) {
+        setShowContractDropdown(false);
       }
     };
 
@@ -280,6 +301,7 @@ export const BatchUpload: React.FC = () => {
       setPlateSearch('');
       setAlertTypeSearch('');
       setSelectedAlertTypes([]);
+      setSelectedContracts([]);
       setSourceFilter('ALL');
       setGraveFilter('ALL');
       setStartDate('');
@@ -317,6 +339,7 @@ export const BatchUpload: React.FC = () => {
     console.log('🔍 Filtros a aplicar:', newFilters);
     console.log('🔍 Source filter actual:', sourceFilter);
     console.log('🔍 Tipos seleccionados:', selectedAlertTypes);
+    console.log('🔍 Contratos seleccionados:', selectedContracts);
 
     setFilters(newFilters);
     setIsQuerying(true);
@@ -327,15 +350,25 @@ export const BatchUpload: React.FC = () => {
     if (result.success && result.data) {
       console.log(`✅ Resultado de filtros: ${result.data.length} alertas`);
 
+      // Aplicar filtro de contratos (client-side)
+      let filteredData = result.data;
+      if (selectedContracts.length > 0) {
+        filteredData = result.data.filter(alert => {
+          const contract = getContractByPlate(alert.plate);
+          return contract && selectedContracts.includes(contract);
+        });
+        console.log(`🔍 Filtrado por contratos: ${filteredData.length} alertas (${selectedContracts.length} contratos seleccionados)`);
+      }
+
       // Contar por source DESPUÉS de aplicar filtros
-      const sourceCounts = result.data.reduce((acc: any, alert: any) => {
+      const sourceCounts = filteredData.reduce((acc: any, alert: any) => {
         const source = alert.file_uploads?.source || 'SIN_SOURCE';
         acc[source] = (acc[source] || 0) + 1;
         return acc;
       }, {});
       console.log('📊 Distribución después de filtros:', sourceCounts);
 
-      setSavedAlerts(result.data);
+      setSavedAlerts(filteredData);
       setCurrentPage(1); // Volver a página 1 después de filtrar
 
       // Debug: Verificar matching después de filtrar
@@ -357,6 +390,7 @@ export const BatchUpload: React.FC = () => {
     setPlateSearch('');
     setAlertTypeSearch('');
     setSelectedAlertTypes([]);
+    setSelectedContracts([]);
     setSourceFilter('ALL');
     setGraveFilter('ALL');
     setStartDate('');
@@ -367,13 +401,21 @@ export const BatchUpload: React.FC = () => {
     loadSavedAlerts();
   };
 
-  // ==================== MULTI-SELECT HANDLER ====================
+  // ==================== MULTI-SELECT HANDLERS ====================
 
   const toggleAlertType = (alertType: string) => {
     setSelectedAlertTypes(prev =>
       prev.includes(alertType)
         ? prev.filter(t => t !== alertType)
         : [...prev, alertType]
+    );
+  };
+
+  const toggleContract = (contract: string) => {
+    setSelectedContracts(prev =>
+      prev.includes(contract)
+        ? prev.filter(c => c !== contract)
+        : [...prev, contract]
     );
   };
 
@@ -813,6 +855,45 @@ export const BatchUpload: React.FC = () => {
               <option value="true">Solo Graves</option>
               <option value="false">Solo No Graves</option>
             </select>
+          </div>
+
+          <div className="relative" ref={contractDropdownRef}>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Contratos (Multi-selección)</label>
+            <button
+              type="button"
+              onClick={() => setShowContractDropdown(!showContractDropdown)}
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white text-left flex items-center justify-between"
+            >
+              <span className="text-sm text-slate-700">
+                {selectedContracts.length === 0
+                  ? 'Seleccionar contratos...'
+                  : `${selectedContracts.length} contrato${selectedContracts.length > 1 ? 's' : ''} seleccionado${selectedContracts.length > 1 ? 's' : ''}`}
+              </span>
+              <ChevronDown className="w-4 h-4 text-slate-400" />
+            </button>
+
+            {showContractDropdown && (
+              <div className="absolute z-10 mt-1 w-full bg-white border border-slate-300 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                {availableContracts.length === 0 ? (
+                  <div className="px-3 py-2 text-sm text-slate-500">No hay contratos disponibles</div>
+                ) : (
+                  availableContracts.map((contract) => (
+                    <label
+                      key={contract}
+                      className="flex items-center px-3 py-2 hover:bg-slate-50 cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedContracts.includes(contract)}
+                        onChange={() => toggleContract(contract)}
+                        className="mr-2 h-4 w-4 text-purple-600 border-slate-300 rounded focus:ring-purple-500"
+                      />
+                      <span className="text-sm text-slate-700">{contract}</span>
+                    </label>
+                  ))
+                )}
+              </div>
+            )}
           </div>
 
           <div>
