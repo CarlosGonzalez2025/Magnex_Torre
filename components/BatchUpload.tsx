@@ -549,10 +549,13 @@ export const BatchUpload: React.FC = () => {
       conductor: alert.driver || 'N/A',
       tipo_alerta: alert.alert_type,
       velocidad: alert.speed || 'N/A',
+      ubicacion: alert.location || 'N/A',
+      latitud: alert.latitude || 'N/A',
+      longitud: alert.longitude || 'N/A',
       severidad: alert.severity,
       falta_grave: alert.is_grave ? 'SÍ' : 'NO',
       contrato: getContractByPlate(alert.plate),
-      fuente: (alert as any).file_uploads?.source || 'N/A',
+      plataforma: (alert as any).file_uploads?.source || 'N/A',
       archivo: (alert as any).file_uploads?.filename || 'N/A'
     }));
 
