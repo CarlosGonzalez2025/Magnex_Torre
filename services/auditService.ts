@@ -486,10 +486,28 @@ export async function deleteAllBatchAlerts(): Promise<{
     console.log(`⚠️ Iniciando eliminación de ${totalToDelete} alertas...`);
 
     while (hasMore) {
+      // Obtener IDs de las primeras 1000 alertas
+      const { data: alertsToDelete, error: fetchError } = await supabase
+        .from('batch_alerts')
+        .select('id')
+        .limit(1000);
+
+      if (fetchError) {
+        console.error('❌ Error obteniendo alertas para eliminar:', fetchError);
+        return { success: false, error: fetchError.message };
+      }
+
+      if (!alertsToDelete || alertsToDelete.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      // Eliminar por IDs
+      const ids = alertsToDelete.map(alert => alert.id);
       const { data, error: deleteError } = await supabase
         .from('batch_alerts')
         .delete()
-        .limit(1000)
+        .in('id', ids)
         .select();
 
       if (deleteError) {
