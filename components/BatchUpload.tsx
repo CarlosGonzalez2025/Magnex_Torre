@@ -390,7 +390,6 @@ export const BatchUpload: React.FC = () => {
     if (result.success && result.data) {
       console.log(`✅ Resultado de filtros: ${result.data.length} alertas`);
 
-<<<<<<< HEAD
       // Aplicar filtro de contratos (client-side)
       let filteredData = result.data;
       if (selectedContracts.length > 0) {
@@ -403,25 +402,17 @@ export const BatchUpload: React.FC = () => {
 
       // Contar por source DESPUÉS de aplicar filtros
       const sourceCounts = filteredData.reduce((acc: any, alert: any) => {
-=======
-      const sourceCounts = result.data.reduce((acc: any, alert: any) => {
->>>>>>> origin/main
         const source = alert.file_uploads?.source || 'SIN_SOURCE';
         acc[source] = (acc[source] || 0) + 1;
         return acc;
       }, {});
       console.log('📊 Distribución después de filtros:', sourceCounts);
 
-<<<<<<< HEAD
       setSavedAlerts(filteredData);
       setCurrentPage(1); // Volver a página 1 después de filtrar
-=======
-      setSavedAlerts(result.data);
-      setCurrentPage(1);
->>>>>>> origin/main
 
-      if (result.data.length > 0 && result.data.length <= 5) {
-        console.log('🔍 Matching de todas las alertas filtradas:', result.data.map(a => ({
+      if (filteredData.length > 0 && filteredData.length <= 5) {
+        console.log('🔍 Matching de todas las alertas filtradas:', filteredData.map(a => ({
           placa: a.plate,
           contrato: getContractByPlate(a.plate)
         })));
