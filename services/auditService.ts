@@ -485,29 +485,14 @@ export async function deleteAllBatchAlerts(): Promise<{
 
     console.log(`⚠️ Iniciando eliminación de ${totalToDelete} alertas...`);
 
-    while (hasMore) {
-      // Obtener IDs de las primeras 1000 alertas
-      const { data: alertsToDelete, error: fetchError } = await supabase
+    // Estrategia: usar NOT NULL en 'id' como WHERE clause (todos los registros tienen ID)
+    // Eliminar en lotes usando LIMIT para evitar timeout
+    while (hasMore && deletedTotal < totalToDelete) {
+      const { data, error: deleteError, count: deletedCount } = await supabase
         .from('batch_alerts')
-        .select('id')
-        .limit(1000);
-
-      if (fetchError) {
-        console.error('❌ Error obteniendo alertas para eliminar:', fetchError);
-        return { success: false, error: fetchError.message };
-      }
-
-      if (!alertsToDelete || alertsToDelete.length === 0) {
-        hasMore = false;
-        break;
-      }
-
-      // Eliminar por IDs
-      const ids = alertsToDelete.map(alert => alert.id);
-      const { data, error: deleteError } = await supabase
-        .from('batch_alerts')
-        .delete()
-        .in('id', ids)
+        .delete({ count: 'exact' })
+        .not('id', 'is', null)  // WHERE id IS NOT NULL - siempre verdadero
+        .limit(500)  // Lotes de 500
         .select();
 
       if (deleteError) {
@@ -515,11 +500,16 @@ export async function deleteAllBatchAlerts(): Promise<{
         return { success: false, error: deleteError.message };
       }
 
-      const deletedCount = data?.length || 0;
-      deletedTotal += deletedCount;
-      hasMore = deletedCount === 1000;
+      const batchDeleted = data?.length || 0;
+      deletedTotal += batchDeleted;
+      hasMore = batchDeleted === 500;  // Continuar si se eliminaron 500 (lote completo)
 
-      console.log(`🗑️ Eliminadas ${deletedCount} alertas (progreso: ${deletedTotal}/${totalToDelete})`);
+      console.log(`🗑️ Eliminadas ${batchDeleted} alertas (progreso: ${deletedTotal}/${totalToDelete})`);
+
+      // Pequeña pausa para evitar sobrecarga
+      if (hasMore) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
     }
 
     console.log(`✅ ${deletedTotal} alertas eliminadas de batch_alerts`);
