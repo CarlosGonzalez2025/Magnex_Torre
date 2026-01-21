@@ -485,7 +485,11 @@ export const BatchUpload: React.FC = () => {
 
     let googleMapsUrl = 'Desconocido';
     if (alert.latitude && alert.longitude) {
+      // Si hay coordenadas, usarlas directamente
       googleMapsUrl = `https://www.google.com/maps?q=${alert.latitude},${alert.longitude}`;
+    } else if (alert.location && alert.location !== 'Desconocido') {
+      // Si no hay coordenadas pero sí ubicación de texto, usar búsqueda de Google Maps
+      googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(alert.location)}`;
     }
 
     const message = `🚨 *ALERTA DE FLOTA*\n\n` +
