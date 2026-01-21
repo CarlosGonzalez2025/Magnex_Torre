@@ -525,7 +525,24 @@ export const BatchUpload: React.FC = () => {
       archivo: (alert as any).file_uploads?.filename || 'N/A'
     }));
 
-    exportToExcel(dataToExport, `auditoria_flota_${new Date().toISOString().split('T')[0]}`);
+    const columns = [
+      { header: 'Fecha', key: 'fecha', width: 12 },
+      { header: 'Hora', key: 'hora', width: 12 },
+      { header: 'Placa', key: 'placa', width: 10 },
+      { header: 'Conductor', key: 'conductor', width: 25 },
+      { header: 'Tipo de Alerta', key: 'tipo_alerta', width: 30 },
+      { header: 'Velocidad', key: 'velocidad', width: 12 },
+      { header: 'Ubicación', key: 'ubicacion', width: 30 },
+      { header: 'Latitud', key: 'latitud', width: 12 },
+      { header: 'Longitud', key: 'longitud', width: 12 },
+      { header: 'Severidad', key: 'severidad', width: 12 },
+      { header: 'Falta Grave', key: 'falta_grave', width: 12 },
+      { header: 'Contrato', key: 'contrato', width: 30 },
+      { header: 'Plataforma', key: 'plataforma', width: 12 },
+      { header: 'Archivo', key: 'archivo', width: 30 }
+    ];
+
+    exportToExcel(dataToExport, columns, `auditoria_flota_${new Date().toISOString().split('T')[0]}`);
   };
 
   // ==================== RENDER ====================
