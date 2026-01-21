@@ -205,6 +205,15 @@ function processFagorFile(workbook: XLSX.WorkBook): ProcessingResult {
       const driver = driverIndex >= 0 ? row[driverIndex]?.toString().trim() : undefined;
       const location = locationIndex >= 0 ? row[locationIndex]?.toString().trim() : undefined;
 
+      // Debug: Log de primera fila con ubicación
+      if (alerts.length === 0 && location) {
+        console.log('📍 FAGOR - Primera fila con ubicación:', {
+          location,
+          locationIndex,
+          columna_localidad: headers[locationIndex]
+        });
+      }
+
       // Detectar Falta Grave: "Alrm. de excesos de velocidad"
       // Asegurar que alertType sea string antes de usar métodos
       const alertTypeLower = alertType ? alertType.toLowerCase() : '';
@@ -294,9 +303,26 @@ function processColtrackFile(workbook: XLSX.WorkBook): ProcessingResult {
       const lastName = row['Apellido'] || row['apellido'] || row['Apellido Conductor'] || '';
       const driver = `${firstName} ${lastName}`.trim() || undefined;
 
-      // Capturar coordenadas (latitud y longitud)
-      const latitudeRaw = row['Latitud'] || row['latitud'] || row['LATITUD'] || row['Latitude'] || null;
-      const longitudeRaw = row['Longitud'] || row['longitud'] || row['LONGITUD'] || row['Longitude'] || null;
+      // Capturar coordenadas (latitud y longitud) - Buscar todas las variaciones posibles
+      const latitudeRaw = row['Latitud'] || row['latitud'] || row['LATITUD'] ||
+                          row['Latitude'] || row['latitude'] || row['LATITUDE'] ||
+                          row['Lat'] || row['lat'] || row['LAT'] || null;
+      const longitudeRaw = row['Longitud'] || row['longitud'] || row['LONGITUD'] ||
+                           row['Longitude'] || row['longitude'] || row['LONGITUDE'] ||
+                           row['Long'] || row['long'] || row['LONG'] ||
+                           row['Lon'] || row['lon'] || row['LON'] || null;
+
+      // Debug: Log de primera fila con coordenadas
+      if (alerts.length === 0 && (latitudeRaw || longitudeRaw)) {
+        console.log('📍 COLTRACK - Primera fila con coordenadas:', {
+          latitudeRaw,
+          longitudeRaw,
+          columnas_disponibles: Object.keys(row).filter(k =>
+            k.toLowerCase().includes('lat') || k.toLowerCase().includes('lon') || k.toLowerCase().includes('long')
+          )
+        });
+      }
+
       const latitude = latitudeRaw ? parseFloat(latitudeRaw.toString()) : undefined;
       const longitude = longitudeRaw ? parseFloat(longitudeRaw.toString()) : undefined;
 
