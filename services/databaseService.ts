@@ -244,6 +244,79 @@ export async function getFilteredAutoSavedAlerts(
 }
 
 /**
+ * Elimina múltiples alertas auto-guardadas por sus IDs
+ */
+export async function deleteMultipleAutoSavedAlerts(alertIds: string[]): Promise<{
+  success: boolean;
+  deletedCount?: number;
+  error?: string
+}> {
+  try {
+    if (!alertIds || alertIds.length === 0) {
+      return { success: false, error: 'No se proporcionaron IDs de alertas' };
+    }
+
+    const { data, error } = await supabase
+      .from('saved_alerts')
+      .delete()
+      .in('id', alertIds)
+      .select();
+
+    if (error) {
+      console.error('Error eliminando alertas:', error);
+      return { success: false, error: error.message };
+    }
+
+    const deletedCount = data?.length || 0;
+    console.log(`✅ ${deletedCount} alertas eliminadas correctamente`);
+    return { success: true, deletedCount };
+  } catch (error: any) {
+    console.error('Exception eliminando alertas:', error);
+    return { success: false, error: error.message || 'Error desconocido' };
+  }
+}
+
+/**
+ * Marca múltiples alertas como movidas al historial
+ */
+export async function markMultipleAlertsAsMovedToHistory(
+  alertIds: string[],
+  userEmail: string
+): Promise<{
+  success: boolean;
+  updatedCount?: number;
+  error?: string
+}> {
+  try {
+    if (!alertIds || alertIds.length === 0) {
+      return { success: false, error: 'No se proporcionaron IDs de alertas' };
+    }
+
+    const { data, error } = await supabase
+      .from('saved_alerts')
+      .update({
+        moved_to_history: true,
+        moved_at: new Date().toISOString(),
+        moved_by: userEmail
+      })
+      .in('id', alertIds)
+      .select();
+
+    if (error) {
+      console.error('Error marcando alertas como movidas:', error);
+      return { success: false, error: error.message };
+    }
+
+    const updatedCount = data?.length || 0;
+    console.log(`✅ ${updatedCount} alertas marcadas como movidas al historial`);
+    return { success: true, updatedCount };
+  } catch (error: any) {
+    console.error('Exception marcando alertas:', error);
+    return { success: false, error: error.message || 'Error desconocido' };
+  }
+}
+
+/**
  * Mark a saved alert as moved to history
  * This helps track which alerts are already being followed up in the history table
  */
