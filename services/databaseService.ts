@@ -538,6 +538,40 @@ export async function deleteAlert(alertId: string): Promise<{ success: boolean; 
   }
 }
 
+/**
+ * Elimina múltiples alertas del historial por sus IDs
+ */
+export async function deleteMultipleAlerts(alertIds: string[]): Promise<{
+  success: boolean;
+  deletedCount?: number;
+  error?: string
+}> {
+  try {
+    if (!alertIds || alertIds.length === 0) {
+      return { success: false, error: 'No se proporcionaron IDs de alertas' };
+    }
+
+    // Eliminar las alertas (los planes de acción se eliminan automáticamente con ON DELETE CASCADE)
+    const { data, error } = await supabase
+      .from('alert_history')
+      .delete()
+      .in('id', alertIds)
+      .select();
+
+    if (error) {
+      console.error('Error eliminando alertas del historial:', error);
+      return { success: false, error: error.message };
+    }
+
+    const deletedCount = data?.length || 0;
+    console.log(`✅ ${deletedCount} alertas eliminadas del historial`);
+    return { success: true, deletedCount };
+  } catch (error: any) {
+    console.error('Exception eliminando alertas del historial:', error);
+    return { success: false, error: error.message || 'Error desconocido' };
+  }
+}
+
 // ==================== ACTION PLANS FUNCTIONS ====================
 
 /**
