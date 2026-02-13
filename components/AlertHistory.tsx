@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { AlertTriangle, AlertCircle, Bell, BellRing, CheckCircle, Clock, MapPin, User, Gauge, FileText, Plus, Trash2, Edit, X, FileDown, Search, Calendar, History, ShieldAlert, Upload, Paperclip, Eye, Download as DownloadIcon } from 'lucide-react';
+import { AlertTriangle, AlertCircle, Bell, BellRing, CheckCircle, Clock, MapPin, User, Gauge, FileText, Plus, Trash2, Edit, X, FileDown, Search, Calendar, History, ShieldAlert, Upload, Paperclip, Eye, Download as DownloadIcon, CheckSquare, Square } from 'lucide-react';
 import {
   getAllSavedAlerts,
   getFilteredAlerts,
   updateAlertStatus,
   deleteAlert,
+  deleteMultipleAlerts,
   addActionPlan,
   updateActionPlan,
   deleteActionPlan,
@@ -32,6 +33,9 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
   const [loading, setLoading] = useState(true);
   const [selectedAlert, setSelectedAlert] = useState<SavedAlertWithPlans | null>(null);
   const [showActionModal, setShowActionModal] = useState(false);
+
+  // Selection state
+  const [selectedAlertIds, setSelectedAlertIds] = useState<Set<string>>(new Set());
 
   // Filters
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'pending' | 'in_progress' | 'resolved' | 'invalid'>('ALL');
@@ -359,6 +363,69 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
     }
   };
 
+  // ==================== SELECTION HANDLERS ====================
+
+  const toggleSelectAll = () => {
+    const currentPageAlertIds = pagination.paginatedData.map(alert => alert.id);
+
+    if (currentPageAlertIds.every(id => selectedAlertIds.has(id))) {
+      // Deseleccionar todos de la página actual
+      setSelectedAlertIds(prev => {
+        const newSet = new Set(prev);
+        currentPageAlertIds.forEach(id => newSet.delete(id));
+        return newSet;
+      });
+    } else {
+      // Seleccionar todos de la página actual
+      setSelectedAlertIds(prev => {
+        const newSet = new Set(prev);
+        currentPageAlertIds.forEach(id => newSet.add(id));
+        return newSet;
+      });
+    }
+  };
+
+  const toggleSelectAlert = (alertId: string) => {
+    setSelectedAlertIds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(alertId)) {
+        newSet.delete(alertId);
+      } else {
+        newSet.add(alertId);
+      }
+      return newSet;
+    });
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedAlertIds.size === 0) return;
+
+    const confirmText = window.prompt(
+      `⚠️ ADVERTENCIA: Esta acción eliminará ${selectedAlertIds.size} alerta${selectedAlertIds.size > 1 ? 's' : ''} del historial.\n\n` +
+      'Esto incluirá TODOS los planes de acción asociados.\n\n' +
+      'Esta acción NO se puede deshacer.\n\n' +
+      'Para confirmar, escribe: ELIMINAR'
+    );
+
+    if (confirmText !== 'ELIMINAR') {
+      if (confirmText !== null) {
+        window.alert('Operación cancelada. El texto no coincide.');
+      }
+      return;
+    }
+
+    const result = await deleteMultipleAlerts(Array.from(selectedAlertIds));
+
+    if (result.success) {
+      window.alert(`✅ ${result.deletedCount} alerta${result.deletedCount! > 1 ? 's' : ''} eliminada${result.deletedCount! > 1 ? 's' : ''} del historial`);
+      setSelectedAlertIds(new Set());
+      loadAlerts();
+      onRefresh?.();
+    } else {
+      window.alert('❌ Error: ' + result.error);
+    }
+  };
+
   const handleCleanupHistory = async () => {
     if (!confirm('⚠️ ¿Estás seguro de ejecutar la limpieza del historial?\n\nEsta acción ejecutará manualmente la política de retención:\n- Eliminará alertas resueltas con más de 7 días.\n- Eliminará alertas activas con más de 30 días.\n\nEsta acción NO se puede deshacer.')) {
       return;
@@ -608,6 +675,18 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
             Excel
           </button>
 
+          {/* Botón Eliminar Seleccionadas */}
+          {selectedAlertIds.size > 0 && (
+            <button
+              onClick={handleBulkDelete}
+              className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm font-medium"
+              title={`Eliminar ${selectedAlertIds.size} alertas seleccionadas`}
+            >
+              <Trash2 className="w-4 h-4" />
+              Eliminar ({selectedAlertIds.size})
+            </button>
+          )}
+
           {/* Botón Limpiar Historial (Solo Admin) */}
           {user?.role === 'admin' && (
             <button
@@ -624,6 +703,11 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
           {/* Contador */}
           <div className="ml-auto text-sm font-semibold text-slate-600">
             {filteredAndSearchedAlerts.length} alerta{filteredAndSearchedAlerts.length !== 1 ? 's' : ''}
+            {selectedAlertIds.size > 0 && (
+              <span className="ml-2 text-red-600">
+                ({selectedAlertIds.size} seleccionada{selectedAlertIds.size !== 1 ? 's' : ''})
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -644,6 +728,20 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
           <table className="w-full text-sm">
             <thead className="bg-gradient-to-r from-slate-700 to-slate-600 text-white">
               <tr>
+                <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">
+                  <button
+                    onClick={toggleSelectAll}
+                    className="p-1 rounded hover:bg-slate-800 transition-colors"
+                    title="Seleccionar/Deseleccionar todos"
+                  >
+                    {pagination.paginatedData.length > 0 &&
+                     pagination.paginatedData.every(a => selectedAlertIds.has(a.id)) ? (
+                      <CheckSquare className="w-5 h-5" />
+                    ) : (
+                      <Square className="w-5 h-5" />
+                    )}
+                  </button>
+                </th>
                 <th className="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider">Acciones</th>
                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Tipo</th>
                 <th className="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider">Placa/Contrato</th>
@@ -662,8 +760,25 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
                 <tr
                   key={alert.id}
                   onClick={() => handleOpenActionModal(alert)}
-                  className={`${index % 2 === 0 ? 'bg-white' : 'bg-slate-50'} hover:bg-blue-50 transition-colors cursor-pointer`}
+                  className={`${index % 2 === 0 ? 'bg-white' : 'bg-slate-50'} ${selectedAlertIds.has(alert.id) ? 'bg-blue-100' : ''} hover:bg-blue-50 transition-colors cursor-pointer`}
                 >
+                  {/* Checkbox */}
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleSelectAlert(alert.id);
+                      }}
+                      className="p-1 rounded hover:bg-slate-200 transition-colors"
+                    >
+                      {selectedAlertIds.has(alert.id) ? (
+                        <CheckSquare className="w-5 h-5 text-blue-600" />
+                      ) : (
+                        <Square className="w-5 h-5 text-slate-400" />
+                      )}
+                    </button>
+                  </td>
+
                   {/* Acciones */}
                   <td className="px-4 py-3 text-center whitespace-nowrap">
                     <div className="flex items-center justify-center gap-1">
