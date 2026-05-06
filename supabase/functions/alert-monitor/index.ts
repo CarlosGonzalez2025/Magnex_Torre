@@ -419,6 +419,35 @@ async function validateCriticalEvent(
   }
 }
 
+/**
+ * Limpieza automática de datos antiguos.
+ * Se ejecuta 1 de cada 12 invocaciones (~cada hora si el cron corre cada 5 min).
+ * Evita overflow de cuota sin necesitar pg_cron.
+ */
+async function runPeriodicCleanup(supabase: any): Promise<void> {
+  // Solo correr ~1 vez por hora (1 de cada 12 ejecuciones de 5 min)
+  if (Math.random() > 1/12) return;
+
+  try {
+    const sevenDaysAgo  = new Date(Date.now() - 7  * 24 * 60 * 60 * 1000).toISOString();
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    const [r1, r2, r3, r4] = await Promise.all([
+      supabase.from('saved_alerts').delete().lt('created_at', sevenDaysAgo),
+      supabase.from('vehicle_ignition_events').delete().lt('created_at', thirtyDaysAgo),
+      supabase.from('idle_time_records').delete().lt('created_at', thirtyDaysAgo),
+      supabase.from('preoperational_inspections').delete().lt('created_at', thirtyDaysAgo),
+    ]);
+
+    console.log('[Cleanup] ✅ Periodic cleanup done');
+    [r1, r2, r3, r4].forEach((r, i) => {
+      if (r.error) console.warn(`[Cleanup] Table ${i} error:`, r.error.message);
+    });
+  } catch (err) {
+    console.warn('[Cleanup] Error during periodic cleanup:', err);
+  }
+}
+
 async function saveAlert(supabase: any, alert: Alert): Promise<boolean> {
   try {
     // Insert alert (validaciones ya se hicieron en el loop principal)
@@ -554,6 +583,9 @@ serve(async (req) => {
         windows: DEDUPLICATION_WINDOWS
       }
     };
+
+    // Limpieza periódica en background (no bloquea la respuesta)
+    runPeriodicCleanup(supabase).catch(() => {});
 
     console.log('✅ Worker completed successfully');
     console.log(JSON.stringify(result, null, 2));

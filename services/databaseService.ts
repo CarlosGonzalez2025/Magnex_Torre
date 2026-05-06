@@ -1,6 +1,6 @@
 import { Alert } from '../types';
 import { DataCleanupService } from './dataCleanupService';
-import { supabase } from './supabaseClient';
+import { supabase, isSupabaseAvailable, markSupabaseUnavailable, isQuotaError } from './supabaseClient';
 
 // ==================== TYPES ====================
 
@@ -61,6 +61,7 @@ export interface SavedAlertWithPlans extends SavedAlert {
  * Las alertas se limpian automáticamente cada 7-30 días
  */
 export async function autoSaveAlert(alert: Alert): Promise<{ success: boolean; data?: SavedAlert; error?: string }> {
+  if (!isSupabaseAvailable()) return { success: false, error: 'Supabase no disponible' };
   try {
     // Verificar duplicados en saved_alerts
     const isDuplicate = await DataCleanupService.checkDuplicate('saved_alerts', {
@@ -109,13 +110,11 @@ export async function autoSaveAlert(alert: Alert): Promise<{ success: boolean; d
       .single();
 
     if (error) {
-      console.error('❌ Error auto-saving alert to saved_alerts:', error);
-      if (alert.severity === 'critical') {
-        console.error('🚨 [DIAGNÓSTICO] ERROR al guardar alerta CRÍTICA:', {
-          error: error.message,
-          alertData
-        });
+      if (isQuotaError(error.message)) {
+        markSupabaseUnavailable();
+        return { success: false, error: 'Supabase restringido' };
       }
+      console.error('❌ Error auto-saving alert to saved_alerts:', error);
       return { success: false, error: error.message };
     }
 

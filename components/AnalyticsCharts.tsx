@@ -1,63 +1,143 @@
 import React from 'react';
+import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
 
-// --- TREND CHART (Bar Chart) ---
+// --- TREND CHART (Bar Chart) - IMPROVED ---
 
 interface TrendData {
-    label: string; // e.g., "Lun", "Mar"
+    label: string; // e.g., "Lun 7/12", "Mar 8/12"
     total: number;
     critical: number;
+    idle?: number; // Idle time in hours
 }
 
 interface TrendChartProps {
     data: TrendData[];
     title?: string;
     height?: number;
+    showIdle?: boolean;
 }
 
-export const TrendChart: React.FC<TrendChartProps> = ({ data, title, height = 200 }) => {
-    const maxValue = Math.max(...data.map(d => d.total), 1); // Avoid division by zero
+// Helper to shorten date labels
+const shortenLabel = (label: string): string => {
+    // If label is like "Lun 7/12", shorten to "L7" or "7"
+    const parts = label.split(' ');
+    if (parts.length >= 2) {
+        const dayPart = parts[1].split('/')[0]; // Get day number
+        const weekDay = parts[0].charAt(0).toUpperCase(); // First letter of weekday
+        return `${weekDay}${dayPart}`;
+    }
+    // If already short (like "Sem 1"), return first char + number
+    if (label.length > 4) {
+        return label.slice(0, 3);
+    }
+    return label;
+};
+
+export const TrendChart: React.FC<TrendChartProps> = ({ data, title, height = 220, showIdle = false }) => {
+    const maxAlerts = Math.max(...data.map(d => d.total), 1);
+    const maxIdle = showIdle ? Math.max(...data.map(d => d.idle || 0), 1) : 1;
+
+    // Calculate totals for display
+    const totalAlerts = data.reduce((sum, d) => sum + d.total, 0);
+    const totalCritical = data.reduce((sum, d) => sum + d.critical, 0);
+    const totalIdle = data.reduce((sum, d) => sum + (d.idle || 0), 0);
 
     return (
         <div className="w-full">
-            {title && <h4 className="text-sm font-semibold text-slate-700 mb-4">{title}</h4>}
+            {title && <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-4">{title}</h4>}
 
-            <div className="w-full flex items-end justify-between gap-2" style={{ height: `${height}px` }}>
+            {/* Chart Container */}
+            <div className="w-full flex items-end justify-around gap-1 sm:gap-2 px-2" style={{ height: `${height}px` }}>
                 {data.map((item, index) => {
-                    const heightPercent = (item.total / maxValue) * 100;
+                    const alertHeightPercent = Math.max((item.total / maxAlerts) * 100, item.total > 0 ? 8 : 0);
                     const criticalPercent = item.total > 0 ? (item.critical / item.total) * 100 : 0;
+                    const idleHeightPercent = showIdle ? Math.max(((item.idle || 0) / maxIdle) * 100, (item.idle || 0) > 0 ? 8 : 0) : 0;
+                    const shortLabel = shortenLabel(item.label);
 
                     return (
-                        <div key={index} className="flex flex-col items-center flex-1 group relative">
+                        <div key={index} className="flex flex-col items-center flex-1 min-w-0 max-w-[50px] group relative">
                             {/* Tooltip */}
-                            <div className="absolute bottom-full mb-2 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-800 text-white text-xs py-1 px-2 rounded pointer-events-none whitespace-nowrap z-10">
-                                {item.label}: {item.total} alertas ({item.critical} críticas)
+                            <div className="absolute bottom-full mb-3 opacity-0 group-hover:opacity-100 transition-all duration-200 bg-slate-900 text-white text-xs py-2 px-3 rounded-xl pointer-events-none whitespace-nowrap z-20 shadow-xl transform group-hover:scale-100 scale-95">
+                                <div className="font-bold mb-1.5 text-sm border-b border-slate-700 pb-1">{item.label}</div>
+                                <div className="flex items-center gap-2 py-0.5">
+                                    <span className="w-2.5 h-2.5 bg-blue-400 rounded-full shadow-sm"></span>
+                                    <span>Alertas: <strong>{item.total}</strong></span>
+                                </div>
+                                <div className="flex items-center gap-2 py-0.5">
+                                    <span className="w-2.5 h-2.5 bg-red-500 rounded-full shadow-sm"></span>
+                                    <span>Críticas: <strong>{item.critical}</strong></span>
+                                </div>
+                                {showIdle && item.idle !== undefined && (
+                                    <div className="flex items-center gap-2 py-0.5">
+                                        <span className="w-2.5 h-2.5 bg-amber-500 rounded-full shadow-sm"></span>
+                                        <span>Ralentí: <strong>{(item.idle).toFixed(1)}h</strong></span>
+                                    </div>
+                                )}
+                                {/* Tooltip arrow */}
+                                <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-l-[6px] border-r-[6px] border-t-[6px] border-transparent border-t-slate-900"></div>
                             </div>
 
-                            {/* Bar Container */}
-                            <div className="w-full max-w-[30px] bg-slate-100 rounded-t-sm relative overflow-hidden transition-all duration-500 hover:brightness-95"
-                                style={{ height: `${heightPercent}%` }}>
-
-                                {/* Regular Alerts (Base) */}
-                                <div className="absolute inset-0 bg-blue-400 w-full h-full"></div>
-
-                                {/* Critical Alerts (Overlay) */}
+                            {/* Bars Container */}
+                            <div className="flex gap-1 w-full justify-center h-full items-end">
+                                {/* Alert Bar */}
                                 <div
-                                    className="absolute bottom-0 left-0 right-0 bg-red-500 w-full transition-all duration-500"
-                                    style={{ height: `${criticalPercent}%` }}
-                                ></div>
+                                    className="w-5 sm:w-6 bg-gradient-to-t from-blue-500 to-blue-400 rounded-t-md relative overflow-hidden transition-all duration-500 hover:brightness-110 shadow-sm cursor-pointer"
+                                    style={{ height: `${alertHeightPercent}%`, minHeight: item.total > 0 ? '8px' : '0' }}
+                                >
+                                    {/* Critical overlay with gradient */}
+                                    <div
+                                        className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-red-600 to-red-500 w-full transition-all duration-500"
+                                        style={{ height: `${criticalPercent}%` }}
+                                    ></div>
+                                    {/* Shine effect */}
+                                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                                </div>
+
+                                {/* Idle Bar */}
+                                {showIdle && (
+                                    <div
+                                        className="w-5 sm:w-6 bg-gradient-to-t from-amber-500 to-amber-400 rounded-t-md relative overflow-hidden transition-all duration-500 hover:brightness-110 shadow-sm cursor-pointer"
+                                        style={{ height: `${idleHeightPercent}%`, minHeight: (item.idle || 0) > 0 ? '8px' : '0' }}
+                                    >
+                                        {/* Shine effect */}
+                                        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                                    </div>
+                                )}
                             </div>
 
-                            {/* Label */}
-                            <span className="text-xs text-slate-500 mt-2 font-medium truncate w-full text-center">
-                                {item.label}
+                            {/* Shortened Label */}
+                            <span className="text-[10px] sm:text-xs text-slate-500 dark:text-slate-400 mt-2 font-semibold w-full text-center">
+                                {shortLabel}
                             </span>
                         </div>
                     );
                 })}
             </div>
+
+            {/* Enhanced Legend with cards */}
+            <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-4 mt-5 px-2">
+                <div className="flex items-center gap-2 bg-blue-50 dark:bg-blue-900/20 px-3 py-1.5 rounded-full">
+                    <div className="w-3 h-3 bg-gradient-to-br from-blue-400 to-blue-500 rounded-sm shadow-sm"></div>
+                    <span className="text-xs font-medium text-blue-700 dark:text-blue-300">Alertas</span>
+                    <span className="text-xs font-bold text-blue-800 dark:text-blue-200">{totalAlerts}</span>
+                </div>
+                <div className="flex items-center gap-2 bg-red-50 dark:bg-red-900/20 px-3 py-1.5 rounded-full">
+                    <div className="w-3 h-3 bg-gradient-to-br from-red-500 to-red-600 rounded-sm shadow-sm"></div>
+                    <span className="text-xs font-medium text-red-700 dark:text-red-300">Críticas</span>
+                    <span className="text-xs font-bold text-red-800 dark:text-red-200">{totalCritical}</span>
+                </div>
+                {showIdle && (
+                    <div className="flex items-center gap-2 bg-amber-50 dark:bg-amber-900/20 px-3 py-1.5 rounded-full">
+                        <div className="w-3 h-3 bg-gradient-to-br from-amber-400 to-amber-500 rounded-sm shadow-sm"></div>
+                        <span className="text-xs font-medium text-amber-700 dark:text-amber-300">Ralentí</span>
+                        <span className="text-xs font-bold text-amber-800 dark:text-amber-200">{totalIdle.toFixed(1)}h</span>
+                    </div>
+                )}
+            </div>
         </div>
     );
 };
+
 
 
 // --- DONUT CHART ---
@@ -253,3 +333,85 @@ export const EfficiencyBar: React.FC<EfficiencyProps> = ({ moving, idle, stopped
         </div>
     );
 }
+
+// --- TREND INSIGHTS CARDS ---
+
+interface TrendInsight {
+    label: string;
+    value: string | number;
+    change?: number; // percentage change vs previous period
+    changeLabel?: string;
+    icon?: 'up' | 'down' | 'neutral';
+    color?: 'green' | 'red' | 'amber' | 'blue' | 'slate';
+}
+
+interface TrendInsightsProps {
+    insights: TrendInsight[];
+}
+
+export const TrendInsights: React.FC<TrendInsightsProps> = ({ insights }) => {
+    const getColorClasses = (color?: string, isPositive?: boolean) => {
+        if (color === 'green') return 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800';
+        if (color === 'red') return 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800';
+        if (color === 'amber') return 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800';
+        if (color === 'blue') return 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800';
+        return 'bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700';
+    };
+
+    const getIconColor = (icon?: string) => {
+        if (icon === 'up') return 'text-red-500';
+        if (icon === 'down') return 'text-green-500';
+        return 'text-slate-400';
+    };
+
+    const renderChangeIcon = (icon?: string) => {
+        if (icon === 'up') {
+            return (
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                </svg>
+            );
+        }
+        if (icon === 'down') {
+            return (
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                </svg>
+            );
+        }
+        return (
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14" />
+            </svg>
+        );
+    };
+
+    return (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {insights.map((insight, index) => (
+                <div
+                    key={index}
+                    className={`p-4 rounded-xl border-2 transition-all hover:shadow-md ${getColorClasses(insight.color)}`}
+                >
+                    <p className="text-xs font-bold text-slate-600 dark:text-slate-400 uppercase tracking-wide mb-2">
+                        {insight.label}
+                    </p>
+                    <p className="text-2xl font-bold text-slate-900 dark:text-white">
+                        {insight.value}
+                    </p>
+                    {insight.change !== undefined && (
+                        <div className={`flex items-center gap-1 mt-2 text-sm font-medium ${getIconColor(insight.icon)}`}>
+                            {renderChangeIcon(insight.icon)}
+                            <span>{insight.change > 0 ? '+' : ''}{insight.change.toFixed(1)}%</span>
+                            {insight.changeLabel && (
+                                <span className="text-xs text-slate-500 dark:text-slate-400 ml-1">
+                                    {insight.changeLabel}
+                                </span>
+                            )}
+                        </div>
+                    )}
+                </div>
+            ))}
+        </div>
+    );
+};

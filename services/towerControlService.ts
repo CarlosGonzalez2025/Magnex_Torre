@@ -1,4 +1,4 @@
-import { supabase } from './supabaseClient';
+import { supabase, isSupabaseAvailable, markSupabaseUnavailable, isQuotaError } from './supabaseClient';
 
 // =====================================================
 // TYPES
@@ -500,6 +500,7 @@ export async function crossInspectionsWithIgnition(date: string): Promise<{ succ
  * Save ignition event
  */
 export async function saveIgnitionEvent(event: VehicleIgnitionEvent): Promise<{ success: boolean; data?: VehicleIgnitionEvent; error?: string }> {
+  if (!isSupabaseAvailable()) return { success: false, error: 'Supabase no disponible' };
   try {
     const { data, error } = await supabase
       .from('vehicle_ignition_events')
@@ -508,6 +509,7 @@ export async function saveIgnitionEvent(event: VehicleIgnitionEvent): Promise<{ 
       .single();
 
     if (error) {
+      if (isQuotaError(error.message)) { markSupabaseUnavailable(); return { success: false, error: 'Supabase restringido' }; }
       console.error('[TowerControl] Error saving ignition event:', error);
       return { success: false, error: error.message };
     }
@@ -552,6 +554,7 @@ export async function getIgnitionEvents(plate: string, date: string): Promise<{ 
  * Save idle time record
  */
 export async function saveIdleTimeRecord(record: IdleTimeRecord): Promise<{ success: boolean; data?: IdleTimeRecord; error?: string }> {
+  if (!isSupabaseAvailable()) return { success: false, error: 'Supabase no disponible' };
   try {
     const { data, error } = await supabase
       .from('idle_time_records')
@@ -560,6 +563,7 @@ export async function saveIdleTimeRecord(record: IdleTimeRecord): Promise<{ succ
       .single();
 
     if (error) {
+      if (isQuotaError(error.message)) { markSupabaseUnavailable(); return { success: false, error: 'Supabase restringido' }; }
       console.error('[TowerControl] Error saving idle time record:', error);
       return { success: false, error: error.message };
     }

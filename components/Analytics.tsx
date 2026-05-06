@@ -15,16 +15,16 @@ import {
 } from 'lucide-react';
 import { Vehicle, Alert } from '../types';
 import {
-  getAllSavedAlerts,
+  getAllAutoSavedAlerts,
   getAlertStatistics,
-  SavedAlertWithPlans
+  SavedAlert
 } from '../services/databaseService';
 import {
   getIdleTimeByContract,
   type IdleTimeRecord
 } from '../services/towerControlService';
 import { getCurrentIdleStats } from '../services/alertService';
-import { TrendChart, DonutChart, ScoreGauge, EfficiencyBar } from './AnalyticsCharts';
+import { TrendChart, DonutChart, ScoreGauge, EfficiencyBar, TrendInsights } from './AnalyticsCharts';
 
 interface AnalyticsProps {
   vehicles: Vehicle[];
@@ -45,7 +45,7 @@ type DateRange = '7d' | '30d' | '90d' | 'custom';
 type ChartView = 'daily' | 'weekly' | 'monthly';
 
 export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtimeAlerts = [] }) => {
-  const [savedAlerts, setSavedAlerts] = useState<SavedAlertWithPlans[]>([]);
+  const [savedAlerts, setSavedAlerts] = useState<SavedAlert[]>([]);
   const [alertStats, setAlertStats] = useState<any>(null);
   const [idleRecords, setIdleRecords] = useState<IdleTimeRecord[]>([]);
   const [currentIdleVehicles, setCurrentIdleVehicles] = useState<
@@ -148,8 +148,8 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
     const token = typeof signalToken === 'number' ? signalToken : Date.now();
 
     try {
-      // 1) saved alerts
-      const alertsResult = await getAllSavedAlerts();
+      // 1) saved alerts from saved_alerts table (auto-saved)
+      const alertsResult = await getAllAutoSavedAlerts();
       if (alertsResult?.success && alertsResult?.data) {
         // If a newer request started, ignore
         if (token !== latestRequestRef.current) return;
@@ -506,6 +506,82 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
     return { totalVehicles, totalIdleHours, moving, idle: idleCount, stopped };
   }, [vehicles, idleRecords, currentIdleVehicles]);
 
+  // Trend insights calculation (comparing first half vs second half of data)
+  // IMPORTANT: This useMemo must be BEFORE any conditional returns to comply with React hooks rules
+  const trendInsightsData = useMemo(() => {
+    if (trendData.length < 2) return [];
+
+    const midPoint = Math.floor(trendData.length / 2);
+    const firstHalf = trendData.slice(0, midPoint);
+    const secondHalf = trendData.slice(midPoint);
+
+    // Totals for each period
+    const firstTotalAlerts = firstHalf.reduce((s, d) => s + d.total, 0);
+    const secondTotalAlerts = secondHalf.reduce((s, d) => s + d.total, 0);
+    const firstCritical = firstHalf.reduce((s, d) => s + d.critical, 0);
+    const secondCritical = secondHalf.reduce((s, d) => s + d.critical, 0);
+    const firstIdle = firstHalf.reduce((s, d) => s + (d.idle || 0), 0);
+    const secondIdle = secondHalf.reduce((s, d) => s + (d.idle || 0), 0);
+
+    // Calculate percentage changes
+    const alertChange = firstTotalAlerts > 0
+      ? ((secondTotalAlerts - firstTotalAlerts) / firstTotalAlerts) * 100
+      : secondTotalAlerts > 0 ? 100 : 0;
+
+    const criticalChange = firstCritical > 0
+      ? ((secondCritical - firstCritical) / firstCritical) * 100
+      : secondCritical > 0 ? 100 : 0;
+
+    const idleChange = firstIdle > 0
+      ? ((secondIdle - firstIdle) / firstIdle) * 100
+      : secondIdle > 0 ? 100 : 0;
+
+    // Find worst day (highest alerts)
+    const worstDay = trendData.reduce((max, d) => d.total > (max?.total || 0) ? d : max, trendData[0]);
+
+    // Find day with most idle
+    const worstIdleDay = trendData.reduce((max, d) => (d.idle || 0) > (max?.idle || 0) ? d : max, trendData[0]);
+
+    return [
+      {
+        label: 'Alertas Totales',
+        value: secondTotalAlerts,
+        change: alertChange,
+        changeLabel: 'vs período ant.',
+        icon: alertChange > 0 ? 'up' : alertChange < 0 ? 'down' : 'neutral',
+        color: alertChange > 5 ? 'red' : alertChange < -5 ? 'green' : 'slate'
+      },
+      {
+        label: 'Alertas Críticas',
+        value: secondCritical,
+        change: criticalChange,
+        changeLabel: 'vs período ant.',
+        icon: criticalChange > 0 ? 'up' : criticalChange < 0 ? 'down' : 'neutral',
+        color: criticalChange > 5 ? 'red' : criticalChange < -5 ? 'green' : 'amber'
+      },
+      {
+        label: 'Ralentí (horas)',
+        value: `${Math.round(secondIdle * 10) / 10}h`,
+        change: idleChange,
+        changeLabel: 'vs período ant.',
+        icon: idleChange > 0 ? 'up' : idleChange < 0 ? 'down' : 'neutral',
+        color: idleChange > 5 ? 'red' : idleChange < -5 ? 'green' : 'amber'
+      },
+      {
+        label: 'Día Crítico',
+        value: worstDay?.label || 'N/A',
+        color: 'blue'
+      }
+    ] as Array<{
+      label: string;
+      value: string | number;
+      change?: number;
+      changeLabel?: string;
+      icon?: 'up' | 'down' | 'neutral';
+      color?: 'green' | 'red' | 'amber' | 'blue' | 'slate';
+    }>;
+  }, [trendData]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -837,8 +913,8 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
               {chartView === 'daily' ? 'Por día' : chartView === 'weekly' ? 'Por semana' : 'Por mes'}
             </span>
           </div>
-          <TrendChart data={trendData} height={220} />
-          <div className="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700 grid grid-cols-2 gap-4">
+          <TrendChart data={trendData} height={220} showIdle={true} />
+          <div className="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700 grid grid-cols-3 gap-4">
             <div className="text-center">
               <p className="text-xs text-slate-600 dark:text-slate-400 font-medium mb-1">Pico de Alertas</p>
               <p className="text-xl font-bold text-red-600 dark:text-red-400">{trendPeak}</p>
@@ -846,6 +922,10 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
             <div className="text-center">
               <p className="text-xs text-slate-600 dark:text-slate-400 font-medium mb-1">Promedio</p>
               <p className="text-xl font-bold text-blue-600 dark:text-blue-400">{trendAvg}</p>
+            </div>
+            <div className="text-center">
+              <p className="text-xs text-slate-600 dark:text-slate-400 font-medium mb-1">Total Ralentí</p>
+              <p className="text-xl font-bold text-orange-600 dark:text-orange-400">{Math.round(trendData.reduce((sum, p) => sum + (p.idle || 0), 0) * 10) / 10}h</p>
             </div>
           </div>
         </div>
@@ -873,22 +953,20 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
             {vehicleStats.slice(0, 8).map((v) => (
               <div
                 key={v.plate}
-                className={`flex items-center justify-between p-3 rounded-xl border transition-all hover:shadow-md ${
-                  v.score < 60
-                    ? 'bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-900/30'
-                    : v.score < 80
-                      ? 'bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-900/30'
-                      : 'bg-green-50 dark:bg-green-900/10 border-green-200 dark:border-green-900/30'
-                }`}
+                className={`flex items-center justify-between p-3 rounded-xl border transition-all hover:shadow-md ${v.score < 60
+                  ? 'bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-900/30'
+                  : v.score < 80
+                    ? 'bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-900/30'
+                    : 'bg-green-50 dark:bg-green-900/10 border-green-200 dark:border-green-900/30'
+                  }`}
               >
                 <div className="flex items-center gap-3">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shadow-lg ${
-                    v.score < 60
-                      ? 'bg-gradient-to-br from-red-500 to-red-600 shadow-red-500/50'
-                      : v.score < 80
-                        ? 'bg-gradient-to-br from-amber-500 to-amber-600 shadow-amber-500/50'
-                        : 'bg-gradient-to-br from-green-500 to-green-600 shadow-green-500/50'
-                  }`}>
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm shadow-lg ${v.score < 60
+                    ? 'bg-gradient-to-br from-red-500 to-red-600 shadow-red-500/50'
+                    : v.score < 80
+                      ? 'bg-gradient-to-br from-amber-500 to-amber-600 shadow-amber-500/50'
+                      : 'bg-gradient-to-br from-green-500 to-green-600 shadow-green-500/50'
+                    }`}>
                     {v.score}
                   </div>
                   <div>
@@ -906,6 +984,24 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
           </div>
         </div>
       </div>
+
+      {/* Trend Insights */}
+      {trendInsightsData.length > 0 && (
+        <div className="bg-gradient-to-br from-white to-indigo-50 dark:from-slate-800 dark:to-indigo-900/10 rounded-xl border-2 border-indigo-200 dark:border-indigo-900 p-6 shadow-lg hover:shadow-xl transition-shadow">
+          <div className="flex items-center justify-between mb-5">
+            <h3 className="text-lg font-bold text-slate-800 dark:text-white flex items-center gap-2">
+              <div className="p-2 bg-indigo-100 dark:bg-indigo-900/30 rounded-lg">
+                <TrendingUp className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+              </div>
+              Insights de Tendencia
+            </h3>
+            <span className="text-xs font-medium text-indigo-700 dark:text-indigo-400 bg-indigo-100 dark:bg-indigo-900/30 px-3 py-1 rounded-full">
+              Comparación de períodos
+            </span>
+          </div>
+          <TrendInsights insights={trendInsightsData} />
+        </div>
+      )}
 
       {/* Current idle vehicles */}
       {currentIdleVehicles.length > 0 && (

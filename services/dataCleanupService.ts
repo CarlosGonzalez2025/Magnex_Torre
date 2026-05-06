@@ -1,4 +1,4 @@
-import { supabase } from './supabaseClient';
+import { supabase, isSupabaseAvailable, markSupabaseUnavailable, isQuotaError } from './supabaseClient';
 import { DATA_RETENTION_CONFIG, getRetentionCutoffDate } from '../config/dataRetentionConfig';
 import * as XLSX from 'xlsx';
 
@@ -277,6 +277,7 @@ export class DataCleanupService {
     table: 'saved_alerts' | 'alert_history' | 'inspections',
     uniqueFields: Record<string, any>
   ): Promise<boolean> {
+    if (!isSupabaseAvailable()) return false;
     try {
       let query = supabase.from(table).select('id', { count: 'exact', head: true });
 
@@ -286,11 +287,19 @@ export class DataCleanupService {
 
       const { count, error } = await query;
 
-      if (error) throw error;
+      if (error) {
+        if (isQuotaError(error.message)) {
+          markSupabaseUnavailable();
+          return false;
+        }
+        throw error;
+      }
 
       return (count || 0) > 0;
-    } catch (error) {
-      console.error('Error al verificar duplicados:', error);
+    } catch (error: any) {
+      if (!isQuotaError(error?.message || '')) {
+        console.error('Error al verificar duplicados:', error);
+      }
       return false;
     }
   }

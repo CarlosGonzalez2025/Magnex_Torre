@@ -39,13 +39,43 @@ interface AuthProviderProps {
   children: ReactNode;
 }
 
+const DEMO_USER_KEY = 'tdc_demo_user';
+
+function buildDemoUser(email: string): User {
+  return {
+    id: `demo-${email}`,
+    email,
+    name: email.split('@')[0],
+    role: email.toLowerCase().includes('admin') ? 'admin' : 'operator',
+    createdAt: new Date().toISOString(),
+    lastLogin: new Date().toISOString(),
+  };
+}
+
+function isSupabaseRestricted(message: string): boolean {
+  const lower = message.toLowerCase();
+  return lower.includes('restricted') || lower.includes('exceed') || lower.includes('quota') || lower.includes('payment');
+}
+
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   // Initialize Supabase Auth
   useEffect(() => {
-    // 1. Check active session
+    // 1. Check persisted demo session first
+    const stored = localStorage.getItem(DEMO_USER_KEY);
+    if (stored) {
+      try {
+        setUser(JSON.parse(stored));
+        setIsLoading(false);
+        return;
+      } catch {
+        localStorage.removeItem(DEMO_USER_KEY);
+      }
+    }
+
+    // 2. Check active Supabase session
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
         mapSupabaseUser(session.user);
@@ -54,15 +84,17 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       }
     });
 
-    // 2. Listen for auth changes
+    // 3. Listen for auth changes
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user) {
         mapSupabaseUser(session.user);
       } else {
-        setUser(null);
-        setIsLoading(false);
+        if (!localStorage.getItem(DEMO_USER_KEY)) {
+          setUser(null);
+          setIsLoading(false);
+        }
       }
     });
 
@@ -92,6 +124,13 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       });
 
       if (error) {
+        // Si Supabase está restringido por cuota, activar modo demo automáticamente
+        if (isSupabaseRestricted(error.message || '')) {
+          const demoUser = buildDemoUser(email);
+          localStorage.setItem(DEMO_USER_KEY, JSON.stringify(demoUser));
+          setUser(demoUser);
+          return { success: true };
+        }
         console.error('Supabase Login Error:', error);
         return { success: false, error: 'Credenciales inválidas o error de conexión.' };
       }
@@ -108,6 +147,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const logout = async (): Promise<void> => {
     try {
       setIsLoading(true);
+      localStorage.removeItem(DEMO_USER_KEY);
       await supabase.auth.signOut();
       setUser(null);
     } catch (error) {

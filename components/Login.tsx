@@ -231,8 +231,8 @@ export const Login: React.FC = () => {
                     {/* Demo Hint */}
                     <div className="mt-6 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
                         <p className="text-xs text-amber-200/80 text-center">
-                            <strong>Modo Demo:</strong> Usa cualquier email y contraseña (mín. 6 caracteres) para acceder.
-                            Incluye "admin" en el email para rol de administrador.
+                            <strong>Modo Demo:</strong> Si el servicio no está disponible, el sistema activa modo demo automáticamente.
+                            Usa un email con "admin" para rol de administrador.
                         </p>
                     </div>
                 </div>
