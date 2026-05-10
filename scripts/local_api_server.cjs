@@ -9,6 +9,20 @@
 
 const http = require('http');
 const https = require('https');
+const fs = require('fs');
+const path = require('path');
+
+// Cargar .env.local (mismo directorio raíz del proyecto)
+try {
+  const envPath = path.join(__dirname, '..', '.env.local');
+  const envText = fs.readFileSync(envPath, 'utf8');
+  for (const line of envText.split('\n')) {
+    const match = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)$/);
+    if (match && !process.env[match[1]]) {
+      process.env[match[1]] = match[2].trim().replace(/^["']|["']$/g, '');
+    }
+  }
+} catch { /* .env.local no existe o no es legible */ }
 
 const PORT = 3001;
 
@@ -21,7 +35,11 @@ const FAGOR_API_URL = 'http://www.flotasnet.com/servicios/EstadoVehiculo.asmx';
 const FAGOR_USER = 'WebMasa2024';
 const FAGOR_PASS = 'Weblog24*';
 const FAGOR_EMPRESA = 'masa stork';
-const GOOGLE_SHEETS_URL = 'https://script.google.com/macros/s/AKfycbyO1ywoSOGQZuK6HfrumCGOLcCQvQuCK8tofIjEGJEihTssGkQHBljFx3M4JmfL5XY7/exec';
+// URLs CSV de Google Sheets (export?format=csv&gid=...)
+// Configura estas variables en tu entorno o directamente aquí.
+// Formato: https://docs.google.com/spreadsheets/d/SHEET_ID/export?format=csv&gid=GID
+const VEHICULOS_CSV_URL   = process.env.VEHICULOS_SHEETS_CSV_URL   || '';
+const CONDUCTORES_CSV_URL = process.env.CONDUCTORES_SHEETS_CSV_URL || '';
 
 // Helper to make HTTPS requests (follows redirects up to 5 hops)
 function httpsRequest(url, options, postData = null, redirectCount = 0) {
@@ -62,6 +80,39 @@ function httpsRequest(url, options, postData = null, redirectCount = 0) {
         if (postData) req.write(postData);
         req.end();
     });
+}
+
+// Parsea texto CSV en array de objetos (usa la primera fila como cabeceras)
+function parseCSV(text) {
+    const lines = text.replace(/\r/g, '').split('\n').filter(l => l.trim());
+    if (lines.length < 2) return [];
+
+    function parseLine(line) {
+        const fields = [];
+        let current = '', inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+            const ch = line[i];
+            if (ch === '"') {
+                if (inQuotes && line[i + 1] === '"') { current += '"'; i++; }
+                else inQuotes = !inQuotes;
+            } else if (ch === ',' && !inQuotes) {
+                fields.push(current.trim());
+                current = '';
+            } else {
+                current += ch;
+            }
+        }
+        fields.push(current.trim());
+        return fields;
+    }
+
+    const headers = parseLine(lines[0]);
+    return lines.slice(1).map(line => {
+        const values = parseLine(line);
+        const obj = {};
+        headers.forEach((h, i) => { obj[h] = values[i] ?? ''; });
+        return obj;
+    }).filter(row => Object.values(row).some(v => v !== ''));
 }
 
 // Fetch Coltrack data
@@ -200,44 +251,165 @@ async function fetchFagor() {
     }
 }
 
-// Fetch Google Sheets contract data
+// Mapeo de columnas CSV de vehículos → claves estándar
+const VEHICULOS_FIELD_MAP = {
+    PLACA: 'placa', ESTADO_ACTUAL_ACTIVO: 'estado', ESTADO: 'estado',
+    CONTRATO: 'contrato', NOMBRE_CONTRATO_PROYECTO: 'contrato',
+    CLIENTE: 'cliente', MARCA: 'marca', LINEA: 'linea',
+    TIPO_DE_ACTIVO: 'tipo', TIPO: 'tipo',
+    CLASE_ACTIVO: 'clase', CLASE: 'clase',
+    CARROCERIA: 'carroceria', TIPO_COMBUSTIBLE: 'tipo_combustible', MODELO: 'modelo',
+    NOMBRE_CENTRO_DE_COSTO: 'centro_costo_nombre', NUMERO_CENTRO_DE_COSTO: 'centro_costo_numero',
+    LUGAR: 'lugar', ZONA: 'zona', COORDINADOR: 'coordinador', COMPANIA_GPS: 'gps_compañia',
+    KM_ACTUAL: 'km_actual', KM_SEMANA_ACTUAL: 'km_semana_actual',
+};
+
+function normalizeKeyVeh(k) {
+    return k.trim().toUpperCase()
+        .replace(/[ÁÀÂÄ]/g,'A').replace(/[ÉÈÊË]/g,'E')
+        .replace(/[ÍÌÎÏ]/g,'I').replace(/[ÓÒÔÖ]/g,'O')
+        .replace(/[ÚÙÛÜ]/g,'U').replace(/[Ñ]/g,'N')
+        .replace(/[^A-Z0-9]+/g,'_').replace(/^_+|_+$/g,'');
+}
+
+// Fetch Google Sheets Vehículos data (CSV export URL)
 async function fetchGoogleSheets() {
+    if (!VEHICULOS_CSV_URL) {
+        return { success: false, error: 'VEHICULOS_SHEETS_CSV_URL no configurada', vehicleMap: {}, count: 0, data: [] };
+    }
     try {
-        const url = new URL(GOOGLE_SHEETS_URL);
-        const response = await httpsRequest(GOOGLE_SHEETS_URL, {
-            method: 'GET',
-            headers: { 'Accept': 'application/json' }
+        const response = await httpsRequest(VEHICULOS_CSV_URL, {
+            method: 'GET', headers: { 'Accept': 'text/csv,*/*' }
         });
+        if (!response.ok) throw new Error(`Google Sheets CSV returned ${response.status}`);
 
-        if (!response.ok) {
-            throw new Error(`Google Sheets API returned ${response.status}`);
-        }
+        const text = await response.text();
+        const rawRows = parseCSV(text);
 
-        const data = await response.json();
-
-        if (!data.success || !data.data || !Array.isArray(data.data)) {
-            throw new Error('Invalid response format from Google Sheets');
-        }
+        const rows = rawRows.map(raw => {
+            const normalized = {};
+            for (const [k, v] of Object.entries(raw)) {
+                const target = VEHICULOS_FIELD_MAP[normalizeKeyVeh(k)];
+                if (target && !normalized[target]) normalized[target] = v;
+            }
+            return normalized;
+        }).filter(r => r.placa);
 
         const vehicleMap = {};
-        data.data.forEach((record) => {
-            const plate = record.Placa || record.PLACA;
-            if (plate) {
-                vehicleMap[plate] = {
-                    placa: plate,
-                    contrato: record.Contrato || record.CONTRATO || 'No asignado',
-                    cliente: record.Cliente || record.CLIENTE || '',
-                    ...record
-                };
-            }
+        rows.forEach(r => {
+            const plate = String(r.placa || '').trim().toUpperCase();
+            if (plate) vehicleMap[plate] = { ...r, placa: plate };
         });
 
-        console.log(`[Google Sheets] Loaded ${data.data.length} vehicle contracts`);
-        return { success: true, vehicleMap, count: data.data.length, data: data.data };
+        console.log(`[Google Sheets] Loaded ${rows.length} vehiculos from CSV`);
+        return { success: true, vehicleMap, count: rows.length, data: rows };
 
     } catch (error) {
         console.error('[Google Sheets] Error:', error.message);
-        return { success: false, vehicleMap: {}, count: 0, data: [] };
+        return { success: false, vehicleMap: {}, count: 0, data: [], error: error.message };
+    }
+}
+
+// Fetch Google Sheets Conductores data (CSV export URL)
+async function fetchConductoresSheets() {
+    if (!CONDUCTORES_CSV_URL) {
+        return { success: false, error: 'CONDUCTORES_SHEETS_CSV_URL no configurada', data: [], count: 0 };
+    }
+
+    const FIELD_MAP = {
+        NOMBRES: 'nombres',
+        NO_CEDULA_CIUDADANIA: 'cedula', CEDULA: 'cedula',
+        CARGO: 'cargo', BASE: 'base',
+        ESTADO_DEL_CONDUCTOR: 'estado', ESTADO: 'estado',
+        NOMBRE_CONTRATO_PROYECTO: 'proyecto', PROYECTO: 'proyecto',
+        LLAVE_IBUTTON: 'ibutton', LLAVE_IBUTTON_FAGOR: 'ibutton', IBUTTON: 'ibutton',
+        TIPO_LICENCIA_CONDUCCION: 'tipo_licencia', TIPO_LICENCIA: 'tipo_licencia',
+        FECHA_PRIMERA_EXPEDICION_LICENCIA_PARTICULAR: 'fecha_exp_particular',
+        FECHA_EXP_PARTICULAR: 'fecha_exp_particular',
+        FECHA_VENC_LIC_PARTICULAR: 'fecha_venc_particular',
+        FECHA_VENC_PARTICULAR: 'fecha_venc_particular',
+        FECHA_PRIMERA_EXPEDICION_LICENCIA_PUBLICA: 'fecha_exp_publica',
+        FECHA_EXP_PUBLICA: 'fecha_exp_publica',
+        FECHA_VENC_LIC_PUBLICA: 'fecha_venc_publica',
+        FECHA_VENC_PUBLICA: 'fecha_venc_publica',
+        FECHA_PRIMERA_EXPEDICION_LICENCIA_MOTOCICLETA: 'fecha_exp_moto',
+        FECHA_EXP_MOTO: 'fecha_exp_moto',
+        FECHA_VENC_LIC_MOTOCICLETA: 'fecha_venc_moto',
+        FECHA_VENC_MOTO: 'fecha_venc_moto',
+        FECHA_CAPACITACION_MANEJO_DEFENSIVO: 'fecha_cap_manejo_def',
+        FECHA_CAP_MANEJO_DEF: 'fecha_cap_manejo_def',
+        FECHA_CAPACITACION_LEGISLACION: 'fecha_cap_peligrosas',
+        FECHA_CAP_PELIGROSAS: 'fecha_cap_peligrosas',
+        FECHA_APLICACION_PRUEBA_PRACTICA: 'fecha_cap_alturas',
+        FECHA_CAP_ALTURAS: 'fecha_cap_alturas',
+        FECHA_APLICACION_PRUEBA_CONOCIMIENTOS: 'fecha_cap_otro',
+        FECHA_CAP_OTRO: 'fecha_cap_otro',
+        RESULTADO_PRUEBA_PRACTICA: 'resultado_prueba_ingreso',
+        RESULTADO_PRUEBA_INGRESO: 'resultado_prueba_ingreso',
+        RESULTADO_PRUEBA_CONOCIMIENTOS: 'resultado_prueba_periodica',
+        RESULTADO_PRUEBA_PERIODICA: 'resultado_prueba_periodica',
+        TIPO_COMPETENCIAS_LABORALES_O_CERTIFICACION_TRANSPORTE_MERCANCIAS_PELIGROSAS: 'tipo_competencias',
+        TIPO_COMPETENCIAS: 'tipo_competencias',
+        FECHA_VIGENCIA_COMPETENCIAS_LABORALES_O_CERTIFICACION: 'vigencia_competencias',
+        VIGENCIA_COMPETENCIAS: 'vigencia_competencias',
+        FECHA_REVISION_ANTE_EL_SIMIT: 'fecha_revision_simit',
+        FECHA_REVISION_SIMIT: 'fecha_revision_simit',
+        TIPO_DE_COMPARENDO: 'tipo_comparendo', TIPO_COMPARENDO: 'tipo_comparendo',
+        VALOR_DE_COMPARENDO: 'valor_comparendo', VALOR_COMPARENDO: 'valor_comparendo',
+    };
+
+    function normalizeKey(k) {
+        return k.trim().toUpperCase()
+            .replace(/[ÁÀÂÄ]/g, 'A').replace(/[ÉÈÊË]/g, 'E')
+            .replace(/[ÍÌÎÏ]/g, 'I').replace(/[ÓÒÔÖ]/g, 'O')
+            .replace(/[ÚÙÛÜ]/g, 'U').replace(/[Ñ]/g, 'N')
+            .replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    }
+
+    function isoDate(val) {
+        if (!val || val === '') return null;
+        const s = String(val).trim();
+        const ddmm = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+        if (ddmm) return `${ddmm[3]}-${ddmm[2].padStart(2,'0')}-${ddmm[1].padStart(2,'0')}`;
+        const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (iso) return s.slice(0, 10);
+        return null;
+    }
+
+    try {
+        const response = await httpsRequest(CONDUCTORES_CSV_URL, {
+            method: 'GET',
+            headers: { 'Accept': 'text/csv,*/*' }
+        });
+        if (!response.ok) throw new Error(`Conductores CSV returned ${response.status}`);
+
+        const text = await response.text();
+        const rows = parseCSV(text);
+
+        const conductores = rows.map((row) => {
+            const mapped = {};
+            for (const [k, v] of Object.entries(row)) {
+                const norm = normalizeKey(String(k));
+                const target = FIELD_MAP[norm];
+                if (!target) continue;
+                if (target.startsWith('fecha_') || target === 'vigencia_competencias') {
+                    mapped[target] = isoDate(v);
+                } else if (target === 'valor_comparendo') {
+                    mapped[target] = v !== '' && v != null ? Number(v) : 0;
+                } else {
+                    if (!mapped[target]) mapped[target] = String(v ?? '').trim();
+                }
+            }
+            if (!mapped.estado) mapped.estado = 'ACTIVO';
+            return mapped;
+        }).filter(c => c.cedula);
+
+        console.log(`[Conductores Sheets] Loaded ${conductores.length} conductores from CSV`);
+        return { success: true, source: 'google-sheets-conductores', data: conductores, count: conductores.length };
+
+    } catch (error) {
+        console.error('[Conductores Sheets] Error:', error.message);
+        return { success: false, error: error.message, data: [], count: 0 };
     }
 }
 
@@ -271,6 +443,10 @@ const server = http.createServer(async (req, res) => {
             const result = await fetchGoogleSheets();
             res.writeHead(result.success ? 200 : 500);
             res.end(JSON.stringify(result));
+        } else if (req.url === '/api/sheets-conductores') {
+            const result = await fetchConductoresSheets();
+            res.writeHead(result.success ? 200 : 500);
+            res.end(JSON.stringify(result));
         } else if (req.url === '/api/health') {
             res.writeHead(200);
             res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }));
@@ -288,8 +464,10 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
     console.log(`\n🚀 Local API Server running on http://localhost:${PORT}`);
     console.log(`\nAvailable endpoints:`);
-    console.log(`  POST /api/coltrack  - Fetch Coltrack vehicles`);
-    console.log(`  POST /api/fagor     - Fetch Fagor vehicles`);
-    console.log(`  GET  /api/health    - Health check`);
+    console.log(`  POST /api/coltrack           - Fetch Coltrack vehicles`);
+    console.log(`  POST /api/fagor              - Fetch Fagor vehicles`);
+    console.log(`  GET  /api/google-sheets      - Fetch vehiculos from Google Sheets`);
+    console.log(`  GET  /api/sheets-conductores - Fetch conductores from Google Sheets`);
+    console.log(`  GET  /api/health             - Health check`);
     console.log(`\nNow run 'npm run dev' in another terminal.\n`);
 });

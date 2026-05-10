@@ -54,6 +54,35 @@ const DEDUPLICATION_WINDOWS = {
   'Colisión': 1440,                // 24 horas
 };
 
+function parseGpsTimestamp(...values: unknown[]): string {
+  for (const value of values) {
+    if (value === null || value === undefined) continue;
+    const raw = String(value).trim();
+    if (!raw) continue;
+
+    const isoDate = new Date(raw);
+    if (!Number.isNaN(isoDate.getTime())) return isoDate.toISOString();
+
+    const normalized = raw.replace(/\./g, '/').replace(/\s+/g, ' ');
+    const dmy = normalized.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+    if (dmy) {
+      const [, d, m, y, hh = '0', mm = '0', ss = '0'] = dmy;
+      const year = y.length === 2 ? `20${y}` : y;
+      const parsed = new Date(Number(year), Number(m) - 1, Number(d), Number(hh), Number(mm), Number(ss));
+      if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+    }
+
+    const ymd = normalized.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+    if (ymd) {
+      const [, y, m, d, hh = '0', mm = '0', ss = '0'] = ymd;
+      const parsed = new Date(Number(y), Number(m) - 1, Number(d), Number(hh), Number(mm), Number(ss));
+      if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+    }
+  }
+
+  return new Date().toISOString();
+}
+
 // ==================== TYPES ====================
 
 interface Vehicle {
@@ -122,7 +151,17 @@ async function fetchColtrackData(): Promise<Vehicle[]> {
           latitude: parseFloat(record.LATITUD || record.Latitud || record.latitud || '0'),
           longitude: parseFloat(record.LONGITUD || record.Longitud || record.longitud || '0'),
           status: record.ESTADO || record.Estado || 'UNKNOWN',
-          lastUpdate: record.FECHA_GPS || record.lastUpdate || new Date().toISOString(),
+          lastUpdate: parseGpsTimestamp(
+            record.FECHA_GPS,
+            record.FechaGps,
+            record.FECHA,
+            record.Fecha,
+            record.HORA_REPORTE,
+            record['Hora Reporte'],
+            record.ULTIMA_POSICION,
+            record.UltimaPosicion,
+            record.lastUpdate,
+          ),
           source: 'COLTRACK',
           contract: record.CONTRATO || record.Contrato || record.CLIENTE || record.Cliente || 'No asignado',
           event: record.EVENTO || record.Evento || ''
@@ -174,7 +213,13 @@ async function fetchFagorData(): Promise<Vehicle[]> {
           latitude: parseFloat(record.Latitud || '0'),
           longitude: parseFloat(record.Longitud || '0'),
           status: speed > 0 ? 'MOVING' : 'STOPPED',
-          lastUpdate: new Date().toISOString(),
+          lastUpdate: parseGpsTimestamp(
+            record.UltimaPosicion,
+            record.Ultima_Posicion,
+            record.Fecha,
+            record.FECHA,
+            record.lastUpdate,
+          ),
           source: 'FAGOR',
           contract: record.CONTRATO || record.Contrato || 'No asignado',
           event: estadoText
@@ -432,15 +477,16 @@ async function runPeriodicCleanup(supabase: any): Promise<void> {
     const sevenDaysAgo  = new Date(Date.now() - 7  * 24 * 60 * 60 * 1000).toISOString();
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-    const [r1, r2, r3, r4] = await Promise.all([
-      supabase.from('saved_alerts').delete().lt('created_at', sevenDaysAgo),
+    const [r1, r2, r3, r4, r5] = await Promise.all([
+      supabase.from('saved_alerts').delete().eq('status', 'resolved').lt('created_at', sevenDaysAgo),
+      supabase.from('saved_alerts').delete().in('status', ['pending', 'in_progress']).lt('created_at', thirtyDaysAgo),
       supabase.from('vehicle_ignition_events').delete().lt('created_at', thirtyDaysAgo),
       supabase.from('idle_time_records').delete().lt('created_at', thirtyDaysAgo),
       supabase.from('preoperational_inspections').delete().lt('created_at', thirtyDaysAgo),
     ]);
 
     console.log('[Cleanup] ✅ Periodic cleanup done');
-    [r1, r2, r3, r4].forEach((r, i) => {
+    [r1, r2, r3, r4, r5].forEach((r, i) => {
       if (r.error) console.warn(`[Cleanup] Table ${i} error:`, r.error.message);
     });
   } catch (err) {
@@ -472,6 +518,10 @@ async function saveAlert(supabase: any, alert: Alert): Promise<boolean> {
       });
 
     if (error) {
+      if (error.code === '23505' || String(error.message || '').toLowerCase().includes('duplicate key')) {
+        console.log(`[DB] Duplicate ignored by unique index: ${alert.plate} - ${alert.type}`);
+        return true;
+      }
       console.error('[DB] Error saving alert:', error);
       return false;
     }

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
     Home,
     LayoutDashboard,
@@ -24,11 +24,13 @@ import {
     Truck,
     TrendingUp,
     Route,
-    Upload
+    Upload,
+    CalendarDays,
+    FileBarChart2,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
-export type TabType = 'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'history-analytics' | 'route-investigation' | 'batch-upload' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'users' | 'maintenance' | 'fleet' | 'alert-config';
+export type TabType = 'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'history-analytics' | 'route-investigation' | 'batch-upload' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'users' | 'maintenance' | 'fleet' | 'alert-config' | 'daily-reports' | 'monthly-reports';
 
 interface SidebarProps {
     activeTab: TabType;
@@ -48,7 +50,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
     const { user, logout } = useAuth();
 
     // Estado para controlar qué grupos están expandidos
-    const [expandedGroups, setExpandedGroups] = useState<string[]>(['monitoring', 'alerts', 'management', 'admin']);
+    const [expandedGroups, setExpandedGroups] = useState<string[]>(() => {
+        try {
+            const stored = localStorage.getItem('sidebar_expanded_groups');
+            return stored ? JSON.parse(stored) : [];
+        } catch {
+            return [];
+        }
+    });
 
     // Definición de grupos de menú
     const menuGroups = [
@@ -88,6 +97,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 { id: 'maintenance', label: 'Mantenimiento', icon: Settings },
             ]
         },
+        {
+            id: 'reports',
+            label: 'Informes',
+            icon: FileBarChart2,
+            items: [
+                { id: 'daily-reports', label: 'Informes Diarios', icon: CalendarDays },
+                { id: 'monthly-reports', label: 'Informes Mensuales', icon: BarChart3 },
+            ]
+        },
     ];
 
     // Grupo de administración (solo para admins)
@@ -103,6 +121,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
     } : null;
 
     const allGroups = adminGroup ? [...menuGroups, adminGroup] : menuGroups;
+
+    const activeGroupId = useMemo(() => {
+        return allGroups.find(group => group.items.some(item => item.id === activeTab))?.id;
+    }, [activeTab, allGroups]);
+
+    useEffect(() => {
+        try {
+            localStorage.setItem('sidebar_expanded_groups', JSON.stringify(expandedGroups));
+        } catch {
+            // No bloquear la navegacion si localStorage no esta disponible.
+        }
+    }, [expandedGroups]);
 
     const handleTabClick = (id: string) => {
         setActiveTab(id as TabType);
@@ -160,17 +190,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         {allGroups.map((group) => {
                             const GroupIcon = group.icon;
                             const isExpanded = expandedGroups.includes(group.id);
+                            const isActiveGroup = activeGroupId === group.id;
+                            const groupBadge = group.id === 'alerts' ? criticalAlertsCount : 0;
 
                             return (
                                 <div key={group.id} className="space-y-1">
                                     {/* Group Header */}
                                     <button
                                         onClick={() => toggleGroup(group.id)}
-                                        className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors"
+                                        className={`w-full flex items-center justify-between px-3 py-2 rounded-lg transition-colors ${
+                                            isActiveGroup
+                                                ? 'bg-slate-100 dark:bg-slate-700/60 text-slate-900 dark:text-white'
+                                                : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700/50'
+                                        }`}
                                     >
-                                        <div className="flex items-center gap-2">
-                                            <GroupIcon className="w-4 h-4 text-slate-500 dark:text-slate-400" />
+                                        <div className="flex items-center gap-2 min-w-0">
+                                            <GroupIcon className={`w-4 h-4 ${isActiveGroup ? 'text-blue-600 dark:text-blue-400' : 'text-slate-500 dark:text-slate-400'}`} />
                                             <span className="text-xs font-semibold uppercase tracking-wider">{group.label}</span>
+                                            {groupBadge > 0 && (
+                                                <span className="bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
+                                                    {groupBadge}
+                                                </span>
+                                            )}
                                         </div>
                                         {isExpanded ? (
                                             <ChevronDown className="w-4 h-4 text-slate-400" />

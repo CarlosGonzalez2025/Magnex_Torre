@@ -110,6 +110,9 @@ export async function autoSaveAlert(alert: Alert): Promise<{ success: boolean; d
       .single();
 
     if (error) {
+      if ((error as any).code === '23505' || error.message.toLowerCase().includes('duplicate key')) {
+        return { success: true };
+      }
       if (isQuotaError(error.message)) {
         markSupabaseUnavailable();
         return { success: false, error: 'Supabase restringido' };
@@ -403,6 +406,12 @@ export async function saveAlertToDatabase(alert: Alert, savedBy: string = 'Usuar
       .single();
 
     if (error) {
+      if ((error as any).code === '23505' || error.message.toLowerCase().includes('duplicate key')) {
+        return {
+          success: false,
+          error: 'Esta alerta ya esta en el historial de seguimiento'
+        };
+      }
       console.error('Error saving alert to alert_history:', error);
       return { success: false, error: error.message };
     }

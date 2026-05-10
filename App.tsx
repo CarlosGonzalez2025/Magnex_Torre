@@ -27,6 +27,8 @@ import { Login } from './components/Login';
 import { Sidebar, TabType } from './components/Sidebar';
 import { FleetManagement } from './components/FleetManagement';
 import { AlertSeverityConfig } from './components/AlertSeverityConfig';
+import { DailyReports } from './components/reports/DailyReports';
+import { MonthlyReports } from './components/reports/MonthlyReports';
 import { fetchFleetData, FleetResponse } from './services/fleetService';
 import { detectAlerts, saveAlertsToStorage, getAlertsFromStorage, getUnsavedAlerts, markAlertAsSent, markAlertAsSaved, cleanOldAlerts, processVehiclesForIdleDetection } from './services/alertService';
 import { saveAlertToDatabase, autoSaveAlert } from './services/databaseService';
@@ -68,7 +70,7 @@ export default function App() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'users' | 'maintenance'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'users' | 'maintenance' | 'daily-reports' | 'monthly-reports'>('dashboard');
   const [dataSource, setDataSource] = useState<'REAL' | 'DIRECT_API' | 'PARTIAL_DIRECT' | 'ERROR' | 'MOCK'>('REAL');
   const [apiStatus, setApiStatus] = useState<FleetResponse['apiStatus']>();
   const [vehicleCounts, setVehicleCounts] = useState<FleetResponse['vehicleCounts']>();
@@ -100,6 +102,17 @@ export default function App() {
 
     // Always set data, even if it is fallback data
     setVehicles(result.data);
+    const isOperationalData = result.source !== 'MOCK' && result.source !== 'ERROR';
+
+    // Process and persist alerts only when the feed is real/partial real.
+    // Simulation data must never create operational alerts or records.
+    if (!isOperationalData) {
+      setAlerts([]);
+      saveAlertsToStorage([]);
+      setLastUpdate(new Date());
+      setLoading(false);
+      return;
+    }
 
     // Process vehicles for idle detection (tracks ignition and idle time)
     await processVehiclesForIdleDetection(result.data);
@@ -341,7 +354,7 @@ export default function App() {
       {/* Sidebar Navigation */}
       <Sidebar
         activeTab={activeTab as TabType}
-        setActiveTab={setActiveTab}
+        setActiveTab={setActiveTab as (tab: TabType) => void}
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
         criticalAlertsCount={criticalAlertsCount}
@@ -389,7 +402,9 @@ export default function App() {
                                         activeTab === 'geofences' ? 'Editor de Geocercas' :
                                           activeTab === 'users' ? 'Gestión de Usuarios' :
                                             activeTab === 'maintenance' ? 'Mantenimiento' :
-                                              activeTab === 'alert-config' ? 'Configuración de Alertas' : 'Magnex'}
+                                              activeTab === 'alert-config' ? 'Configuración de Alertas' :
+                                              activeTab === 'daily-reports' ? 'Informes Diarios' :
+                                              activeTab === 'monthly-reports' ? 'Informes Mensuales' : 'Magnex'}
                 </h2>
                 <div className="ml-4 opacity-80 scale-90 origin-left">
                   {getStatusBadge()}
@@ -598,6 +613,8 @@ export default function App() {
               {activeTab === 'maintenance' && <MaintenancePanel />}
               {activeTab === 'fleet' && <FleetManagement vehicles={vehicles} />}
               {activeTab === 'alert-config' && <AlertSeverityConfig />}
+              {activeTab === 'daily-reports' && <DailyReports />}
+              {activeTab === 'monthly-reports' && <MonthlyReports />}
             </div>
           </div>
         </main>

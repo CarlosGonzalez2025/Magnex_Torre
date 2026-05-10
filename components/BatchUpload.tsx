@@ -20,9 +20,16 @@ import {
   exportAnalysisToCSV
 } from '../services/auditService';
 import { saveAlertToDatabase } from '../services/databaseService';
-import { fetchFleetData } from '../services/fleetService';
+import { supabase } from '../services/supabaseClient';
 import { Alert } from '../types';
 import { useExportToExcel } from '../hooks/useExportToExcel';
+
+const normalizeText = (value: unknown) =>
+  String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toUpperCase();
 
 export const BatchUpload: React.FC = () => {
   // ==================== STATE ====================
@@ -125,25 +132,26 @@ export const BatchUpload: React.FC = () => {
 
   const loadVehicleContracts = async () => {
     try {
-      console.log('⏳ Cargando contratos desde Google Sheets...');
-      const result = await fetchFleetData();
+      console.log('Cargando contratos desde la base maestra de vehiculos...');
       const contractsMap = new Map<string, string>();
 
-      console.log('📊 Resultado de fetchFleetData:', {
-        source: result.source,
-        totalVehicles: result.data?.length || 0,
-        vehicleCounts: result.vehicleCounts
-      });
+      const { data, error } = await supabase
+        .from('vehiculos')
+        .select('placa, estado, cliente, contratos(nombre)');
 
-      result.data.forEach(vehicle => {
-        if (vehicle.contract) {
-          const normalizedPlate = vehicle.plate.toUpperCase().replace(/\s+/g, '');
-          contractsMap.set(normalizedPlate, vehicle.contract);
-        }
+      if (error) throw error;
+
+      (data ?? []).forEach((vehicle: any) => {
+        if (normalizeText(vehicle.estado) !== 'ACTIVO') return;
+        const normalizedPlate = String(vehicle.placa ?? '').toUpperCase().replace(/\s+/g, '');
+        if (!normalizedPlate) return;
+        const contrato = Array.isArray(vehicle.contratos) ? vehicle.contratos[0] : vehicle.contratos;
+        const contractName = String(contrato?.nombre ?? vehicle.cliente ?? '').trim();
+        if (contractName) contractsMap.set(normalizedPlate, contractName);
       });
 
       setVehicleContracts(contractsMap);
-      console.log(`✅ Contratos cargados: ${contractsMap.size} vehículos`);
+      console.log(`Contratos cargados desde Supabase: ${contractsMap.size} vehiculos activos`);
       console.log('📋 Muestra de contratos:', Array.from(contractsMap.entries()).slice(0, 5));
 
       await new Promise(resolve => setTimeout(resolve, 100));

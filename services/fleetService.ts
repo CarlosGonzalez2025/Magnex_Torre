@@ -64,6 +64,35 @@ const determineContract = (record: any, source: ApiSource): string => {
   return 'No asignado';
 };
 
+const parseGpsTimestamp = (...values: unknown[]): string => {
+  for (const value of values) {
+    if (value === null || value === undefined) continue;
+    const raw = String(value).trim();
+    if (!raw) continue;
+
+    const isoDate = new Date(raw);
+    if (!Number.isNaN(isoDate.getTime())) return isoDate.toISOString();
+
+    const normalized = raw.replace(/\./g, '/').replace(/\s+/g, ' ');
+    const dmy = normalized.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+    if (dmy) {
+      const [, d, m, y, hh = '0', mm = '0', ss = '0'] = dmy;
+      const year = y.length === 2 ? `20${y}` : y;
+      const parsed = new Date(Number(year), Number(m) - 1, Number(d), Number(hh), Number(mm), Number(ss));
+      if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+    }
+
+    const ymd = normalized.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+    if (ymd) {
+      const [, y, m, d, hh = '0', mm = '0', ss = '0'] = ymd;
+      const parsed = new Date(Number(y), Number(m) - 1, Number(d), Number(hh), Number(mm), Number(ss));
+      if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+    }
+  }
+
+  return new Date().toISOString();
+};
+
 /**
  * Fetch contract data from Google Sheets (Apps Script)
  * Returns a Map of plate → contract info
@@ -160,6 +189,18 @@ const fetchColtrackViaAPI = async (): Promise<Vehicle[]> => {
       const driver = record.CONDUCTOR || record.Conductor || 'Sin Asignar';
       const contract = determineContract(record, ApiSource.COLTRACK);
 
+      const lastUpdate = parseGpsTimestamp(
+        record.FECHA_GPS,
+        record.FechaGps,
+        record.FECHA,
+        record.Fecha,
+        record.HORA_REPORTE,
+        record['Hora Reporte'],
+        record.ULTIMA_POSICION,
+        record.UltimaPosicion,
+        record.lastUpdate,
+      );
+
       return {
         id: `COL-${plate}-${index}`,
         plate: plate,
@@ -170,7 +211,7 @@ const fetchColtrackViaAPI = async (): Promise<Vehicle[]> => {
         status: status,
         driver: driver,
         fuelLevel: parseInt(record.COMBUSTIBLE || record.Combustible || '0', 10),
-        lastUpdate: new Date().toISOString(),
+        lastUpdate,
         location: record.CIUDAD || record.Ciudad || record.Ubicacion || 'Desconocido',
         odometer: parseFloat(record.ODOMETRO || record.Odometro || '0'),
         contract: contract,
@@ -215,6 +256,14 @@ const fetchFagorViaAPI = async (): Promise<Vehicle[]> => {
 
       const status = determineStatus(speed, false, estadoText);
 
+      const lastUpdate = parseGpsTimestamp(
+        record.UltimaPosicion,
+        record.Ultima_Posicion,
+        record.Fecha,
+        record.FECHA,
+        record.lastUpdate,
+      );
+
       return {
         id: `FAG-${plate || index}`,
         plate: plate || 'UNKNOWN',
@@ -225,7 +274,7 @@ const fetchFagorViaAPI = async (): Promise<Vehicle[]> => {
         status: status,
         driver: record.Conductor || 'Sin Asignar',
         fuelLevel: 0,
-        lastUpdate: new Date().toISOString(),
+        lastUpdate,
         location: record.Localidad || 'Desconocido',
         odometer: parseFloat(record.Kilometros || '0'),
         contract: contract,

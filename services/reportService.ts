@@ -1,0 +1,765 @@
+import { supabase } from './supabaseClient';
+
+const PAGE_SIZE = 1000;
+
+async function fetchAllRows<T = Record<string, unknown>>(query: any): Promise<T[]> {
+  const allRows: T[] = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await query.range(from, from + PAGE_SIZE - 1);
+    if (error) throw new Error(error.message);
+    const rows = (data ?? []) as T[];
+    allRows.push(...rows);
+    if (rows.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+
+  return allRows;
+}
+
+// ── Tipos de dominio ─────────────────────────────────────────────────────────
+
+export interface FiltroReporte {
+  conductorId?: string;
+  vehiculoId?: string;
+  fechaInicio: string;   // YYYY-MM-DD
+  fechaFin: string;      // YYYY-MM-DD
+  proyecto?: string;
+  contratoId?: string;
+}
+
+export interface ContratoOption {
+  id: string;
+  nombre: string;
+  cliente?: string;
+  proyecto?: string;
+}
+
+export interface ConductorOption {
+  id: string;
+  nombres: string;
+  cedula: string;
+  proyecto: string;
+  contrato_id?: string | null;
+}
+
+export interface VehiculoOption {
+  id: string;
+  placa: string;
+  cliente: string;
+  contrato_id: string | null;
+  gps_compañia?: string | null;
+  tipo_activo?: string | null;
+}
+
+export interface MetricasExceso {
+  excesos_10_kph: number;
+  excesos_20_kph: number;
+  excesos_30_kph: number;
+  excesos_40_kph: number;
+  excesos_50_kph: number;
+  excesos_60_kph: number;
+  excesos_80_kph: number;
+}
+
+export interface ReporteConductorData {
+  conductor: {
+    id: string;
+    nombres: string;
+    cedula: string;
+    cargo: string;
+    base: string;
+    proyecto: string;
+    estado: string;
+    ibutton: string;
+    tipo_comparendo: string;
+    valor_comparendo: number;
+    foto_url?: string;
+    licencias: {
+      tipo: string;
+      fecha_exp_particular?: string;
+      fecha_venc_particular?: string;
+      fecha_exp_publica?: string;
+      fecha_venc_publica?: string;
+      fecha_exp_moto?: string;
+      fecha_venc_moto?: string;
+    };
+    capacitaciones: {
+      manejo_def?: string;
+      peligrosas?: string;
+      alturas?: string;
+      otro?: string;
+    };
+  };
+  metricas: MetricasExceso & {
+    calificacion: number;
+    kms: number;
+    horas_conduccion: number;
+    aceleraciones: number;
+    frenadas: number;
+    dias_evaluados: number;
+    vehiculos_con_gps: number;
+    vehiculos_sin_gps: number;
+    placa_relacionada?: string;
+  };
+  ralenti?: {
+    kms_recorridos: number;
+    ralentis_excesivos: number;
+    horas_motor_encendido: number;
+    horas_motor_ralenti: number;
+    consumo_combustible: number;
+  };
+  periodoInicio: string;
+  periodoFin: string;
+  fechaReporte: string;
+  semaforo: 'verde' | 'amarillo' | 'rojo';
+}
+
+export interface ReporteVehiculoData {
+  vehiculo: {
+    id: string;
+    placa: string;
+    marca: string;
+    linea: string;
+    modelo: string;
+    tipo_activo: string;
+    tipo_combustible: string;
+    estado: string;
+    gps_compañia: string;
+    cliente: string;
+    fecha_venc_soat?: string;
+    fecha_venc_rtm?: string;
+    km_actual: number;
+  };
+  contrato?: {
+    nombre: string;
+    cliente: string;
+    tipo: string;
+    fecha_inicio: string;
+    fecha_fin: string;
+    kilometraje_pactado: number;
+  };
+  metricas: MetricasExceso & {
+    calificacion: number;
+    kms: number;
+    horas_conduccion: number;
+    aceleraciones: number;
+    frenadas: number;
+    dias_evaluados: number;
+    dispositivo_gps?: string;
+    estado_gps?: string;
+    base?: string;
+  };
+  ralenti: {
+    kms_recorridos: number;
+    encendidos_apagados: number;
+    ralentis_excesivos: number;
+    horas_motor_encendido: number;
+    horas_motor_ralenti: number;
+    consumo_combustible: number;
+  };
+  periodoInicio: string;
+  periodoFin: string;
+  fechaReporte: string;
+  semaforo: 'verde' | 'amarillo' | 'rojo';
+}
+
+// ── Semáforo de calificación ─────────────────────────────────────────────────
+
+export interface AlertaDiariaGps {
+  id: string;
+  placa: string;
+  conductor: string;
+  conductor_identificado: boolean;
+  lugar: string;
+  latitud: number;
+  longitud: number;
+  fecha: string;
+  fecha_dia: string;
+  velocidad: number;
+  estado: string;
+  infraccion_80_kmh: number;
+  excesos_varios_parametros: number;
+  excesos_50_80_kmh: number;
+  frenadas_bruscas: number;
+  contrato_nombre: string;
+  gps: string;
+  tipo_activo: string;
+  cliente: string;
+  vehiculo_id?: string | null;
+  conductor_id?: string | null;
+  contrato_id?: string | null;
+}
+
+export interface ReporteAlertasDiariasData {
+  alertas: AlertaDiariaGps[];
+  periodoInicio: string;
+  periodoFin: string;
+  fechaReporte: string;
+  contrato?: ContratoOption;
+  resumen: {
+    totalAlertas: number;
+    vehiculosConAlertas: number;
+    personasAutorizadas: number;
+    personasIdentificadas: number;
+    personasSinIdentificar: number;
+    motocicletasConAlertas: number;
+    vehiculosConGps: number;
+    motocicletasConGps: number;
+    infracciones80: number;
+    excesosVarios: number;
+    excesos50a80: number;
+    frenadas: number;
+  };
+}
+
+function semaforo(calificacion: number): 'verde' | 'amarillo' | 'rojo' {
+  if (calificacion >= 85) return 'verde';
+  if (calificacion >= 70) return 'amarillo';
+  return 'rojo';
+}
+
+// ── Suma de campo numérico con reduce ────────────────────────────────────────
+
+function sumar<T extends Record<string, unknown>>(arr: T[], campo: keyof T): number {
+  return arr.reduce((acc, r) => acc + Number(r[campo] ?? 0), 0);
+}
+
+function promedio<T extends Record<string, unknown>>(arr: T[], campo: keyof T): number {
+  if (arr.length === 0) return 0;
+  return sumar(arr, campo) / arr.length;
+}
+
+// ── Consultas a Supabase ─────────────────────────────────────────────────────
+
+function normalizeText(value: unknown): string {
+  return String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toUpperCase();
+}
+
+function tieneGpsConfigurado(value: unknown): boolean {
+  const normalizado = normalizeText(value);
+  return Boolean(normalizado) && !['NO', 'N/A', 'NA', 'SIN GPS', 'NINGUNO', 'NO APLICA', '0'].includes(normalizado);
+}
+
+function esMoto(tipo: unknown): boolean {
+  return normalizeText(tipo).includes('MOTO');
+}
+
+export async function getConductores(): Promise<ConductorOption[]> {
+  const { data, error } = await supabase
+    .from('conductores')
+    .select('id, nombres, cedula, proyecto, contrato_id, estado')
+    .order('nombres');
+  if (error) throw new Error(error.message);
+  return (data ?? [])
+    .filter((c: Record<string, unknown>) => normalizeText(c.estado) === 'ACTIVO')
+    .map(({ estado: _estado, ...c }: Record<string, unknown>) => c) as unknown as ConductorOption[];
+}
+
+export async function getVehiculos(): Promise<VehiculoOption[]> {
+  const { data, error } = await supabase
+    .from('vehiculos')
+    .select('id, placa, cliente, contrato_id, gps_compañia, tipo_activo')
+    .eq('estado', 'ACTIVO')
+    .order('placa');
+  if (error) throw new Error(error.message);
+  return (data ?? []) as unknown as VehiculoOption[];
+}
+
+export async function getContratos(): Promise<ContratoOption[]> {
+  const { data, error } = await supabase
+    .from('contratos')
+    .select('id, nombre, cliente, proyecto')
+    .order('nombre');
+  if (error) throw new Error(error.message);
+  return (data ?? []) as ContratoOption[];
+}
+
+export async function getProyectos(): Promise<string[]> {
+  const { data } = await supabase.from('conductores').select('proyecto').neq('proyecto', '');
+  const set = new Set((data ?? []).map((d: { proyecto: string }) => d.proyecto).filter(Boolean));
+  return Array.from(set).sort() as string[];
+}
+
+// ── Reporte de conductor ─────────────────────────────────────────────────────
+
+export async function getReporteConductor(filtro: FiltroReporte): Promise<ReporteConductorData | null> {
+  if (!filtro.conductorId) return null;
+
+  const { data: cond, error: eCond } = await supabase
+    .from('conductores')
+    .select('*')
+    .eq('id', filtro.conductorId)
+    .single();
+  if (eCond || !cond) return null;
+  if (String(cond.estado ?? '').toUpperCase() !== 'ACTIVO') return null;
+
+  const { data: metricsRaw } = await supabase
+    .from('coltrack_datos_conductor')
+    .select('*')
+    .eq('conductor_id', filtro.conductorId)
+    .gte('fecha', filtro.fechaInicio)
+    .lte('fecha', filtro.fechaFin);
+
+  let metrics = (metricsRaw ?? []) as Record<string, unknown>[];
+  if (metrics.length === 0) {
+    const { data: reportesRaw } = await supabase
+      .from('reportes_conductores')
+      .select('*')
+      .eq('conductor_id', filtro.conductorId)
+      .lte('periodo_inicio', filtro.fechaFin)
+      .gte('periodo_fin', filtro.fechaInicio);
+    metrics = ((reportesRaw ?? []) as Record<string, unknown>[]).map(r => ({
+      ...r,
+      aceleraciones: r.aceleraciones ?? r.aceleraciones_bruscas,
+      frenadas: r.frenadas ?? r.frenadas_bruscas,
+      fecha: r.periodo_inicio,
+    }));
+  }
+  const calificacion = metrics.length > 0 ? promedio(metrics, 'calificacion') : 0;
+  const kms = sumar(metrics, 'kms');
+  const horas_conduccion = sumar(metrics, 'horas_conduccion');
+
+  const metricas = {
+    calificacion: Math.round(calificacion * 100) / 100,
+    kms: Math.round(kms * 100) / 100,
+    horas_conduccion: Math.round(horas_conduccion * 100) / 100,
+    excesos_10_kph: sumar(metrics, 'excesos_10_kph'),
+    excesos_20_kph: sumar(metrics, 'excesos_20_kph'),
+    excesos_30_kph: sumar(metrics, 'excesos_30_kph'),
+    excesos_40_kph: sumar(metrics, 'excesos_40_kph'),
+    excesos_50_kph: sumar(metrics, 'excesos_50_kph'),
+    excesos_60_kph: sumar(metrics, 'excesos_60_kph'),
+    excesos_80_kph: sumar(metrics, 'excesos_80_kph'),
+    aceleraciones: sumar(metrics, 'aceleraciones'),
+    frenadas: sumar(metrics, 'frenadas'),
+    dias_evaluados: metrics.length,
+    vehiculos_con_gps: 0,
+    vehiculos_sin_gps: 0,
+    placa_relacionada: metrics.length > 0 ? String(metrics[metrics.length - 1].ibutton ?? '') : '',
+  };
+
+  return {
+    conductor: {
+      id: cond.id as string,
+      nombres: cond.nombres as string,
+      cedula: cond.cedula as string,
+      cargo: cond.cargo as string ?? '',
+      base: cond.base as string ?? '',
+      proyecto: cond.proyecto as string ?? '',
+      estado: cond.estado as string ?? 'ACTIVO',
+      ibutton: cond.ibutton as string ?? '',
+      tipo_comparendo: cond.tipo_comparendo as string ?? '',
+      valor_comparendo: Number(cond.valor_comparendo ?? 0),
+      foto_url: cond.foto_url as string ?? '',
+      licencias: {
+        tipo: cond.tipo_licencia as string ?? '',
+        fecha_exp_particular: cond.fecha_exp_particular as string,
+        fecha_venc_particular: cond.fecha_venc_particular as string,
+        fecha_exp_publica: cond.fecha_exp_publica as string,
+        fecha_venc_publica: cond.fecha_venc_publica as string,
+        fecha_exp_moto: cond.fecha_exp_moto as string,
+        fecha_venc_moto: cond.fecha_venc_moto as string,
+      },
+      capacitaciones: {
+        manejo_def: cond.fecha_cap_manejo_def as string,
+        peligrosas: cond.fecha_cap_peligrosas as string,
+        alturas: cond.fecha_cap_alturas as string,
+        otro: cond.fecha_cap_otro as string,
+      },
+    },
+    metricas,
+    periodoInicio: filtro.fechaInicio,
+    periodoFin: filtro.fechaFin,
+    fechaReporte: new Date().toISOString().slice(0, 10),
+    semaforo: semaforo(metricas.calificacion),
+  };
+}
+
+// ── Reporte de vehículo ───────────────────────────────────────────────────────
+
+export async function getReporteVehiculo(filtro: FiltroReporte): Promise<ReporteVehiculoData | null> {
+  if (!filtro.vehiculoId) return null;
+
+  const { data: veh, error: eVeh } = await supabase
+    .from('vehiculos')
+    .select('*, contratos(*)')
+    .eq('id', filtro.vehiculoId)
+    .single();
+  if (eVeh || !veh) return null;
+  if (String(veh.estado ?? '').toUpperCase() !== 'ACTIVO') return null;
+
+  const { data: metricsRaw } = await supabase
+    .from('coltrack_datos_vehiculo')
+    .select('*')
+    .eq('vehiculo_id', filtro.vehiculoId)
+    .gte('fecha', filtro.fechaInicio)
+    .lte('fecha', filtro.fechaFin);
+
+  const { data: ralentiRaw } = await supabase
+    .from('ralentis')
+    .select('*')
+    .eq('vehiculo_id', filtro.vehiculoId)
+    .gte('fecha', filtro.fechaInicio)
+    .lte('fecha', filtro.fechaFin);
+
+  const metrics = (metricsRaw ?? []) as Record<string, unknown>[];
+  const ralentisData = (ralentiRaw ?? []) as Record<string, unknown>[];
+
+  const calificacion = metrics.length > 0 ? promedio(metrics, 'calificacion') : 0;
+  const contrato = veh.contratos as Record<string, unknown> | null;
+
+  const metricas = {
+    calificacion: Math.round(calificacion * 100) / 100,
+    kms: Math.round(sumar(metrics, 'kms') * 100) / 100,
+    horas_conduccion: Math.round(sumar(metrics, 'horas_conduccion') * 100) / 100,
+    excesos_10_kph: sumar(metrics, 'excesos_10_kph'),
+    excesos_20_kph: sumar(metrics, 'excesos_20_kph'),
+    excesos_30_kph: sumar(metrics, 'excesos_30_kph'),
+    excesos_40_kph: sumar(metrics, 'excesos_40_kph'),
+    excesos_50_kph: sumar(metrics, 'excesos_50_kph'),
+    excesos_60_kph: sumar(metrics, 'excesos_60_kph'),
+    excesos_80_kph: sumar(metrics, 'excesos_80_kph'),
+    aceleraciones: sumar(metrics, 'aceleraciones'),
+    frenadas: sumar(metrics, 'frenadas'),
+    dias_evaluados: metrics.length,
+    dispositivo_gps: metrics.length > 0 ? String(metrics[0].gps_proveedor ?? '') : '',
+    estado_gps: '',
+    base: veh.lugar as string ?? '',
+  };
+
+  const ralenti = {
+    kms_recorridos: Math.round(sumar(ralentisData, 'kms_recorridos') * 100) / 100,
+    encendidos_apagados: sumar(ralentisData, 'encendidos_apagados'),
+    ralentis_excesivos: sumar(ralentisData, 'ralentis_excesivos'),
+    horas_motor_encendido: Math.round(sumar(ralentisData, 'horas_motor_encendido') * 100) / 100,
+    horas_motor_ralenti: Math.round(sumar(ralentisData, 'horas_motor_ralenti') * 100) / 100,
+    consumo_combustible: Math.round(sumar(ralentisData, 'consumo_combustible') * 100) / 100,
+  };
+
+  return {
+    vehiculo: {
+      id: veh.id as string,
+      placa: veh.placa as string,
+      marca: veh.marca as string ?? '',
+      linea: veh.linea as string ?? '',
+      modelo: veh.modelo as string ?? '',
+      tipo_activo: veh.tipo_activo as string ?? '',
+      tipo_combustible: veh.tipo_combustible as string ?? '',
+      estado: veh.estado as string ?? 'ACTIVO',
+      gps_compañia: veh.gps_compañia as string ?? '',
+      cliente: veh.cliente as string ?? '',
+      fecha_venc_soat: veh.fecha_venc_soat as string,
+      fecha_venc_rtm: veh.fecha_venc_rtm as string,
+      km_actual: Number(veh.km_actual ?? 0),
+    },
+    contrato: contrato ? {
+      nombre: contrato.nombre as string,
+      cliente: contrato.cliente as string,
+      tipo: contrato.tipo as string,
+      fecha_inicio: contrato.fecha_inicio as string,
+      fecha_fin: contrato.fecha_fin as string,
+      kilometraje_pactado: Number(contrato.kilometraje_pactado ?? 0),
+    } : undefined,
+    metricas,
+    ralenti,
+    periodoInicio: filtro.fechaInicio,
+    periodoFin: filtro.fechaFin,
+    fechaReporte: new Date().toISOString().slice(0, 10),
+    semaforo: semaforo(metricas.calificacion),
+  };
+}
+
+// ── Listado de reportes guardados ────────────────────────────────────────────
+
+async function listarReportesConductoresDesdeColtrack(filtro: Partial<FiltroReporte>): Promise<Record<string, unknown>[]> {
+  let q = supabase
+    .from('coltrack_datos_conductor')
+    .select('*, conductores!inner(id, nombres, cedula, proyecto, contrato_id, estado)')
+    .order('fecha', { ascending: false });
+
+  if (filtro.conductorId) q = q.eq('conductor_id', filtro.conductorId);
+  if (filtro.fechaInicio) q = q.gte('fecha', filtro.fechaInicio);
+  if (filtro.fechaFin) q = q.lte('fecha', filtro.fechaFin);
+  if (filtro.proyecto) q = q.eq('conductores.proyecto', filtro.proyecto);
+  if (filtro.contratoId) q = q.eq('conductores.contrato_id', filtro.contratoId);
+
+  const data = await fetchAllRows<Record<string, unknown>>(q);
+
+  const grupos = new Map<string, Record<string, unknown> & { _calificaciones: number[] }>();
+  for (const row of data) {
+    const conductor = row.conductores as Record<string, unknown> | null;
+    if (!conductor || normalizeText(conductor.estado) !== 'ACTIVO') continue;
+
+    const fecha = String(row.fecha ?? '').slice(0, 10);
+    const mes = fecha ? fecha.slice(0, 7) : String(row.mes ?? '');
+    const conductorId = String(row.conductor_id ?? conductor.id ?? '');
+    const key = `${conductorId}|${mes}`;
+
+    if (!grupos.has(key)) {
+      grupos.set(key, {
+        conductor_id: conductorId,
+        conductores: {
+          nombres: conductor.nombres,
+          cedula: conductor.cedula,
+          contrato_id: conductor.contrato_id,
+        },
+        periodo_inicio: fecha,
+        periodo_fin: fecha,
+        mes,
+        calificacion: 0,
+        kms: 0,
+        horas_conduccion: 0,
+        excesos_10_kph: 0,
+        excesos_20_kph: 0,
+        excesos_30_kph: 0,
+        excesos_40_kph: 0,
+        excesos_50_kph: 0,
+        excesos_60_kph: 0,
+        excesos_80_kph: 0,
+        aceleraciones_bruscas: 0,
+        frenadas_bruscas: 0,
+        proyecto: String(conductor.proyecto ?? row.proyecto ?? ''),
+        fecha_reporte: new Date().toISOString().slice(0, 10),
+        _calificaciones: [],
+      });
+    }
+
+    const acc = grupos.get(key)!;
+    if (fecha) {
+      const inicio = String(acc.periodo_inicio || fecha);
+      const fin = String(acc.periodo_fin || fecha);
+      acc.periodo_inicio = fecha < inicio ? fecha : inicio;
+      acc.periodo_fin = fecha > fin ? fecha : fin;
+    }
+
+    const calificacion = Number(row.calificacion ?? 0);
+    if (calificacion > 0) acc._calificaciones.push(calificacion);
+    for (const campo of [
+      'kms',
+      'horas_conduccion',
+      'excesos_10_kph',
+      'excesos_20_kph',
+      'excesos_30_kph',
+      'excesos_40_kph',
+      'excesos_50_kph',
+      'excesos_60_kph',
+      'excesos_80_kph',
+    ]) {
+      acc[campo] = Number(acc[campo] ?? 0) + Number(row[campo] ?? 0);
+    }
+    acc.aceleraciones_bruscas = Number(acc.aceleraciones_bruscas ?? 0) + Number(row.aceleraciones ?? 0);
+    acc.frenadas_bruscas = Number(acc.frenadas_bruscas ?? 0) + Number(row.frenadas ?? 0);
+  }
+
+  return Array.from(grupos.values()).map(({ _calificaciones, ...row }) => ({
+    ...row,
+    calificacion: _calificaciones.length
+      ? Math.round((_calificaciones.reduce((a, b) => a + b, 0) / _calificaciones.length) * 100) / 100
+      : 0,
+  }));
+}
+
+export async function listarReportesConductores(filtro: Partial<FiltroReporte> & { mes?: string }) {
+  const select = filtro.contratoId
+    ? '*, conductores!inner(nombres, cedula, contrato_id)'
+    : '*, conductores(nombres, cedula, contrato_id)';
+  let q = supabase
+    .from('reportes_conductores')
+    .select(select)
+    .order('fecha_reporte', { ascending: false });
+
+  if (filtro.conductorId) q = q.eq('conductor_id', filtro.conductorId);
+  if (filtro.proyecto) q = q.eq('proyecto', filtro.proyecto);
+  if (filtro.contratoId) q = q.eq('conductores.contrato_id', filtro.contratoId);
+  if (filtro.fechaInicio && filtro.fechaFin) {
+    q = q.lte('periodo_inicio', filtro.fechaFin).gte('periodo_fin', filtro.fechaInicio);
+  } else if (filtro.mes) {
+    q = q.eq('mes', filtro.mes);
+  }
+
+  const data = await fetchAllRows<Record<string, unknown>>(q);
+  if (data.length > 0) return data;
+  return listarReportesConductoresDesdeColtrack(filtro);
+}
+
+export async function listarReportesVehiculos(filtro: Partial<FiltroReporte> & { mes?: string }) {
+  let q = supabase
+    .from('reportes_vehiculos')
+    .select('*, vehiculos(placa, marca, tipo_activo), contratos(nombre)')
+    .order('fecha_reporte', { ascending: false });
+
+  if (filtro.vehiculoId) q = q.eq('vehiculo_id', filtro.vehiculoId);
+  if (filtro.proyecto) q = q.eq('proyecto', filtro.proyecto);
+  if (filtro.contratoId) q = q.eq('contrato_id', filtro.contratoId);
+  if (filtro.fechaInicio && filtro.fechaFin) {
+    q = q.lte('periodo_inicio', filtro.fechaFin).gte('periodo_fin', filtro.fechaInicio);
+  } else if (filtro.mes) {
+    q = q.eq('mes', filtro.mes);
+  }
+
+  return fetchAllRows<Record<string, unknown>>(q);
+}
+
+export async function getReporteAlertasDiarias(filtro: Pick<FiltroReporte, 'fechaInicio' | 'fechaFin' | 'contratoId'>): Promise<ReporteAlertasDiariasData | null> {
+  let q = supabase
+    .from('alertas_diarias_gps')
+    .select('*')
+    .gte('fecha_dia', filtro.fechaInicio)
+    .lte('fecha_dia', filtro.fechaFin)
+    .not('vehiculo_id', 'is', null)
+    .order('fecha', { ascending: true });
+
+  if (filtro.contratoId) q = q.eq('contrato_id', filtro.contratoId);
+
+  const data = await fetchAllRows<Record<string, unknown>>(q);
+
+  const rows = (data ?? []) as Record<string, unknown>[];
+  if (rows.length === 0) return null;
+
+  const vehiculoIds = Array.from(new Set(rows.map(r => String(r.vehiculo_id ?? '')).filter(Boolean)));
+  let vehiculosActivos: Record<string, Record<string, unknown>> = {};
+  if (vehiculoIds.length > 0) {
+    const { data: vehs, error: vehError } = await supabase
+      .from('vehiculos')
+      .select('id, placa, estado, contrato_id, tipo_activo, cliente, gps_compañia')
+      .in('id', vehiculoIds);
+    if (vehError) throw new Error(vehError.message);
+    vehiculosActivos = Object.fromEntries(
+      ((vehs as unknown as Record<string, unknown>[]) ?? [])
+        .filter((v) => normalizeText(v.estado) === 'ACTIVO')
+        .map((v) => [String(v.id), v])
+    );
+  }
+
+  const alertas = rows
+    .filter(r => !!r.vehiculo_id && !!vehiculosActivos[String(r.vehiculo_id)])
+    .map((r) => {
+      const veh = vehiculosActivos[String(r.vehiculo_id)] ?? {};
+      return {
+        id: String(r.id),
+        placa: String(r.placa ?? veh.placa ?? ''),
+        conductor: String(r.conductor ?? ''),
+        conductor_identificado: Boolean(r.conductor_identificado),
+        lugar: String(r.lugar ?? ''),
+        latitud: Number(r.latitud ?? 0),
+        longitud: Number(r.longitud ?? 0),
+        fecha: String(r.fecha ?? ''),
+        fecha_dia: String(r.fecha_dia ?? ''),
+        velocidad: Number(r.velocidad ?? 0),
+        estado: String(r.estado ?? ''),
+        infraccion_80_kmh: Number(r.infraccion_80_kmh ?? 0),
+        excesos_varios_parametros: Number(r.excesos_varios_parametros ?? 0),
+        excesos_50_80_kmh: Number(r.excesos_50_80_kmh ?? 0),
+        frenadas_bruscas: Number(r.frenadas_bruscas ?? 0),
+        contrato_nombre: String(r.contrato_nombre ?? ''),
+        gps: String(r.gps ?? veh.gps_compañia ?? ''),
+        tipo_activo: String(r.tipo_activo ?? veh.tipo_activo ?? ''),
+        cliente: String(r.cliente ?? veh.cliente ?? ''),
+        vehiculo_id: String(r.vehiculo_id ?? '') || null,
+        conductor_id: String(r.conductor_id ?? '') || null,
+        contrato_id: String(r.contrato_id ?? '') || null,
+      };
+    }) as AlertaDiariaGps[];
+
+  if (alertas.length === 0) return null;
+
+  let contrato: ContratoOption | undefined;
+  if (filtro.contratoId) {
+    const { data: ct } = await supabase
+      .from('contratos')
+      .select('id, nombre, cliente, proyecto')
+      .eq('id', filtro.contratoId)
+      .maybeSingle();
+    contrato = ct as ContratoOption | undefined;
+  }
+
+  let vehiculosConGps = 0;
+  let motocicletasConGps = 0;
+  let personasAutorizadas = 0;
+  const vehiculosQuery = supabase
+    .from('vehiculos')
+    .select('id, tipo_activo, gps_compañia', { count: 'exact' })
+    .eq('estado', 'ACTIVO');
+  if (filtro.contratoId) vehiculosQuery.eq('contrato_id', filtro.contratoId);
+  const { data: vehiculosBase, count: vehCount } = await vehiculosQuery;
+  void vehCount;
+  const _vehBase = (vehiculosBase as unknown as Record<string, unknown>[]) ?? [];
+  vehiculosConGps = _vehBase.filter((v) => tieneGpsConfigurado(v.gps_compañia)).length;
+  motocicletasConGps = _vehBase.filter((v) => esMoto(v.tipo_activo) && tieneGpsConfigurado(v.gps_compañia)).length;
+
+  const conductoresQuery = supabase
+    .from('conductores')
+    .select('id', { count: 'exact', head: true })
+    .eq('estado', 'ACTIVO');
+  if (filtro.contratoId) conductoresQuery.eq('contrato_id', filtro.contratoId);
+  const { count: condCount } = await conductoresQuery;
+  personasAutorizadas = condCount ?? 0;
+
+  const identificados = new Set(alertas.filter(a => a.conductor_identificado).map(a => normalizeText(a.conductor)).filter(Boolean));
+  const sinIdentificar = new Set(alertas.filter(a => !a.conductor_identificado).map(a => `${a.placa}|${a.fecha_dia}`));
+
+  return {
+    alertas,
+    periodoInicio: filtro.fechaInicio,
+    periodoFin: filtro.fechaFin,
+    fechaReporte: new Date().toISOString().slice(0, 10),
+    contrato,
+    resumen: {
+      totalAlertas: alertas.reduce((acc, a) => acc + a.infraccion_80_kmh + a.excesos_varios_parametros + a.excesos_50_80_kmh + a.frenadas_bruscas, 0),
+      vehiculosConAlertas: new Set(alertas.map(a => a.placa)).size,
+      personasAutorizadas,
+      personasIdentificadas: identificados.size,
+      personasSinIdentificar: sinIdentificar.size,
+      motocicletasConAlertas: new Set(alertas.filter(a => esMoto(a.tipo_activo)).map(a => a.placa)).size,
+      vehiculosConGps,
+      motocicletasConGps,
+      infracciones80: alertas.reduce((acc, a) => acc + a.infraccion_80_kmh, 0),
+      excesosVarios: alertas.reduce((acc, a) => acc + a.excesos_varios_parametros, 0),
+      excesos50a80: alertas.reduce((acc, a) => acc + a.excesos_50_80_kmh, 0),
+      frenadas: alertas.reduce((acc, a) => acc + a.frenadas_bruscas, 0),
+    },
+  };
+}
+
+export async function listarAlertasDiarias(filtro: Pick<FiltroReporte, 'fechaInicio' | 'fechaFin' | 'contratoId'>) {
+  let q = supabase
+    .from('alertas_diarias_gps')
+    .select('*')
+    .gte('fecha_dia', filtro.fechaInicio)
+    .lte('fecha_dia', filtro.fechaFin)
+    .not('vehiculo_id', 'is', null)
+    .order('fecha', { ascending: false });
+  if (filtro.contratoId) q = q.eq('contrato_id', filtro.contratoId);
+  return fetchAllRows<Record<string, unknown>>(q);
+}
+
+export async function listarAlertasDiariasPendientes(filtro: Pick<FiltroReporte, 'fechaInicio' | 'fechaFin' | 'contratoId'>) {
+  let contratoNombre = '';
+  if (filtro.contratoId) {
+    const { data: contrato, error } = await supabase
+      .from('contratos')
+      .select('nombre')
+      .eq('id', filtro.contratoId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    contratoNombre = String(contrato?.nombre ?? '');
+  }
+
+  let q = supabase
+    .from('alertas_diarias_pendientes')
+    .select('*')
+    .gte('fecha_dia', filtro.fechaInicio)
+    .lte('fecha_dia', filtro.fechaFin)
+    .eq('estado_migracion', 'pendiente')
+    .order('fecha', { ascending: false });
+
+  if (contratoNombre) q = q.ilike('contrato_nombre', `%${contratoNombre}%`);
+
+  return fetchAllRows<Record<string, unknown>>(q);
+}
