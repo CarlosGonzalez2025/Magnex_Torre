@@ -1,6 +1,7 @@
 import { Vehicle, Alert, AlertType, AlertSeverity, ApiSource } from '../types';
 import { saveIdleTimeRecord, saveIgnitionEvent } from './towerControlService';
 import { getAlertSeverityMap } from './alertSeverityConfigService';
+import { normalizeAlertTimestamp } from './dateNormalization';
 
 // Configuración de umbrales
 const ALERT_THRESHOLDS = {
@@ -231,7 +232,7 @@ function createAlert(
   // Esto garantiza que el historial refleje la hora REAL del evento
   const timestamp = vehicle.lastUpdate;
 
-  return {
+  return normalizeAlertTimestamp({
     id: `${vehicle.id}-${type}-${timestamp}`,
     vehicleId: vehicle.id,
     plate: vehicle.plate,
@@ -247,7 +248,7 @@ function createAlert(
     contract: vehicle.contract,
     details,
     sent: false
-  };
+  });
 }
 
 /**
@@ -256,7 +257,7 @@ function createAlert(
 export function saveAlertsToStorage(alerts: Alert[]): void {
   try {
     const existing = getAlertsFromStorage();
-    const combined = [...alerts, ...existing];
+    const combined = [...alerts, ...existing].map(normalizeAlertTimestamp);
 
     // Mantener solo las últimas 500 alertas
     const limited = combined.slice(0, 500);
@@ -273,7 +274,11 @@ export function saveAlertsToStorage(alerts: Alert[]): void {
 export function getAlertsFromStorage(): Alert[] {
   try {
     const stored = localStorage.getItem('fleet_alerts');
-    return stored ? JSON.parse(stored) : [];
+    if (!stored) return [];
+
+    const alerts = (JSON.parse(stored) as Alert[]).map(normalizeAlertTimestamp);
+    localStorage.setItem('fleet_alerts', JSON.stringify(alerts));
+    return alerts;
   } catch (error) {
     console.error('Error loading alerts from storage:', error);
     return [];

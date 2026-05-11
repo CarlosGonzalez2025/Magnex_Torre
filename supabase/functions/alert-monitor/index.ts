@@ -54,30 +54,81 @@ const DEDUPLICATION_WINDOWS = {
   'Colisión': 1440,                // 24 horas
 };
 
+const COLOMBIA_TIMEZONE_OFFSET = '-05:00';
+
+function buildLocalIsoDate(
+  year: number,
+  month: number,
+  day: number,
+  hours: number,
+  minutes: number,
+  seconds: number
+): string | null {
+  const dateOnly = new Date(Date.UTC(year, month - 1, day));
+  if (
+    dateOnly.getUTCFullYear() !== year ||
+    dateOnly.getUTCMonth() !== month - 1 ||
+    dateOnly.getUTCDate() !== day
+  ) {
+    return null;
+  }
+
+  const parsed = new Date(
+    `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}` +
+    `T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}` +
+    COLOMBIA_TIMEZONE_OFFSET
+  );
+
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString();
+}
+
+function parseDmyTimestamp(raw: string): string | null {
+  const normalized = raw.replace(/\./g, '/').replace(/\s+/g, ' ');
+  const dmy = normalized.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (!dmy) return null;
+
+  const [, d, m, y, hh = '0', mm = '0', ss = '0'] = dmy;
+  const year = Number(y.length === 2 ? `20${y}` : y);
+  return buildLocalIsoDate(year, Number(m), Number(d), Number(hh), Number(mm), Number(ss));
+}
+
+function parseYmdTimestamp(raw: string): string | null {
+  const normalized = raw.replace(/\./g, '/').replace(/\s+/g, ' ');
+  const ymd = normalized.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (!ymd) return null;
+
+  const [, y, m, d, hh = '0', mm = '0', ss = '0'] = ymd;
+  return buildLocalIsoDate(Number(y), Number(m), Number(d), Number(hh), Number(mm), Number(ss));
+}
+
 function parseGpsTimestamp(...values: unknown[]): string {
+  return parseGpsTimestampWithPreference(false, ...values);
+}
+
+function parseDayFirstGpsTimestamp(...values: unknown[]): string {
+  return parseGpsTimestampWithPreference(true, ...values);
+}
+
+function parseGpsTimestampWithPreference(preferDayFirst: boolean, ...values: unknown[]): string {
   for (const value of values) {
     if (value === null || value === undefined) continue;
     const raw = String(value).trim();
     if (!raw) continue;
 
+    if (preferDayFirst) {
+      const dmyDate = parseDmyTimestamp(raw);
+      if (dmyDate) return dmyDate;
+    }
+
+    const ymdDate = parseYmdTimestamp(raw);
+    if (ymdDate) return ymdDate;
+
     const isoDate = new Date(raw);
     if (!Number.isNaN(isoDate.getTime())) return isoDate.toISOString();
 
-    const normalized = raw.replace(/\./g, '/').replace(/\s+/g, ' ');
-    const dmy = normalized.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
-    if (dmy) {
-      const [, d, m, y, hh = '0', mm = '0', ss = '0'] = dmy;
-      const year = y.length === 2 ? `20${y}` : y;
-      const parsed = new Date(Number(year), Number(m) - 1, Number(d), Number(hh), Number(mm), Number(ss));
-      if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
-    }
-
-    const ymd = normalized.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
-    if (ymd) {
-      const [, y, m, d, hh = '0', mm = '0', ss = '0'] = ymd;
-      const parsed = new Date(Number(y), Number(m) - 1, Number(d), Number(hh), Number(mm), Number(ss));
-      if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
-    }
+    const dmyDate = parseDmyTimestamp(raw);
+    if (dmyDate) return dmyDate;
   }
 
   return new Date().toISOString();
@@ -213,7 +264,7 @@ async function fetchFagorData(): Promise<Vehicle[]> {
           latitude: parseFloat(record.Latitud || '0'),
           longitude: parseFloat(record.Longitud || '0'),
           status: speed > 0 ? 'MOVING' : 'STOPPED',
-          lastUpdate: parseGpsTimestamp(
+          lastUpdate: parseDayFirstGpsTimestamp(
             record.UltimaPosicion,
             record.Ultima_Posicion,
             record.Fecha,

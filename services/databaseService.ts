@@ -1,6 +1,7 @@
 import { Alert } from '../types';
 import { DataCleanupService } from './dataCleanupService';
 import { supabase, isSupabaseAvailable, markSupabaseUnavailable, isQuotaError } from './supabaseClient';
+import { normalizeAlertTimestamp } from './dateNormalization';
 
 // ==================== TYPES ====================
 
@@ -63,11 +64,13 @@ export interface SavedAlertWithPlans extends SavedAlert {
 export async function autoSaveAlert(alert: Alert): Promise<{ success: boolean; data?: SavedAlert; error?: string }> {
   if (!isSupabaseAvailable()) return { success: false, error: 'Supabase no disponible' };
   try {
+    const normalizedAlert = normalizeAlertTimestamp(alert);
+
     // Verificar duplicados en saved_alerts
     const isDuplicate = await DataCleanupService.checkDuplicate('saved_alerts', {
-      plate: alert.plate,
-      timestamp: alert.timestamp,
-      type: alert.type
+      plate: normalizedAlert.plate,
+      timestamp: normalizedAlert.timestamp,
+      type: normalizedAlert.type
     });
 
     if (isDuplicate) {
@@ -77,17 +80,17 @@ export async function autoSaveAlert(alert: Alert): Promise<{ success: boolean; d
 
     const alertData = {
       alert_id: alert.id,
-      vehicle_id: alert.vehicleId,
-      plate: alert.plate,
-      driver: alert.driver,
-      type: alert.type,
-      severity: alert.severity,
-      timestamp: alert.timestamp,
-      location: alert.location,
-      speed: alert.speed,
-      details: alert.details,
-      contract: alert.contract || null,
-      source: alert.source,
+      vehicle_id: normalizedAlert.vehicleId,
+      plate: normalizedAlert.plate,
+      driver: normalizedAlert.driver,
+      type: normalizedAlert.type,
+      severity: normalizedAlert.severity,
+      timestamp: normalizedAlert.timestamp,
+      location: normalizedAlert.location,
+      speed: normalizedAlert.speed,
+      details: normalizedAlert.details,
+      contract: normalizedAlert.contract || null,
+      source: normalizedAlert.source,
       status: 'pending' as const,
       saved_by: 'Sistema (Auto)'
     };
@@ -95,11 +98,11 @@ export async function autoSaveAlert(alert: Alert): Promise<{ success: boolean; d
     // 🔍 LOG DE DIAGNÓSTICO: Verificar datos de alertas críticas
     if (alert.severity === 'critical') {
       console.log('🚨 [DIAGNÓSTICO] Guardando alerta CRÍTICA:', {
-        plate: alert.plate,
-        type: alert.type,
-        severity: alert.severity,
-        timestamp: alert.timestamp,
-        details: alert.details
+        plate: normalizedAlert.plate,
+        type: normalizedAlert.type,
+        severity: normalizedAlert.severity,
+        timestamp: normalizedAlert.timestamp,
+        details: normalizedAlert.details
       });
     }
 
@@ -171,7 +174,7 @@ export async function getAllAutoSavedAlerts(): Promise<{ success: boolean; data?
     }
 
     console.log(`✅ Cargadas ${allData.length} alertas auto-guardadas (sin límite de 1000)`);
-    return { success: true, data: allData as SavedAlert[] };
+    return { success: true, data: allData.map(normalizeAlertTimestamp) as SavedAlert[] };
   } catch (error: any) {
     console.error('Exception fetching auto-saved alerts:', error);
     return { success: false, error: error.message || 'Error desconocido' };
@@ -238,7 +241,7 @@ export async function getFilteredAutoSavedAlerts(
     }
 
     console.log(`✅ Cargadas ${allData.length} alertas filtradas (sin límite de 1000)`);
-    return { success: true, data: allData as SavedAlert[] };
+    return { success: true, data: allData.map(normalizeAlertTimestamp) as SavedAlert[] };
   } catch (error: any) {
     console.error('Exception fetching filtered auto-saved alerts:', error);
     return { success: false, error: error.message || 'Error desconocido' };
@@ -358,11 +361,13 @@ export async function markAlertAsMovedToHistory(
  */
 export async function saveAlertToDatabase(alert: Alert, savedBy: string = 'Usuario'): Promise<{ success: boolean; data?: SavedAlert; error?: string }> {
   try {
+    const normalizedAlert = normalizeAlertTimestamp(alert);
+
     // Verificar si ya existe en alert_history
     const isDuplicate = await DataCleanupService.checkDuplicate('alert_history', {
-      plate: alert.plate,
-      timestamp: alert.timestamp,
-      type: alert.type
+      plate: normalizedAlert.plate,
+      timestamp: normalizedAlert.timestamp,
+      type: normalizedAlert.type
     });
 
     if (isDuplicate) {
@@ -377,24 +382,24 @@ export async function saveAlertToDatabase(alert: Alert, savedBy: string = 'Usuar
       .from('saved_alerts')
       .select('id')
       .eq('alert_id', alert.id)
-      .eq('plate', alert.plate)
-      .eq('timestamp', alert.timestamp)
+      .eq('plate', normalizedAlert.plate)
+      .eq('timestamp', normalizedAlert.timestamp)
       .maybeSingle();
 
     const alertData = {
       saved_alert_id: savedAlert?.id || null, // Referencia a saved_alerts
       alert_id: alert.id,
-      vehicle_id: alert.vehicleId,
-      plate: alert.plate,
-      driver: alert.driver,
-      type: alert.type,
-      severity: alert.severity,
-      timestamp: alert.timestamp,
-      location: alert.location,
-      speed: alert.speed,
-      details: alert.details,
-      contract: alert.contract || null,
-      source: alert.source,
+      vehicle_id: normalizedAlert.vehicleId,
+      plate: normalizedAlert.plate,
+      driver: normalizedAlert.driver,
+      type: normalizedAlert.type,
+      severity: normalizedAlert.severity,
+      timestamp: normalizedAlert.timestamp,
+      location: normalizedAlert.location,
+      speed: normalizedAlert.speed,
+      details: normalizedAlert.details,
+      contract: normalizedAlert.contract || null,
+      source: normalizedAlert.source,
       status: 'pending' as const,
       saved_by: savedBy
     };
@@ -441,7 +446,7 @@ export async function getAllSavedAlerts(): Promise<{ success: boolean; data?: Sa
       return { success: false, error: error.message };
     }
 
-    return { success: true, data: data as SavedAlertWithPlans[] };
+    return { success: true, data: (data as SavedAlertWithPlans[]).map(normalizeAlertTimestamp) };
   } catch (error: any) {
     console.error('Exception fetching alerts:', error);
     return { success: false, error: error.message || 'Error desconocido' };
@@ -491,7 +496,7 @@ export async function getFilteredAlerts(
       return { success: false, error: error.message };
     }
 
-    return { success: true, data: data as SavedAlertWithPlans[] };
+    return { success: true, data: (data as SavedAlertWithPlans[]).map(normalizeAlertTimestamp) };
   } catch (error: any) {
     console.error('Exception fetching filtered alerts:', error);
     return { success: false, error: error.message || 'Error desconocido' };

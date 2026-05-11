@@ -138,9 +138,9 @@ export default function App() {
       );
     });
 
-    setAlerts(uniqueAlerts);
     saveAlertsToStorage(uniqueAlerts);
     cleanOldAlerts(12); // Mantener alertas por 12 horas (turno operativo)
+    setAlerts(getUnsavedAlerts());
 
     // 🆕 GUARDADO AUTOMÁTICO: Guardar TODAS las alertas nuevas en saved_alerts
     // Esto se hace en segundo plano sin bloquear la UI
