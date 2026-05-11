@@ -100,26 +100,190 @@ export const ReportsTable: React.FC<ReportsTableProps> = ({
     return value;
   };
 
+  const normalizeKey = (key: string) => key
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, char => char.toUpperCase());
+
+  const exportHeaderOverrides: Record<string, string> = {
+    id: 'ID',
+    carga_id: 'ID Carga',
+    vehiculo_id: 'ID Vehiculo',
+    conductor_id: 'ID Conductor',
+    contrato_id: 'ID Contrato',
+    fecha: 'Fecha Evento',
+    fecha_dia: 'Fecha Dia',
+    placa: 'Placa',
+    conductor: 'Conductor',
+    conductor_identificado: 'Conductor Identificado',
+    lugar: 'Ubicacion',
+    latitud: 'Latitud',
+    longitud: 'Longitud',
+    velocidad: 'Velocidad',
+    estado: 'Estado',
+    infraccion_80_kmh: 'Infraccion 80 km/h',
+    excesos_varios_parametros: 'Excesos Varios Parametros',
+    excesos_50_80_kmh: 'Excesos 50-80 km/h',
+    frenadas_bruscas: 'Frenadas Bruscas',
+    contrato_nombre: 'Contrato',
+    gps: 'GPS',
+    tipo_activo: 'Tipo Activo',
+    cliente: 'Cliente',
+    raw_data: 'Datos Originales',
+    created_at: 'Fecha Registro',
+    estado_migracion: 'Estado Migracion',
+    migrado_at: 'Fecha Migracion',
+  };
+
+  const preferredExportOrder = [
+    'fecha',
+    'fecha_dia',
+    'placa',
+    'conductor',
+    'conductor_identificado',
+    'contrato_nombre',
+    'cliente',
+    'tipo_activo',
+    'gps',
+    'estado',
+    'velocidad',
+    'lugar',
+    'latitud',
+    'longitud',
+    'infraccion_80_kmh',
+    'excesos_varios_parametros',
+    'excesos_50_80_kmh',
+    'frenadas_bruscas',
+    'vehiculo_id',
+    'conductor_id',
+    'contrato_id',
+    'carga_id',
+    'estado_migracion',
+    'migrado_at',
+    'created_at',
+    'raw_data',
+    'id',
+  ];
+
+  const getAllExportKeys = (rows: Record<string, unknown>[]) => {
+    const keys = Array.from(new Set(rows.flatMap(row => Object.keys(row))));
+    return keys.sort((a, b) => {
+      const ai = preferredExportOrder.indexOf(a);
+      const bi = preferredExportOrder.indexOf(b);
+      if (ai !== -1 && bi !== -1) return ai - bi;
+      if (ai !== -1) return -1;
+      if (bi !== -1) return 1;
+      return a.localeCompare(b);
+    });
+  };
+
+  const toNumber = (value: unknown) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const hasCoordinates = (row: Record<string, unknown>) => {
+    const lat = Number(row.latitud);
+    const lng = Number(row.longitud);
+    return Number.isFinite(lat) && Number.isFinite(lng) && lat !== 0 && lng !== 0;
+  };
+
+  const mapsUrl = (row: Record<string, unknown>) => {
+    if (hasCoordinates(row)) {
+      return `https://www.google.com/maps/search/?api=1&query=${Number(row.latitud)},${Number(row.longitud)}`;
+    }
+    const place = String(row.lugar ?? '').trim();
+    return place ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place)}` : '';
+  };
+
+  const addHyperlinks = (
+    worksheet: XLSX.WorkSheet,
+    rows: Record<string, unknown>[],
+    keys: string[]
+  ) => {
+    rows.forEach((row, rowIndex) => {
+      const url = mapsUrl(row);
+      if (!url) return;
+
+      keys.forEach((key, colIndex) => {
+        if (!['lugar', 'latitud', 'longitud'].includes(key)) return;
+        const address = XLSX.utils.encode_cell({ r: rowIndex + 1, c: colIndex });
+        const cell = worksheet[address];
+        if (!cell) return;
+        cell.l = { Target: url, Tooltip: 'Abrir ubicacion en Google Maps' };
+        cell.s = { font: { color: { rgb: '0563C1' }, underline: true } };
+      });
+    });
+  };
+
+  const countBy = (rows: Record<string, unknown>[], key: string) => {
+    const map = new Map<string, number>();
+    rows.forEach(row => {
+      const value = String(row[key] ?? '').trim() || 'Sin dato';
+      map.set(value, (map.get(value) ?? 0) + 1);
+    });
+    return Array.from(map.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([item, cantidad]) => ({ Item: item, Cantidad: cantidad }));
+  };
+
+  const buildAnalysisSheets = (rows: Record<string, unknown>[]) => {
+    const total = rows.length;
+    const velocidades = rows.map(row => toNumber(row.velocidad)).filter(v => v > 0);
+    const resumen = [
+      { Indicador: 'Total registros', Valor: total },
+      { Indicador: 'Vehiculos unicos', Valor: new Set(rows.map(row => String(row.placa ?? '').trim()).filter(Boolean)).size },
+      { Indicador: 'Conductores unicos', Valor: new Set(rows.map(row => String(row.conductor ?? '').trim()).filter(Boolean)).size },
+      { Indicador: 'Conductores identificados', Valor: rows.filter(row => row.conductor_identificado === true).length },
+      { Indicador: 'Registros sin conductor identificado', Valor: rows.filter(row => row.conductor_identificado === false).length },
+      { Indicador: 'Velocidad promedio', Valor: velocidades.length ? Number((velocidades.reduce((a, b) => a + b, 0) / velocidades.length).toFixed(2)) : 0 },
+      { Indicador: 'Velocidad maxima', Valor: velocidades.length ? Math.max(...velocidades) : 0 },
+      { Indicador: 'Infracciones 80 km/h', Valor: rows.reduce((acc, row) => acc + toNumber(row.infraccion_80_kmh), 0) },
+      { Indicador: 'Excesos varios parametros', Valor: rows.reduce((acc, row) => acc + toNumber(row.excesos_varios_parametros), 0) },
+      { Indicador: 'Excesos 50-80 km/h', Valor: rows.reduce((acc, row) => acc + toNumber(row.excesos_50_80_kmh), 0) },
+      { Indicador: 'Frenadas bruscas', Valor: rows.reduce((acc, row) => acc + toNumber(row.frenadas_bruscas), 0) },
+      { Indicador: 'Registros con coordenadas', Valor: rows.filter(hasCoordinates).length },
+    ];
+
+    const sections: Array<{ title: string; rows: Record<string, unknown>[] }> = [
+      { title: 'Resumen', rows: resumen },
+      { title: 'Top placas', rows: countBy(rows, 'placa').slice(0, 15) },
+      { title: 'Por contrato', rows: countBy(rows, 'contrato_nombre') },
+      { title: 'Por GPS', rows: countBy(rows, 'gps') },
+      { title: 'Por estado', rows: countBy(rows, 'estado') },
+      { title: 'Por fecha', rows: countBy(rows, 'fecha_dia') },
+    ];
+
+    const sheetRows: unknown[][] = [];
+    sections.forEach((section, index) => {
+      if (index > 0) sheetRows.push([]);
+      sheetRows.push([section.title]);
+      const headers = Array.from(new Set(section.rows.flatMap(row => Object.keys(row))));
+      sheetRows.push(headers);
+      section.rows.forEach(row => sheetRows.push(headers.map(header => row[header])));
+    });
+
+    const worksheet = XLSX.utils.aoa_to_sheet(sheetRows);
+    worksheet['!cols'] = [{ wch: 34 }, { wch: 18 }, { wch: 18 }];
+    return worksheet;
+  };
+
   const handleExport = () => {
     if (data.length === 0) {
       alert('No hay datos para exportar');
       return;
     }
 
-    const exportColumns = columns.filter(col => col.header.trim());
-    const exportData = sorted.map(row => {
-      const out: Record<string, unknown> = {};
-      exportColumns.forEach(col => {
-        const value = col.exportValue ? col.exportValue(row[col.key], row) : row[col.key];
-        out[col.header] = formatExportValue(value);
-      });
-      return out;
-    });
+    const exportKeys = getAllExportKeys(sorted);
+    const exportHeaders = exportKeys.map(key => exportHeaderOverrides[key] ?? normalizeKey(key));
+    const exportData = sorted.map(row => exportKeys.map(key => formatExportValue(row[key])));
 
-    const worksheet = XLSX.utils.json_to_sheet(exportData);
-    worksheet['!cols'] = exportColumns.map(col => ({ wch: Math.max(12, col.header.length + 4) }));
+    const worksheet = XLSX.utils.aoa_to_sheet([exportHeaders, ...exportData]);
+    worksheet['!cols'] = exportHeaders.map(header => ({ wch: Math.max(12, String(header).length + 4) }));
+    worksheet['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: exportData.length, c: exportHeaders.length - 1 } }) };
+    addHyperlinks(worksheet, sorted, exportKeys);
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Datos');
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Alertas');
+    XLSX.utils.book_append_sheet(workbook, buildAnalysisSheets(sorted), 'Analisis');
     XLSX.writeFile(workbook, `${exportFileName}_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
