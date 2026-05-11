@@ -1,9 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { FileDown, FileText, AlertTriangle, ChevronUp, ChevronDown } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import type ExcelJS from 'exceljs';
 import { ValidationError } from '../../services/importService';
-
-// ── Tabla de errores de validación ───────────────────────────────────────────
 
 export const ErroresTable: React.FC<{ errores: ValidationError[] }> = ({ errores }) => {
   if (errores.length === 0) return null;
@@ -11,7 +9,7 @@ export const ErroresTable: React.FC<{ errores: ValidationError[] }> = ({ errores
     <div className="rounded-xl border border-red-200 dark:border-red-800 overflow-hidden">
       <div className="bg-red-50 dark:bg-red-950/30 px-4 py-2 flex items-center gap-2">
         <AlertTriangle className="w-4 h-4 text-red-600" />
-        <span className="text-sm font-semibold text-red-700 dark:text-red-400">{errores.length} error(es) de validación</span>
+        <span className="text-sm font-semibold text-red-700 dark:text-red-400">{errores.length} error(es) de validacion</span>
       </div>
       <div className="overflow-x-auto max-h-56">
         <table className="w-full text-xs">
@@ -25,8 +23,8 @@ export const ErroresTable: React.FC<{ errores: ValidationError[] }> = ({ errores
           <tbody>
             {errores.map((e, i) => (
               <tr key={i} className="border-t border-red-100 dark:border-red-900/50">
-                <td className="px-3 py-1.5 text-red-700 dark:text-red-400">{e.fila || '—'}</td>
-                <td className="px-3 py-1.5 font-mono text-red-600">{e.columna || '—'}</td>
+                <td className="px-3 py-1.5 text-red-700 dark:text-red-400">{e.fila || '-'}</td>
+                <td className="px-3 py-1.5 font-mono text-red-600">{e.columna || '-'}</td>
                 <td className="px-3 py-1.5 text-red-800 dark:text-red-300">{e.mensaje}</td>
               </tr>
             ))}
@@ -36,8 +34,6 @@ export const ErroresTable: React.FC<{ errores: ValidationError[] }> = ({ errores
     </div>
   );
 };
-
-// ── Tabla genérica de preview / datos ─────────────────────────────────────────
 
 interface Column {
   key: string;
@@ -53,10 +49,34 @@ interface ReportsTableProps {
   emptyMessage?: string;
   maxRows?: number;
   exportFileName?: string;
+  includeDateContractSheet?: boolean;
 }
 
+const COLORS = {
+  navy: '1F2937',
+  navy2: '334155',
+  blue: '2563EB',
+  blueLight: 'DBEAFE',
+  green: '16A34A',
+  greenLight: 'DCFCE7',
+  amber: 'D97706',
+  amberLight: 'FEF3C7',
+  orange: 'EA580C',
+  orangeLight: 'FFEDD5',
+  red: 'DC2626',
+  redLight: 'FEE2E2',
+  slate: 'E2E8F0',
+  slateLight: 'F8FAFC',
+  white: 'FFFFFF',
+};
+
 export const ReportsTable: React.FC<ReportsTableProps> = ({
-  columns, data, emptyMessage = 'Sin datos', maxRows, exportFileName = 'reporte'
+  columns,
+  data,
+  emptyMessage = 'Sin datos',
+  maxRows,
+  exportFileName = 'reporte',
+  includeDateContractSheet = true,
 }) => {
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
@@ -82,7 +102,10 @@ export const ReportsTable: React.FC<ReportsTableProps> = ({
 
   const handleSort = (key: string) => {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
-    else { setSortKey(key); setSortDir('asc'); }
+    else {
+      setSortKey(key);
+      setSortDir('asc');
+    }
   };
 
   const formatExportValue = (value: unknown) => {
@@ -97,7 +120,8 @@ export const ReportsTable: React.FC<ReportsTableProps> = ({
       if ('nombre' in obj) return String(obj.nombre ?? '');
       return JSON.stringify(value);
     }
-    return value;
+    if (typeof value === 'boolean') return value ? 'VERDADERO' : 'FALSO';
+    return value as string | number;
   };
 
   const normalizeKey = (key: string) => key
@@ -135,33 +159,12 @@ export const ReportsTable: React.FC<ReportsTableProps> = ({
   };
 
   const preferredExportOrder = [
-    'fecha',
-    'fecha_dia',
-    'placa',
-    'conductor',
-    'conductor_identificado',
-    'contrato_nombre',
-    'cliente',
-    'tipo_activo',
-    'gps',
-    'estado',
-    'velocidad',
-    'lugar',
-    'latitud',
-    'longitud',
-    'infraccion_80_kmh',
-    'excesos_varios_parametros',
-    'excesos_50_80_kmh',
-    'frenadas_bruscas',
-    'vehiculo_id',
-    'conductor_id',
-    'contrato_id',
-    'carga_id',
-    'estado_migracion',
-    'migrado_at',
-    'created_at',
-    'raw_data',
-    'id',
+    'fecha', 'fecha_dia', 'placa', 'conductor', 'conductor_identificado',
+    'contrato_nombre', 'cliente', 'tipo_activo', 'gps', 'estado', 'velocidad',
+    'lugar', 'latitud', 'longitud', 'infraccion_80_kmh', 'excesos_varios_parametros',
+    'excesos_50_80_kmh', 'frenadas_bruscas', 'vehiculo_id', 'conductor_id',
+    'contrato_id', 'carga_id', 'estado_migracion', 'migrado_at', 'created_at',
+    'raw_data', 'id',
   ];
 
   const getAllExportKeys = (rows: Record<string, unknown>[]) => {
@@ -195,26 +198,6 @@ export const ReportsTable: React.FC<ReportsTableProps> = ({
     return place ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place)}` : '';
   };
 
-  const addHyperlinks = (
-    worksheet: XLSX.WorkSheet,
-    rows: Record<string, unknown>[],
-    keys: string[]
-  ) => {
-    rows.forEach((row, rowIndex) => {
-      const url = mapsUrl(row);
-      if (!url) return;
-
-      keys.forEach((key, colIndex) => {
-        if (!['lugar', 'latitud', 'longitud'].includes(key)) return;
-        const address = XLSX.utils.encode_cell({ r: rowIndex + 1, c: colIndex });
-        const cell = worksheet[address];
-        if (!cell) return;
-        cell.l = { Target: url, Tooltip: 'Abrir ubicacion en Google Maps' };
-        cell.s = { font: { color: { rgb: '0563C1' }, underline: true } };
-      });
-    });
-  };
-
   const countBy = (rows: Record<string, unknown>[], key: string) => {
     const map = new Map<string, number>();
     rows.forEach(row => {
@@ -224,57 +207,6 @@ export const ReportsTable: React.FC<ReportsTableProps> = ({
     return Array.from(map.entries())
       .sort((a, b) => b[1] - a[1])
       .map(([item, cantidad]) => ({ Item: item, Cantidad: cantidad }));
-  };
-
-  const applyHeaderStyle = (worksheet: XLSX.WorkSheet, range: XLSX.Range, row = 0) => {
-    for (let c = range.s.c; c <= range.e.c; c++) {
-      const address = XLSX.utils.encode_cell({ r: row, c });
-      if (!worksheet[address]) continue;
-      worksheet[address].s = {
-        font: { bold: true, color: { rgb: 'FFFFFF' } },
-        fill: { fgColor: { rgb: '1F2937' } },
-        alignment: { horizontal: 'center', vertical: 'center' },
-        border: {
-          top: { style: 'thin', color: { rgb: 'CBD5E1' } },
-          bottom: { style: 'thin', color: { rgb: 'CBD5E1' } },
-        },
-      };
-    }
-  };
-
-  const applyTitleStyle = (worksheet: XLSX.WorkSheet, address: string) => {
-    if (!worksheet[address]) return;
-    worksheet[address].s = {
-      font: { bold: true, sz: 15, color: { rgb: '0F172A' } },
-      fill: { fgColor: { rgb: 'DBEAFE' } },
-      alignment: { horizontal: 'left', vertical: 'center' },
-    };
-  };
-
-  const createSheetFromRows = (
-    title: string,
-    headers: string[],
-    rows: unknown[][],
-    widths: number[]
-  ) => {
-    const generatedAt = new Date().toLocaleString('es-CO');
-    const worksheet = XLSX.utils.aoa_to_sheet([
-      [title],
-      [`Generado: ${generatedAt}`],
-      [],
-      headers,
-      ...rows,
-    ]);
-    const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
-    worksheet['!merges'] = [
-      { s: { r: 0, c: 0 }, e: { r: 0, c: Math.max(0, headers.length - 1) } },
-      { s: { r: 1, c: 0 }, e: { r: 1, c: Math.max(0, headers.length - 1) } },
-    ];
-    worksheet['!cols'] = headers.map((header, index) => ({ wch: widths[index] ?? Math.max(12, header.length + 4) }));
-    worksheet['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 3, c: 0 }, e: { r: range.e.r, c: headers.length - 1 } }) };
-    applyTitleStyle(worksheet, 'A1');
-    applyHeaderStyle(worksheet, range, 3);
-    return worksheet;
   };
 
   const buildDateContractRows = (rows: Record<string, unknown>[]) => {
@@ -300,86 +232,231 @@ export const ReportsTable: React.FC<ReportsTableProps> = ({
     });
 
     return Array.from(groups.values())
-      .sort((a, b) => a.fecha.localeCompare(b.fecha) || a.contrato.localeCompare(b.contrato))
-      .map(row => [row.fecha, row.contrato, row.excesos80, row.excesos50a80, row.frenadas, row.total]);
+      .sort((a, b) => a.fecha.localeCompare(b.fecha) || a.contrato.localeCompare(b.contrato));
   };
 
-  const buildDateContractSheet = (rows: Record<string, unknown>[]) => createSheetFromRows(
-    'Cantidades por fecha y contrato',
-    ['Fecha', 'Contrato', 'Excesos 80 km/h', 'Velocidad > 50 hasta 80 km/h', 'Frenadas Bruscas', 'Total'],
-    buildDateContractRows(rows),
-    [14, 36, 18, 28, 18, 12]
-  );
+  const styleWorksheet = (worksheet: ExcelJS.Worksheet) => {
+    worksheet.views = [{ state: 'frozen', ySplit: 4 }];
+    worksheet.properties.defaultRowHeight = 18;
+    worksheet.eachRow((row) => {
+      row.eachCell((cell) => {
+        cell.alignment = { vertical: 'middle', wrapText: true };
+        cell.border = {
+          top: { style: 'thin', color: { argb: COLORS.slate } },
+          left: { style: 'thin', color: { argb: COLORS.slate } },
+          bottom: { style: 'thin', color: { argb: COLORS.slate } },
+          right: { style: 'thin', color: { argb: COLORS.slate } },
+        };
+      });
+    });
+  };
 
-  const buildAnalysisSheets = (rows: Record<string, unknown>[]) => {
-    const total = rows.length;
-    const velocidades = rows.map(row => toNumber(row.velocidad)).filter(v => v > 0);
-    const resumen = [
-      { Indicador: 'Total registros', Valor: total },
-      { Indicador: 'Vehiculos unicos', Valor: new Set(rows.map(row => String(row.placa ?? '').trim()).filter(Boolean)).size },
-      { Indicador: 'Conductores unicos', Valor: new Set(rows.map(row => String(row.conductor ?? '').trim()).filter(Boolean)).size },
-      { Indicador: 'Conductores identificados', Valor: rows.filter(row => row.conductor_identificado === true).length },
-      { Indicador: 'Registros sin conductor identificado', Valor: rows.filter(row => row.conductor_identificado === false).length },
-      { Indicador: 'Velocidad promedio', Valor: velocidades.length ? Number((velocidades.reduce((a, b) => a + b, 0) / velocidades.length).toFixed(2)) : 0 },
-      { Indicador: 'Velocidad maxima', Valor: velocidades.length ? Math.max(...velocidades) : 0 },
-      { Indicador: 'Infracciones 80 km/h', Valor: rows.reduce((acc, row) => acc + toNumber(row.infraccion_80_kmh), 0) },
-      { Indicador: 'Excesos varios parametros', Valor: rows.reduce((acc, row) => acc + toNumber(row.excesos_varios_parametros), 0) },
-      { Indicador: 'Excesos 50-80 km/h', Valor: rows.reduce((acc, row) => acc + toNumber(row.excesos_50_80_kmh), 0) },
-      { Indicador: 'Frenadas bruscas', Valor: rows.reduce((acc, row) => acc + toNumber(row.frenadas_bruscas), 0) },
-      { Indicador: 'Registros con coordenadas', Valor: rows.filter(hasCoordinates).length },
-    ];
+  const setColumnWidths = (worksheet: ExcelJS.Worksheet, widths: number[]) => {
+    widths.forEach((width, index) => {
+      worksheet.getColumn(index + 1).width = width;
+    });
+  };
 
-    const sections: Array<{ title: string; rows: Record<string, unknown>[] }> = [
-      { title: 'Resumen', rows: resumen },
-      { title: 'Top placas', rows: countBy(rows, 'placa').slice(0, 15) },
-      { title: 'Por contrato', rows: countBy(rows, 'contrato_nombre') },
-      { title: 'Por GPS', rows: countBy(rows, 'gps') },
-      { title: 'Por estado', rows: countBy(rows, 'estado') },
-      { title: 'Por fecha', rows: countBy(rows, 'fecha_dia') },
-    ];
+  const columnLetter = (index: number) => {
+    let value = index;
+    let letter = '';
+    while (value > 0) {
+      const remainder = (value - 1) % 26;
+      letter = String.fromCharCode(65 + remainder) + letter;
+      value = Math.floor((value - 1) / 26);
+    }
+    return letter;
+  };
 
-    const sheetRows: unknown[][] = [];
-    sections.forEach((section, index) => {
-      if (index > 0) sheetRows.push([]);
-      sheetRows.push([section.title]);
-      const headers = Array.from(new Set(section.rows.flatMap(row => Object.keys(row))));
-      sheetRows.push(headers);
-      section.rows.forEach(row => sheetRows.push(headers.map(header => row[header])));
+  const addTitle = (worksheet: ExcelJS.Worksheet, title: string, subtitle: string, columns: number) => {
+    worksheet.mergeCells(1, 1, 1, Math.max(columns, 2));
+    worksheet.mergeCells(2, 1, 2, Math.max(columns, 2));
+    const titleCell = worksheet.getCell('A1');
+    titleCell.value = title;
+    titleCell.font = { bold: true, size: 16, color: { argb: COLORS.white } };
+    titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.navy } };
+    titleCell.alignment = { vertical: 'middle', horizontal: 'left' };
+    worksheet.getRow(1).height = 28;
+
+    const subtitleCell = worksheet.getCell('A2');
+    subtitleCell.value = subtitle;
+    subtitleCell.font = { color: { argb: COLORS.navy2 }, italic: true };
+    subtitleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.blueLight } };
+  };
+
+  const applyDataBars = (worksheet: ExcelJS.Worksheet, columns: string[], fromRow: number, toRow: number, color = COLORS.blue) => {
+    if (toRow < fromRow) return;
+    columns.forEach(col => {
+      worksheet.addConditionalFormatting({
+        ref: `${col}${fromRow}:${col}${toRow}`,
+        rules: [{
+          type: 'dataBar',
+          cfvo: [{ type: 'min' }, { type: 'max' }],
+          color: { argb: color },
+        } as any],
+      });
+    });
+  };
+
+  const styleHeaderRow = (row: ExcelJS.Row, fill = COLORS.navy) => {
+    row.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: COLORS.white } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fill } };
+      cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    });
+  };
+
+  const addAlertSheet = (workbook: ExcelJS.Workbook, rows: Record<string, unknown>[]) => {
+    const worksheet = workbook.addWorksheet('Alertas', { views: [{ state: 'frozen', ySplit: 4 }] });
+    const exportKeys = getAllExportKeys(rows);
+    const headers = exportKeys.map(key => exportHeaderOverrides[key] ?? normalizeKey(key));
+    addTitle(worksheet, 'Alertas GPS', `Total registros: ${rows.length} - Generado: ${new Date().toLocaleString('es-CO')}`, headers.length);
+
+    worksheet.addTable({
+      name: 'TablaAlertasGps',
+      ref: 'A4',
+      headerRow: true,
+      totalsRow: false,
+      style: { theme: 'TableStyleMedium2', showRowStripes: true },
+      columns: headers.map(header => ({ name: header, filterButton: true })),
+      rows: rows.map(row => exportKeys.map(key => formatExportValue(row[key]))),
     });
 
-    const worksheet = XLSX.utils.aoa_to_sheet(sheetRows);
-    worksheet['!cols'] = [{ wch: 34 }, { wch: 18 }, { wch: 18 }];
-    const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
-    for (let r = range.s.r; r <= range.e.r; r++) {
-      const address = XLSX.utils.encode_cell({ r, c: 0 });
-      const value = worksheet[address]?.v;
-      if (typeof value === 'string' && ['Resumen', 'Top placas', 'Por contrato', 'Por GPS', 'Por estado', 'Por fecha'].includes(value)) {
-        applyTitleStyle(worksheet, address);
-      }
-    }
-    return worksheet;
+    styleHeaderRow(worksheet.getRow(4));
+    setColumnWidths(worksheet, headers.map((header, index) => {
+      const key = exportKeys[index];
+      const base = ['lugar', 'raw_data'].includes(key) ? 36 : ['conductor', 'contrato_nombre'].includes(key) ? 26 : 16;
+      return Math.max(base, Math.min(42, header.length + 4));
+    }));
+
+    rows.forEach((row, index) => {
+      const excelRow = index + 5;
+      const url = mapsUrl(row);
+      if (!url) return;
+      ['lugar', 'latitud', 'longitud'].forEach(key => {
+        const colIndex = exportKeys.indexOf(key);
+        if (colIndex === -1) return;
+        const cell = worksheet.getCell(excelRow, colIndex + 1);
+        cell.value = { text: String(cell.value ?? ''), hyperlink: url, tooltip: 'Abrir ubicacion en Google Maps' };
+        cell.font = { color: { argb: '0563C1' }, underline: true };
+      });
+    });
+
+    const numericLetters = ['velocidad', 'infraccion_80_kmh', 'excesos_varios_parametros', 'excesos_50_80_kmh', 'frenadas_bruscas']
+      .map(key => exportKeys.indexOf(key))
+      .filter(index => index >= 0)
+      .map(index => columnLetter(index + 1));
+    applyDataBars(worksheet, numericLetters, 5, rows.length + 4, COLORS.green);
+    styleWorksheet(worksheet);
   };
 
-  const handleExport = () => {
+  const addAnalysisSection = (
+    worksheet: ExcelJS.Worksheet,
+    startRow: number,
+    title: string,
+    headers: string[],
+    rows: Array<Array<string | number>>,
+    accent: string
+  ) => {
+    worksheet.mergeCells(startRow, 1, startRow, headers.length);
+    const titleCell = worksheet.getCell(startRow, 1);
+    titleCell.value = title;
+    titleCell.font = { bold: true, color: { argb: COLORS.white } };
+    titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: accent } };
+    worksheet.getRow(startRow + 1).values = [, ...headers];
+    styleHeaderRow(worksheet.getRow(startRow + 1), COLORS.navy2);
+    rows.forEach((row, index) => {
+      worksheet.getRow(startRow + 2 + index).values = [, ...row];
+    });
+    return startRow + rows.length + 4;
+  };
+
+  const addAnalysisSheet = (workbook: ExcelJS.Workbook, rows: Record<string, unknown>[]) => {
+    const worksheet = workbook.addWorksheet('Analisis');
+    const velocidades = rows.map(row => toNumber(row.velocidad)).filter(v => v > 0);
+    const resumen: Array<Array<string | number>> = [
+      ['Total registros', rows.length],
+      ['Vehiculos unicos', new Set(rows.map(row => String(row.placa ?? '').trim()).filter(Boolean)).size],
+      ['Conductores unicos', new Set(rows.map(row => String(row.conductor ?? '').trim()).filter(Boolean)).size],
+      ['Conductores identificados', rows.filter(row => row.conductor_identificado === true).length],
+      ['Registros sin conductor identificado', rows.filter(row => row.conductor_identificado === false).length],
+      ['Velocidad promedio', velocidades.length ? Number((velocidades.reduce((a, b) => a + b, 0) / velocidades.length).toFixed(2)) : 0],
+      ['Velocidad maxima', velocidades.length ? Math.max(...velocidades) : 0],
+      ['Infracciones 80 km/h', rows.reduce((acc, row) => acc + toNumber(row.infraccion_80_kmh), 0)],
+      ['Excesos varios parametros', rows.reduce((acc, row) => acc + toNumber(row.excesos_varios_parametros), 0)],
+      ['Excesos 50-80 km/h', rows.reduce((acc, row) => acc + toNumber(row.excesos_50_80_kmh), 0)],
+      ['Frenadas bruscas', rows.reduce((acc, row) => acc + toNumber(row.frenadas_bruscas), 0)],
+      ['Registros con coordenadas', rows.filter(hasCoordinates).length],
+    ];
+
+    addTitle(worksheet, 'Analisis de Alertas GPS', `Generado: ${new Date().toLocaleString('es-CO')}`, 4);
+    let nextRow = addAnalysisSection(worksheet, 4, 'Resumen ejecutivo', ['Indicador', 'Valor'], resumen, COLORS.blue);
+    nextRow = addAnalysisSection(worksheet, nextRow, 'Top placas', ['Placa', 'Cantidad'], countBy(rows, 'placa').slice(0, 15).map(r => [r.Item, r.Cantidad]), COLORS.green);
+    nextRow = addAnalysisSection(worksheet, nextRow, 'Por contrato', ['Contrato', 'Cantidad'], countBy(rows, 'contrato_nombre').map(r => [r.Item, r.Cantidad]), COLORS.amber);
+    nextRow = addAnalysisSection(worksheet, nextRow, 'Por GPS', ['GPS', 'Cantidad'], countBy(rows, 'gps').map(r => [r.Item, r.Cantidad]), COLORS.orange);
+    addAnalysisSection(worksheet, nextRow, 'Por estado', ['Estado', 'Cantidad'], countBy(rows, 'estado').map(r => [r.Item, r.Cantidad]), COLORS.red);
+
+    setColumnWidths(worksheet, [36, 18, 22, 18]);
+    applyDataBars(worksheet, ['B'], 6, worksheet.rowCount, COLORS.blue);
+    styleWorksheet(worksheet);
+  };
+
+  const addDateContractSheet = (workbook: ExcelJS.Workbook, rows: Record<string, unknown>[]) => {
+    const worksheet = workbook.addWorksheet('Fecha Contrato');
+    const tableRows = buildDateContractRows(rows);
+    addTitle(worksheet, 'Cantidades por fecha y contrato', `Total grupos: ${tableRows.length} - Generado: ${new Date().toLocaleString('es-CO')}`, 6);
+
+    worksheet.addTable({
+      name: 'TablaFechaContrato',
+      ref: 'A4',
+      headerRow: true,
+      totalsRow: true,
+      style: { theme: 'TableStyleMedium4', showRowStripes: true },
+      columns: [
+        { name: 'Fecha', filterButton: true },
+        { name: 'Contrato', filterButton: true },
+        { name: 'Excesos 80 km/h', totalsRowFunction: 'sum', filterButton: true },
+        { name: 'Velocidad > 50 hasta 80 km/h', totalsRowFunction: 'sum', filterButton: true },
+        { name: 'Frenadas Bruscas', totalsRowFunction: 'sum', filterButton: true },
+        { name: 'Total', totalsRowFunction: 'sum', filterButton: true },
+      ],
+      rows: tableRows.map(row => [row.fecha, row.contrato, row.excesos80, row.excesos50a80, row.frenadas, row.total]),
+    });
+
+    setColumnWidths(worksheet, [14, 38, 18, 30, 18, 14]);
+    styleHeaderRow(worksheet.getRow(4), COLORS.navy);
+    applyDataBars(worksheet, ['C', 'D', 'E', 'F'], 5, tableRows.length + 4, COLORS.blue);
+    styleWorksheet(worksheet);
+  };
+
+  const downloadWorkbook = async (workbook: ExcelJS.Workbook, filename: string) => {
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.click();
+    window.URL.revokeObjectURL(url);
+  };
+
+  const handleExport = async () => {
     if (data.length === 0) {
       alert('No hay datos para exportar');
       return;
     }
 
-    const exportKeys = getAllExportKeys(sorted);
-    const exportHeaders = exportKeys.map(key => exportHeaderOverrides[key] ?? normalizeKey(key));
-    const exportData = sorted.map(row => exportKeys.map(key => formatExportValue(row[key])));
+    const ExcelJSModule = await import('exceljs');
+    const workbook = new ExcelJSModule.Workbook();
+    workbook.creator = 'Magnex Torre';
+    workbook.created = new Date();
+    workbook.modified = new Date();
 
-    const worksheet = XLSX.utils.aoa_to_sheet([exportHeaders, ...exportData]);
-    worksheet['!cols'] = exportHeaders.map(header => ({ wch: Math.max(12, String(header).length + 4) }));
-    worksheet['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: exportData.length, c: exportHeaders.length - 1 } }) };
-    applyHeaderStyle(worksheet, XLSX.utils.decode_range(worksheet['!ref'] || 'A1'), 0);
-    addHyperlinks(worksheet, sorted, exportKeys);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Alertas');
-    XLSX.utils.book_append_sheet(workbook, buildAnalysisSheets(sorted), 'Analisis');
-    XLSX.utils.book_append_sheet(workbook, buildDateContractSheet(sorted), 'Fecha Contrato');
-    XLSX.writeFile(workbook, `${exportFileName}_${new Date().toISOString().slice(0, 10)}.xlsx`, { cellStyles: true });
+    addAlertSheet(workbook, sorted);
+    addAnalysisSheet(workbook, sorted);
+    if (includeDateContractSheet) addDateContractSheet(workbook, sorted);
+
+    await downloadWorkbook(workbook, `${exportFileName}_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
   if (data.length === 0) {
@@ -433,7 +510,7 @@ export const ReportsTable: React.FC<ReportsTableProps> = ({
               >
                 {columns.map((col) => (
                   <td key={col.key} className="px-3 py-2 text-slate-700 dark:text-slate-300">
-                    {col.render ? col.render(row[col.key], row) : String(row[col.key] ?? '—')}
+                    {col.render ? col.render(row[col.key], row) : String(row[col.key] ?? '-')}
                   </td>
                 ))}
               </tr>
@@ -442,7 +519,6 @@ export const ReportsTable: React.FC<ReportsTableProps> = ({
         </table>
       </div>
 
-      {/* Paginación */}
       {totalPages > 1 && (
         <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
           <span>{data.length} registros{typeof maxRows === 'number' && data.length > maxRows ? ` (mostrando ${maxRows})` : ''}</span>
@@ -452,7 +528,7 @@ export const ReportsTable: React.FC<ReportsTableProps> = ({
               disabled={page === 0}
               className="px-2 py-1 rounded border border-slate-200 dark:border-slate-700 disabled:opacity-40 hover:bg-slate-100 dark:hover:bg-slate-700"
             >
-              ‹
+              &lsaquo;
             </button>
             {Array.from({ length: Math.min(totalPages, 5) }, (_, i) => i + firstVisiblePage).map((p) => (
               <button
@@ -468,7 +544,7 @@ export const ReportsTable: React.FC<ReportsTableProps> = ({
               disabled={page === totalPages - 1}
               className="px-2 py-1 rounded border border-slate-200 dark:border-slate-700 disabled:opacity-40 hover:bg-slate-100 dark:hover:bg-slate-700"
             >
-              ›
+              &rsaquo;
             </button>
           </div>
         </div>
@@ -477,18 +553,16 @@ export const ReportsTable: React.FC<ReportsTableProps> = ({
   );
 };
 
-// ── Badge de semáforo para tablas ─────────────────────────────────────────────
-
 export const SemaforoBadge: React.FC<{ calificacion: number }> = ({ calificacion }) => {
   const config =
     calificacion >= 85 ? { label: 'BUENO', cls: 'bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-400' } :
     calificacion >= 70 ? { label: 'REGULAR', cls: 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400' } :
-    { label: 'CRÍTICO', cls: 'bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-400' };
+    { label: 'CRITICO', cls: 'bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-400' };
 
   return (
     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${config.cls}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${calificacion >= 85 ? 'bg-green-500' : calificacion >= 70 ? 'bg-amber-500' : 'bg-red-500'}`} />
-      {calificacion.toFixed(1)} – {config.label}
+      {calificacion.toFixed(1)} - {config.label}
     </span>
   );
 };

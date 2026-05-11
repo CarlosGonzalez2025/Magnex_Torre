@@ -368,6 +368,7 @@ export const DailyReports: React.FC = () => {
                 data={historial}
                 emptyMessage="No hay alertas cargadas para el rango seleccionado."
                 exportFileName={`alertas_diarias_registradas_${fechaInicio}_${fechaFin}`}
+                includeDateContractSheet={!contratoId}
               />
             )}
           </div>
@@ -396,6 +397,7 @@ export const DailyReports: React.FC = () => {
                 data={pendientes}
                 emptyMessage="No hay alertas pendientes para el rango seleccionado."
                 exportFileName={`alertas_diarias_no_registradas_${fechaInicio}_${fechaFin}`}
+                includeDateContractSheet={!contratoId}
               />
             )}
           </div>
