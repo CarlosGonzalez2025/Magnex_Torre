@@ -77,6 +77,7 @@ export default function App() {
   const [showApiDetails, setShowApiDetails] = useState(false);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const isReportsTab = activeTab === 'daily-reports' || activeTab === 'monthly-reports';
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -458,10 +459,10 @@ export default function App() {
 
             {/* API Status Panel (Replaces old banners with collapsible modern UI) */}
             {apiStatus && (
-              <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden transition-all duration-300">
+              <div className={`bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden transition-all duration-300 ${isReportsTab ? 'hidden xl:block' : ''}`}>
                 <button
                   onClick={() => setShowApiDetails(!showApiDetails)}
-                  className="w-full px-4 py-3 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors"
+                  className={`${isReportsTab ? 'px-4 py-2.5' : 'px-4 py-3'} w-full flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors`}
                 >
                   <div className="flex items-center gap-3">
                     <Database className="w-5 h-5 text-slate-600 dark:text-slate-400" />
@@ -517,7 +518,7 @@ export default function App() {
             )}
 
             {/* Controls / Filters Bar (Siempre visible) */}
-            <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-col md:flex-row gap-4 items-center justify-between transition-colors">
+            {!isReportsTab && <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-col md:flex-row gap-4 items-center justify-between transition-colors">
 
               {/* Search */}
               <div className="relative w-full md:w-96 group">
@@ -557,7 +558,7 @@ export default function App() {
                   <option value={VehicleStatus.OFF}>Apagado</option>
                 </select>
               </div>
-            </div>
+            </div>}
 
             {/* Content Views */}
             <div className="min-h-[500px] relative transition-all">

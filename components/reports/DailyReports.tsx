@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { CalendarDays, Upload, FileText, RefreshCw, Download } from 'lucide-react';
+import { CalendarDays, Upload, FileText, RefreshCw, Download, BarChart3 } from 'lucide-react';
 import { ExcelDropzone } from './ExcelDropzone';
 import { ReportsTable, ErroresTable } from './ReportsTable';
 import { importarExcel, ImportResult } from '../../services/importService';
@@ -20,6 +20,9 @@ const ayer = () => {
   d.setDate(d.getDate() - 1);
   return d.toISOString().slice(0, 10);
 };
+
+const toNum = (value: unknown) => Number(value ?? 0) || 0;
+const fechaCorta = (value: unknown) => String(value ?? '').slice(0, 10);
 
 export const DailyReports: React.FC = () => {
   const [vista, setVista] = useState<Vista>('historial');
@@ -106,11 +109,36 @@ export const DailyReports: React.FC = () => {
     const placas = new Set(rows.map(r => String(r.placa ?? '')).filter(Boolean));
     const conductoresId = new Set(rows.filter(r => r.conductor_identificado).map(r => String(r.conductor ?? '').toUpperCase().trim()).filter(Boolean));
     const sinIbutton = new Set(rows.filter(r => !r.conductor_identificado).map(r => `${r.placa}|${r.fecha_dia}`));
-    const infracciones80 = rows.reduce((acc, r) => acc + Number(r.infraccion_80_kmh ?? 0), 0);
-    const excesosVarios = rows.reduce((acc, r) => acc + Number(r.excesos_varios_parametros ?? 0), 0);
-    const excesos50a80 = rows.reduce((acc, r) => acc + Number(r.excesos_50_80_kmh ?? 0), 0);
-    const frenadas = rows.reduce((acc, r) => acc + Number(r.frenadas_bruscas ?? 0), 0);
+    const infracciones80 = rows.reduce((acc, r) => acc + toNum(r.infraccion_80_kmh), 0);
+    const excesosVarios = rows.reduce((acc, r) => acc + toNum(r.excesos_varios_parametros), 0);
+    const excesos50a80 = rows.reduce((acc, r) => acc + toNum(r.excesos_50_80_kmh), 0);
+    const frenadas = rows.reduce((acc, r) => acc + toNum(r.frenadas_bruscas), 0);
     return { placas: placas.size, conductoresId: conductoresId.size, sinIbutton: sinIbutton.size, infracciones80, excesosVarios, excesos50a80, frenadas };
+  }, [historial]);
+
+  const resumenFechaContrato = useMemo(() => {
+    const grupos = new Map<string, {
+      fecha: string;
+      contrato: string;
+      excesos80: number;
+      excesos50a80: number;
+      frenadas: number;
+    }>();
+
+    historial.forEach((row) => {
+      const fecha = fechaCorta(row.fecha_dia || row.fecha);
+      const contrato = String(row.contrato_nombre || 'Sin contrato').trim() || 'Sin contrato';
+      const key = `${fecha}|${contrato}`;
+      const current = grupos.get(key) ?? { fecha, contrato, excesos80: 0, excesos50a80: 0, frenadas: 0 };
+      current.excesos80 += toNum(row.infraccion_80_kmh);
+      current.excesos50a80 += toNum(row.excesos_50_80_kmh);
+      current.frenadas += toNum(row.frenadas_bruscas);
+      grupos.set(key, current);
+    });
+
+    return Array.from(grupos.values()).sort((a, b) =>
+      a.fecha.localeCompare(b.fecha) || a.contrato.localeCompare(b.contrato)
+    );
   }, [historial]);
 
   const colsAlertas = [
@@ -142,24 +170,55 @@ export const DailyReports: React.FC = () => {
   ];
 
   return (
-    <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-blue-100 dark:bg-blue-950/40 flex items-center justify-center">
-            <CalendarDays className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+    <div className="space-y-4 max-w-[1600px] mx-auto">
+      <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 shadow-sm">
+        <div className="flex flex-col xl:flex-row xl:items-end gap-4 justify-between">
+          <div className="flex items-center gap-3 min-w-[260px]">
+            <div className="w-10 h-10 rounded-xl bg-blue-100 dark:bg-blue-950/40 flex items-center justify-center">
+              <CalendarDays className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">Informes Diarios de Alertas GPS</h1>
+              <p className="text-sm text-slate-500 dark:text-slate-400">Reporte dia vencido por rango de fechas y contrato</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">Informes Diarios de Alertas GPS</h1>
-            <p className="text-sm text-slate-500 dark:text-slate-400">Reporte dia vencido por rango de fechas y contrato</p>
-          </div>
+
+          {vista === 'historial' && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-[170px_170px_minmax(240px,1fr)_auto] gap-3 xl:flex-1">
+              <div>
+                <label className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 block">Fecha inicio</label>
+                <input type="date" value={fechaInicio} onChange={(e) => setFechaInicio(e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 block">Fecha fin</label>
+                <input type="date" value={fechaFin} min={fechaInicio} onChange={(e) => setFechaFin(e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 block">Contrato</label>
+                <select value={contratoId} onChange={(e) => setContratoId(e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="">Todos los contratos</option>
+                  {contratos.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                </select>
+              </div>
+              <button
+                onClick={handleGenerar}
+                disabled={generando || !fechaInicio || !fechaFin}
+                className="self-end w-full xl:w-auto px-5 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 dark:disabled:bg-slate-700 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2 whitespace-nowrap"
+              >
+                {generando ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <Download className="w-4 h-4" />}
+                {generando ? 'Generando...' : 'Generar PDF'}
+              </button>
+            </div>
+          )}
+
+          <button
+            onClick={() => setVista(v => v === 'historial' ? 'subir' : 'historial')}
+            className="self-start xl:self-end inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-sm font-medium text-slate-700 dark:text-slate-300 transition-colors whitespace-nowrap"
+          >
+            <Upload className="w-4 h-4" />
+            {vista === 'historial' ? 'Subir alertas Excel' : 'Ver historial'}
+          </button>
         </div>
-        <button
-          onClick={() => setVista(v => v === 'historial' ? 'subir' : 'historial')}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-sm font-medium text-slate-700 dark:text-slate-300 transition-colors"
-        >
-          <Upload className="w-4 h-4" />
-          {vista === 'historial' ? 'Subir alertas Excel' : 'Ver historial'}
-        </button>
       </div>
 
       <SheetsSyncPanel />
@@ -208,38 +267,17 @@ export const DailyReports: React.FC = () => {
         </div>
       ) : (
         <div className="space-y-4">
-          <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              <div>
-                <label className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 block">Fecha inicio</label>
-                <input type="date" value={fechaInicio} onChange={(e) => setFechaInicio(e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-blue-500" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 block">Fecha fin</label>
-                <input type="date" value={fechaFin} min={fechaInicio} onChange={(e) => setFechaFin(e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-blue-500" />
-              </div>
-              <div className="lg:col-span-2">
-                <label className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 block">Contrato</label>
-                <select value={contratoId} onChange={(e) => setContratoId(e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-blue-500">
-                  <option value="">Todos los contratos</option>
-                  {contratos.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-                </select>
-              </div>
-            </div>
-            <button
-              onClick={handleGenerar}
-              disabled={generando || !fechaInicio || !fechaFin}
-              className="w-full sm:w-auto px-6 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 dark:disabled:bg-slate-700 text-white font-semibold text-sm transition-colors flex items-center gap-2"
-            >
-              {generando ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <Download className="w-4 h-4" />}
-              {generando ? 'Generando informe...' : 'Generar PDF de alertas'}
-            </button>
-          </div>
 
           {/* ── Panel de análisis de alertas ── */}
           {!cargandoHistorial && analisisDiario && (
-            <div className="bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3">
-              <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-300">Análisis del período</h2>
+            <div className="bg-slate-50 dark:bg-slate-900/50 rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-2">
+                  <BarChart3 className="w-4 h-4 text-blue-600" />
+                  Análisis del período
+                </h2>
+                <span className="text-xs text-slate-500 dark:text-slate-400">{fechaInicio} a {fechaFin}</span>
+              </div>
               <div className="space-y-1.5">
                 <p className="text-[10px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider">Flota y trazabilidad</p>
                 <div className="flex flex-wrap gap-2">
@@ -276,6 +314,36 @@ export const DailyReports: React.FC = () => {
                     <span className="text-xl font-bold text-orange-500 dark:text-orange-400">{analisisDiario.frenadas}</span>
                     <span className="text-xs text-slate-500 dark:text-slate-400 text-center">Frenadas bruscas</span>
                   </div>
+                </div>
+              </div>
+              <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
+                <div className="px-3 py-2 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+                  <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">Cantidades por fecha y contrato</p>
+                  <span className="text-[10px] text-slate-400">{resumenFechaContrato.length} grupos</span>
+                </div>
+                <div className="overflow-auto max-h-64">
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 bg-slate-800 text-white">
+                      <tr>
+                        <th className="px-3 py-2 text-left">Fecha</th>
+                        <th className="px-3 py-2 text-left">Contrato</th>
+                        <th className="px-3 py-2 text-right">Excesos 80</th>
+                        <th className="px-3 py-2 text-right">50-80</th>
+                        <th className="px-3 py-2 text-right">Frenadas</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                      {resumenFechaContrato.map(row => (
+                        <tr key={`${row.fecha}-${row.contrato}`} className="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                          <td className="px-3 py-1.5 font-medium text-slate-700 dark:text-slate-300 whitespace-nowrap">{row.fecha}</td>
+                          <td className="px-3 py-1.5 text-slate-700 dark:text-slate-300">{row.contrato}</td>
+                          <td className="px-3 py-1.5 text-right font-semibold text-red-600">{row.excesos80}</td>
+                          <td className="px-3 py-1.5 text-right font-semibold text-amber-600">{row.excesos50a80}</td>
+                          <td className="px-3 py-1.5 text-right font-semibold text-orange-600">{row.frenadas}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             </div>

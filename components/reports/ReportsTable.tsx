@@ -226,6 +226,91 @@ export const ReportsTable: React.FC<ReportsTableProps> = ({
       .map(([item, cantidad]) => ({ Item: item, Cantidad: cantidad }));
   };
 
+  const applyHeaderStyle = (worksheet: XLSX.WorkSheet, range: XLSX.Range, row = 0) => {
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const address = XLSX.utils.encode_cell({ r: row, c });
+      if (!worksheet[address]) continue;
+      worksheet[address].s = {
+        font: { bold: true, color: { rgb: 'FFFFFF' } },
+        fill: { fgColor: { rgb: '1F2937' } },
+        alignment: { horizontal: 'center', vertical: 'center' },
+        border: {
+          top: { style: 'thin', color: { rgb: 'CBD5E1' } },
+          bottom: { style: 'thin', color: { rgb: 'CBD5E1' } },
+        },
+      };
+    }
+  };
+
+  const applyTitleStyle = (worksheet: XLSX.WorkSheet, address: string) => {
+    if (!worksheet[address]) return;
+    worksheet[address].s = {
+      font: { bold: true, sz: 15, color: { rgb: '0F172A' } },
+      fill: { fgColor: { rgb: 'DBEAFE' } },
+      alignment: { horizontal: 'left', vertical: 'center' },
+    };
+  };
+
+  const createSheetFromRows = (
+    title: string,
+    headers: string[],
+    rows: unknown[][],
+    widths: number[]
+  ) => {
+    const generatedAt = new Date().toLocaleString('es-CO');
+    const worksheet = XLSX.utils.aoa_to_sheet([
+      [title],
+      [`Generado: ${generatedAt}`],
+      [],
+      headers,
+      ...rows,
+    ]);
+    const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
+    worksheet['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: Math.max(0, headers.length - 1) } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: Math.max(0, headers.length - 1) } },
+    ];
+    worksheet['!cols'] = headers.map((header, index) => ({ wch: widths[index] ?? Math.max(12, header.length + 4) }));
+    worksheet['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 3, c: 0 }, e: { r: range.e.r, c: headers.length - 1 } }) };
+    applyTitleStyle(worksheet, 'A1');
+    applyHeaderStyle(worksheet, range, 3);
+    return worksheet;
+  };
+
+  const buildDateContractRows = (rows: Record<string, unknown>[]) => {
+    const groups = new Map<string, {
+      fecha: string;
+      contrato: string;
+      excesos80: number;
+      excesos50a80: number;
+      frenadas: number;
+      total: number;
+    }>();
+
+    rows.forEach(row => {
+      const fecha = String(row.fecha_dia || row.fecha || '').slice(0, 10);
+      const contrato = String(row.contrato_nombre || 'Sin contrato').trim() || 'Sin contrato';
+      const key = `${fecha}|${contrato}`;
+      const current = groups.get(key) ?? { fecha, contrato, excesos80: 0, excesos50a80: 0, frenadas: 0, total: 0 };
+      current.excesos80 += toNumber(row.infraccion_80_kmh);
+      current.excesos50a80 += toNumber(row.excesos_50_80_kmh);
+      current.frenadas += toNumber(row.frenadas_bruscas);
+      current.total = current.excesos80 + current.excesos50a80 + current.frenadas;
+      groups.set(key, current);
+    });
+
+    return Array.from(groups.values())
+      .sort((a, b) => a.fecha.localeCompare(b.fecha) || a.contrato.localeCompare(b.contrato))
+      .map(row => [row.fecha, row.contrato, row.excesos80, row.excesos50a80, row.frenadas, row.total]);
+  };
+
+  const buildDateContractSheet = (rows: Record<string, unknown>[]) => createSheetFromRows(
+    'Cantidades por fecha y contrato',
+    ['Fecha', 'Contrato', 'Excesos 80 km/h', 'Velocidad > 50 hasta 80 km/h', 'Frenadas Bruscas', 'Total'],
+    buildDateContractRows(rows),
+    [14, 36, 18, 28, 18, 12]
+  );
+
   const buildAnalysisSheets = (rows: Record<string, unknown>[]) => {
     const total = rows.length;
     const velocidades = rows.map(row => toNumber(row.velocidad)).filter(v => v > 0);
@@ -264,6 +349,14 @@ export const ReportsTable: React.FC<ReportsTableProps> = ({
 
     const worksheet = XLSX.utils.aoa_to_sheet(sheetRows);
     worksheet['!cols'] = [{ wch: 34 }, { wch: 18 }, { wch: 18 }];
+    const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
+    for (let r = range.s.r; r <= range.e.r; r++) {
+      const address = XLSX.utils.encode_cell({ r, c: 0 });
+      const value = worksheet[address]?.v;
+      if (typeof value === 'string' && ['Resumen', 'Top placas', 'Por contrato', 'Por GPS', 'Por estado', 'Por fecha'].includes(value)) {
+        applyTitleStyle(worksheet, address);
+      }
+    }
     return worksheet;
   };
 
@@ -280,11 +373,13 @@ export const ReportsTable: React.FC<ReportsTableProps> = ({
     const worksheet = XLSX.utils.aoa_to_sheet([exportHeaders, ...exportData]);
     worksheet['!cols'] = exportHeaders.map(header => ({ wch: Math.max(12, String(header).length + 4) }));
     worksheet['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: exportData.length, c: exportHeaders.length - 1 } }) };
+    applyHeaderStyle(worksheet, XLSX.utils.decode_range(worksheet['!ref'] || 'A1'), 0);
     addHyperlinks(worksheet, sorted, exportKeys);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Alertas');
     XLSX.utils.book_append_sheet(workbook, buildAnalysisSheets(sorted), 'Analisis');
-    XLSX.writeFile(workbook, `${exportFileName}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    XLSX.utils.book_append_sheet(workbook, buildDateContractSheet(sorted), 'Fecha Contrato');
+    XLSX.writeFile(workbook, `${exportFileName}_${new Date().toISOString().slice(0, 10)}.xlsx`, { cellStyles: true });
   };
 
   if (data.length === 0) {
