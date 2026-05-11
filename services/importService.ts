@@ -1025,7 +1025,10 @@ export async function importarExcel(
     .select('id')
     .single();
 
-  if (errorCarga || !carga) throw new Error('No se pudo registrar la carga');
+  if (errorCarga) {
+    throw new Error(`No se pudo registrar la carga: ${errorCarga.message}`);
+  }
+  if (!carga) throw new Error('No se pudo registrar la carga: Supabase no retornó el ID de la carga');
   const cargaId = carga.id as string;
 
   try {
