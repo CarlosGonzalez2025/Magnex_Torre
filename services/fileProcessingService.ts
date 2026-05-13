@@ -29,9 +29,67 @@ export interface ProcessingResult {
  * Convierte fecha en formato DD/MM/YYYY HH:MM:SS a ISO 8601
  * Soporta múltiples formatos comunes de fecha
  */
-function parseTimestampToISO(timestamp: string | null | undefined): string {
+function normalizeText(value: unknown): string {
+  return String(value ?? '')
+    .replace(/Ã¡/gi, 'a')
+    .replace(/Ã©/gi, 'e')
+    .replace(/Ã­/gi, 'i')
+    .replace(/Ã³/gi, 'o')
+    .replace(/Ãº/gi, 'u')
+    .replace(/Ã±/gi, 'n')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+function normalizeHeader(value: unknown): string {
+  return normalizeText(value).replace(/[^a-z0-9]/g, '');
+}
+
+function findHeaderIndex(headers: string[], exactNames: string[]): number {
+  return headers.findIndex(header => exactNames.includes(header));
+}
+
+function parseNumeric(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+
+  const normalized = String(value)
+    .trim()
+    .replace(/\s+/g, '')
+    .replace(',', '.')
+    .replace(/[^\d.-]/g, '');
+
+  if (!normalized) return null;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseTimestampToISO(timestamp: unknown): string {
   if (!timestamp) {
     return new Date().toISOString();
+  }
+
+  if (timestamp instanceof Date && !isNaN(timestamp.getTime())) {
+    return timestamp.toISOString();
+  }
+
+  if (typeof timestamp === 'number' && Number.isFinite(timestamp)) {
+    const parsedDate = XLSX.SSF.parse_date_code(timestamp);
+    if (parsedDate) {
+      const dateObj = new Date(Date.UTC(
+        parsedDate.y,
+        parsedDate.m - 1,
+        parsedDate.d,
+        parsedDate.H,
+        parsedDate.M,
+        Math.floor(parsedDate.S)
+      ));
+      if (!isNaN(dateObj.getTime())) {
+        return dateObj.toISOString();
+      }
+    }
   }
 
   const timestampStr = timestamp.toString().trim();
@@ -89,7 +147,7 @@ function processFagorFile(workbook: XLSX.WorkBook): ProcessingResult {
     for (let i = 0; i < rawData.length; i++) {
       const row = rawData[i];
       if (row.some((cell: any) =>
-        cell && cell.toString().toLowerCase().includes('matrícula')
+        normalizeHeader(cell) === 'matricula'
       )) {
         headerRowIndex = i;
         break;
@@ -105,20 +163,25 @@ function processFagorFile(workbook: XLSX.WorkBook): ProcessingResult {
       };
     }
 
-    const headers = rawData[headerRowIndex].map((h: any) =>
-      h ? h.toString().trim().toLowerCase() : ''
+    const displayHeaders = rawData[headerRowIndex].map((h: any) =>
+      h ? h.toString().trim() : ''
     );
+    const headers = rawData[headerRowIndex].map(normalizeHeader);
 
     console.log('📊 FAGOR - Fila de headers encontrada:', headerRowIndex);
-    console.log('📊 FAGOR - Headers detectados:', headers);
+    console.log('📊 FAGOR - Headers detectados:', displayHeaders);
 
     // Mapear índices de columnas
-    const plateIndex = headers.findIndex((h: string) => h.includes('matrícula'));
+    const plateIndex = findHeaderIndex(headers, ['matricula', 'placa']);
 
     // Buscar columna de tipo de alerta (puede ser "Estado", "Iconos", "Alerta", etc.)
-    let alertTypeIndex = headers.findIndex((h: string) =>
-      h.includes('estado') || h.includes('alerta') || h.includes('tipo')
-    );
+    let alertTypeIndex = findHeaderIndex(headers, ['estado', 'alerta', 'tipo']);
+
+    if (alertTypeIndex === -1) {
+      alertTypeIndex = headers.findIndex((h: string) =>
+        h.includes('estado') || h.includes('alerta') || h.includes('tipo')
+      );
+    }
 
     // Si no se encuentra columna específica, buscar en columnas que tengan texto
     if (alertTypeIndex === -1) {
@@ -127,7 +190,7 @@ function processFagorFile(workbook: XLSX.WorkBook): ProcessingResult {
       if (firstDataRow) {
         for (let idx = 0; idx < firstDataRow.length; idx++) {
           const cellValue = firstDataRow[idx];
-          if (cellValue && cellValue.toString().toLowerCase().includes('alrm')) {
+          if (cellValue && normalizeText(cellValue).includes('alrm')) {
             alertTypeIndex = idx;
             console.log(`📊 FAGOR - Detectado tipo de alerta en columna ${idx} automáticamente`);
             break;
@@ -141,12 +204,29 @@ function processFagorFile(workbook: XLSX.WorkBook): ProcessingResult {
       alertTypeIndex = 0;
     }
 
-    const speedIndex = headers.findIndex((h: string) => h.includes('velocidad'));
-    const timestampIndex = headers.findIndex((h: string) =>
-      h.includes('ult.') || h.includes('pos') || h.includes('fecha')
+    let speedIndex = findHeaderIndex(headers, ['velocidad']);
+    if (speedIndex === -1) {
+      speedIndex = headers.findIndex((h: string) =>
+        h.includes('velocidad') &&
+        !h.includes('exceso') &&
+        !h.includes('taco')
+      );
+    }
+    if (speedIndex === -1) {
+      speedIndex = findHeaderIndex(headers, ['velocidadvehiculotaco', 'velocidadvehiculo']);
+    }
+
+    let timestampIndex = findHeaderIndex(headers, ['fechahora', 'fecha']);
+    if (timestampIndex === -1) {
+      timestampIndex = headers.findIndex((h: string) =>
+        h.includes('ult') || h.includes('pos') || h.includes('fecha')
+      );
+    }
+    const driverIndex = findHeaderIndex(headers, ['conductor']);
+    const locationIndex = findHeaderIndex(headers, ['localidad', 'ubicacion', 'direccion']);
+    const excessSpeedIndex = headers.findIndex((h: string) =>
+      h === 'excesovelocidad' || h === 'excesodevelocidad'
     );
-    const driverIndex = headers.findIndex((h: string) => h.includes('conductor'));
-    const locationIndex = headers.findIndex((h: string) => h.includes('localidad'));
 
     console.log('📊 FAGOR - Índices de columnas:', {
       plate: plateIndex,
@@ -154,7 +234,8 @@ function processFagorFile(workbook: XLSX.WorkBook): ProcessingResult {
       speed: speedIndex,
       timestamp: timestampIndex,
       driver: driverIndex,
-      location: locationIndex
+      location: locationIndex,
+      excessSpeed: excessSpeedIndex
     });
 
     // Mostrar muestra de primera fila de datos para diagnóstico
@@ -166,6 +247,15 @@ function processFagorFile(workbook: XLSX.WorkBook): ProcessingResult {
       return {
         success: false,
         error: 'No se encontró columna de Matrícula',
+        totalRows: 0,
+        gravesDetected: 0
+      };
+    }
+
+    if (timestampIndex === -1) {
+      return {
+        success: false,
+        error: 'No se encontro columna de Fecha Hora',
         totalRows: 0,
         gravesDetected: 0
       };
@@ -196,11 +286,11 @@ function processFagorFile(workbook: XLSX.WorkBook): ProcessingResult {
         : 'Sin especificar';
 
       const speedRaw = speedIndex >= 0 ? row[speedIndex] : null;
-      const speed = speedRaw ? parseFloat(speedRaw.toString()) : null;
+      const speed = parseNumeric(speedRaw);
 
       // Parsear timestamp a formato ISO 8601
       const timestampRaw = timestampIndex >= 0 ? row[timestampIndex] : null;
-      const timestamp = parseTimestampToISO(timestampRaw?.toString());
+      const timestamp = parseTimestampToISO(timestampRaw);
 
       const driver = driverIndex >= 0 ? row[driverIndex]?.toString().trim() : undefined;
       const location = locationIndex >= 0 ? row[locationIndex]?.toString().trim() : undefined;
@@ -210,16 +300,20 @@ function processFagorFile(workbook: XLSX.WorkBook): ProcessingResult {
         console.log('📍 FAGOR - Primera fila con ubicación:', {
           location,
           locationIndex,
-          columna_localidad: headers[locationIndex]
+          columna_localidad: displayHeaders[locationIndex]
         });
       }
 
       // Detectar Falta Grave: "Alrm. de excesos de velocidad"
       // Asegurar que alertType sea string antes de usar métodos
-      const alertTypeLower = alertType ? alertType.toLowerCase() : '';
-      const isGrave = alertTypeLower.includes('alrm') &&
-                      alertTypeLower.includes('exceso') &&
-                      alertTypeLower.includes('velocidad');
+      const alertTypeLower = normalizeText(alertType);
+      const excessSpeedRaw = excessSpeedIndex >= 0 ? row[excessSpeedIndex] : null;
+      const excessSpeedValue = parseNumeric(excessSpeedRaw);
+      const isGrave = (
+        alertTypeLower.includes('alrm') &&
+        alertTypeLower.includes('exceso') &&
+        alertTypeLower.includes('velocidad')
+      ) || (excessSpeedValue !== null && excessSpeedValue > 0);
 
       if (isGrave) {
         gravesCount++;

@@ -220,6 +220,7 @@ export async function saveBatchAlerts(
     const alertsToInsert = alerts.map(alert => ({
       upload_id: uploadId,
       plate: alert.plate,
+      type: alert.alert_type,
       alert_type: alert.alert_type,
       speed: alert.speed,
       timestamp: alert.timestamp,

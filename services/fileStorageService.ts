@@ -36,30 +36,23 @@ const ALLOWED_FILE_TYPES = [
 const STORAGE_BUCKET = 'action-plan-attachments';
 
 /**
- * Inicializar el bucket de almacenamiento si no existe
+ * Verifica disponibilidad del bucket. La creacion requiere permisos admin
+ * y se gestiona con migrations/alerts_module_actions_v16.sql.
  */
 export async function initializeStorage(): Promise<void> {
   try {
-    // Verificar si el bucket existe
-    const { data: buckets } = await supabase.storage.listBuckets();
-    const bucketExists = buckets?.some(bucket => bucket.name === STORAGE_BUCKET);
+    const { error } = await supabase.storage
+      .from(STORAGE_BUCKET)
+      .list('', { limit: 1 });
 
-    if (!bucketExists) {
-      // Crear el bucket si no existe
-      const { error } = await supabase.storage.createBucket(STORAGE_BUCKET, {
-        public: true,
-        fileSizeLimit: MAX_FILE_SIZE,
-        allowedMimeTypes: ALLOWED_FILE_TYPES
-      });
-
-      if (error) {
-        console.error('Error creando bucket:', error);
-      } else {
-        console.log('✅ Bucket de almacenamiento creado exitosamente');
-      }
+    if (error) {
+      console.warn(
+        'Bucket de adjuntos no disponible. Ejecuta migrations/alerts_module_actions_v16.sql en Supabase.',
+        error.message
+      );
     }
   } catch (error) {
-    console.error('Error inicializando storage:', error);
+    console.warn('No se pudo verificar el bucket de adjuntos:', error);
   }
 }
 

@@ -1125,13 +1125,28 @@ export const AlertHistory: React.FC<AlertHistoryProps> = ({ onRefresh }) => {
                             <p className="text-xs text-slate-500 mt-1 italic">{plan.observations}</p>
                           )}
                         </div>
-                        <span className={`text-xs px-2 py-1 rounded ${plan.status === 'completed' ? 'bg-green-100 text-green-700' :
-                            plan.status === 'in_progress' ? 'bg-blue-100 text-blue-700' :
-                              'bg-yellow-100 text-yellow-700'
-                          }`}>
-                          {plan.status === 'completed' ? 'Completado' :
-                            plan.status === 'in_progress' ? 'En Proceso' : 'Pendiente'}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <select
+                            value={plan.status}
+                            onChange={(e) => handleUpdateActionPlanStatus(plan.id, e.target.value as any)}
+                            className={`text-xs px-2 py-1 rounded border ${plan.status === 'completed' ? 'bg-green-100 text-green-700 border-green-200' :
+                                plan.status === 'in_progress' ? 'bg-blue-100 text-blue-700 border-blue-200' :
+                                  'bg-yellow-100 text-yellow-700 border-yellow-200'
+                              }`}
+                            title="Cambiar estado del plan"
+                          >
+                            <option value="pending">Pendiente</option>
+                            <option value="in_progress">En Proceso</option>
+                            <option value="completed">Completado</option>
+                          </select>
+                          <button
+                            onClick={() => handleDeleteActionPlan(plan.id)}
+                            className="p-1.5 rounded text-red-600 hover:bg-red-50 transition-colors"
+                            title="Eliminar plan"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
 
                       {/* Archivos adjuntos */}

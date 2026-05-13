@@ -16,7 +16,7 @@ import { useAuth } from '../contexts/AuthContext';
 
 interface SavedAlertsPanelProps {
   onRefresh?: () => void;
-  onSaveAlert?: (alert: Alert) => void;
+  onSaveAlert?: (alert: Alert) => void | Promise<boolean>;
   onCopyAlert?: (alert: Alert) => void;
 }
 
@@ -195,8 +195,22 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
       sent: false // Defaults
     };
 
-    // Call the parent handler to save to history
-    onSaveAlert(alert);
+    const saveResult = await onSaveAlert(alert);
+    if (saveResult === false) {
+      setAlerts(prevAlerts =>
+        prevAlerts.map(alert =>
+          alert.id === savedAlert.id
+            ? {
+                ...alert,
+                moved_to_history: false,
+                moved_at: undefined,
+                moved_by: undefined
+              }
+            : alert
+        )
+      );
+      return;
+    }
 
     // 🔄 Actualizar BD en segundo plano (sin bloquear la UI)
     markAlertAsMovedToHistory(savedAlert.id, user.email).then(result => {
@@ -305,6 +319,8 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
       )
     );
 
+    const successfullySavedIds: string[] = [];
+
     // Guardar cada alerta en el historial
     for (const savedAlert of selectedAlerts) {
       const alert: Alert = {
@@ -324,11 +340,20 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
         source: savedAlert.source as any,
         sent: false
       };
-      onSaveAlert(alert);
+      const saveResult = await onSaveAlert(alert);
+      if (saveResult !== false) {
+        successfullySavedIds.push(savedAlert.id);
+      }
+    }
+
+    if (successfullySavedIds.length === 0) {
+      window.alert('No se pudo guardar ninguna alerta en el Historial.');
+      loadAlerts();
+      return;
     }
 
     // Marcar en la BD
-    const result = await markMultipleAlertsAsMovedToHistory(Array.from(selectedAlertIds), user.email);
+    const result = await markMultipleAlertsAsMovedToHistory(successfullySavedIds, user.email);
 
     if (result.success) {
       window.alert(`✅ ${result.updatedCount} alerta${result.updatedCount! > 1 ? 's' : ''} guardada${result.updatedCount! > 1 ? 's' : ''} en el Historial`);

@@ -307,7 +307,7 @@ export default function App() {
   };
 
   // Handle save alert to database
-  const handleSaveAlert = async (alertToSave: Alert) => {
+  const handleSaveAlert = async (alertToSave: Alert): Promise<boolean> => {
     try {
       const result = await saveAlertToDatabase(alertToSave, 'Usuario');
 
@@ -323,12 +323,15 @@ export default function App() {
         setAlerts(unsavedAlerts);
 
         window.alert('✅ Alerta guardada en la base de datos\n\nSe ha movido al "Historial" donde puedes agregar planes de acción.');
+        return true;
       } else {
         window.alert('❌ Error al guardar la alerta: ' + result.error);
+        return false;
       }
     } catch (error: any) {
       console.error('Error saving alert:', error);
       alert('❌ Error al guardar la alerta: ' + error.message);
+      return false;
     }
   };
 
@@ -623,3 +626,4 @@ export default function App() {
     </div>
   );
 }
+

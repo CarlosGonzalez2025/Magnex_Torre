@@ -54,6 +54,34 @@ export interface SavedAlertWithPlans extends SavedAlert {
   action_plans: ActionPlan[];
 }
 
+const ACTION_PLAN_ATTACHMENTS_BUCKET = 'action-plan-attachments';
+
+async function removeActionPlanAttachments(attachments?: FileAttachment[]): Promise<void> {
+  if (!attachments || attachments.length === 0) return;
+
+  const filePaths = attachments
+    .map(file => {
+      try {
+        const url = new URL(file.url);
+        const pathParts = url.pathname.split(`/${ACTION_PLAN_ATTACHMENTS_BUCKET}/`);
+        return pathParts.length > 1 ? pathParts[1] : null;
+      } catch {
+        return null;
+      }
+    })
+    .filter((path): path is string => !!path);
+
+  if (filePaths.length === 0) return;
+
+  const { error } = await supabase.storage
+    .from(ACTION_PLAN_ATTACHMENTS_BUCKET)
+    .remove(filePaths);
+
+  if (error) {
+    console.warn('No se pudieron eliminar algunos adjuntos del plan:', error.message);
+  }
+}
+
 // ==================== SAVED_ALERTS FUNCTIONS (Guardado Automático) ====================
 
 /**
@@ -749,7 +777,7 @@ export async function updateActionPlan(
     // 1. Obtener el alert_history_id del plan antes de actualizarlo
     const { data: planData, error: fetchError } = await supabase
       .from('action_plans')
-      .select('alert_history_id')
+      .select('alert_history_id, attachments')
       .eq('id', planId)
       .single();
 
@@ -790,7 +818,7 @@ export async function deleteActionPlan(planId: string): Promise<{ success: boole
     // 1. Obtener el alert_history_id antes de eliminar el plan
     const { data: planData, error: fetchError } = await supabase
       .from('action_plans')
-      .select('alert_history_id')
+      .select('alert_history_id, attachments')
       .eq('id', planId)
       .single();
 
@@ -811,6 +839,8 @@ export async function deleteActionPlan(planId: string): Promise<{ success: boole
       console.error('Error deleting action plan:', error);
       return { success: false, error: error.message };
     }
+
+    await removeActionPlanAttachments(planData.attachments as FileAttachment[] | undefined);
 
     // 3. SINCRONIZAR ESTADO DE LA ALERTA después de eliminar
     // Si ya no quedan planes, la alerta podría volver a "pending"
