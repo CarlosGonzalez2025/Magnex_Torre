@@ -41,8 +41,18 @@ export const ReportFilters: React.FC<ReportFiltersProps> = ({
   const set = (patch: Partial<FiltroState>) => onChange({ ...filtro, ...patch });
 
   const handleFechaInicio = (v: string) => {
-    if (modo === 'daily') set({ fechaInicio: v, fechaFin: v });
-    else set({ fechaInicio: v });
+    if (modo === 'daily') {
+      set({ fechaInicio: v, fechaFin: v });
+    } else {
+      const d = new Date(`${v}T00:00:00`);
+      if (!isNaN(d.getTime())) {
+        const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+        const lastDayStr = `${lastDay.getFullYear()}-${String(lastDay.getMonth() + 1).padStart(2, '0')}-${String(lastDay.getDate()).padStart(2, '0')}`;
+        set({ fechaInicio: v, fechaFin: lastDayStr });
+      } else {
+        set({ fechaInicio: v });
+      }
+    }
   };
 
   return (

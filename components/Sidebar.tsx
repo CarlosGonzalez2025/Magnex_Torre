@@ -27,10 +27,11 @@ import {
     Upload,
     CalendarDays,
     FileBarChart2,
+    Radio,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
-export type TabType = 'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'history-analytics' | 'route-investigation' | 'batch-upload' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'users' | 'maintenance' | 'fleet' | 'alert-config' | 'daily-reports' | 'monthly-reports';
+export type TabType = 'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'history-analytics' | 'route-investigation' | 'batch-upload' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'users' | 'maintenance' | 'fleet' | 'alert-config' | 'daily-reports' | 'monthly-reports' | 'telemetry-processor';
 
 interface SidebarProps {
     activeTab: TabType;
@@ -59,8 +60,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
         }
     });
 
+    // Tipos para los ítems del menú
+    interface MenuItem {
+        id: string;
+        label: string;
+        icon: React.ComponentType<{ className?: string }>;
+        badge?: number;
+    }
+
     // Definición de grupos de menú
-    const menuGroups = [
+    const menuGroups: { id: string; label: string; icon: React.ComponentType<{ className?: string }>; items: MenuItem[] }[] = [
         {
             id: 'monitoring',
             label: 'Monitoreo',
@@ -104,6 +113,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             items: [
                 { id: 'daily-reports', label: 'Informes Diarios', icon: CalendarDays },
                 { id: 'monthly-reports', label: 'Informes Mensuales', icon: BarChart3 },
+                { id: 'telemetry-processor', label: 'Procesador Satelital', icon: Radio },
             ]
         },
     ];

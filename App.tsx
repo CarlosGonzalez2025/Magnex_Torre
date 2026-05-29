@@ -24,11 +24,13 @@ import { UserManagement } from './components/UserManagement';
 import { ThemeToggle } from './components/ThemeToggle';
 import { UserGuideButton } from './components/UserGuide';
 import { Login } from './components/Login';
-import { Sidebar, TabType } from './components/Sidebar';
+import { Sidebar } from './components/Sidebar';
+import type { TabType } from './components/Sidebar';
 import { FleetManagement } from './components/FleetManagement';
 import { AlertSeverityConfig } from './components/AlertSeverityConfig';
 import { DailyReports } from './components/reports/DailyReports';
 import { MonthlyReports } from './components/reports/MonthlyReports';
+import { TelemetryProcessor } from './components/reports/TelemetryProcessor';
 import { fetchFleetData, FleetResponse } from './services/fleetService';
 import { detectAlerts, saveAlertsToStorage, getAlertsFromStorage, getUnsavedAlerts, markAlertAsSent, markAlertAsSaved, cleanOldAlerts, processVehiclesForIdleDetection } from './services/alertService';
 import { saveAlertToDatabase, autoSaveAlert } from './services/databaseService';
@@ -70,14 +72,14 @@ export default function App() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'users' | 'maintenance' | 'daily-reports' | 'monthly-reports'>('dashboard');
+  const [activeTab, setActiveTab] = useState<TabType>('dashboard');
   const [dataSource, setDataSource] = useState<'REAL' | 'DIRECT_API' | 'PARTIAL_DIRECT' | 'ERROR' | 'MOCK'>('REAL');
   const [apiStatus, setApiStatus] = useState<FleetResponse['apiStatus']>();
   const [vehicleCounts, setVehicleCounts] = useState<FleetResponse['vehicleCounts']>();
   const [showApiDetails, setShowApiDetails] = useState(false);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const isReportsTab = activeTab === 'daily-reports' || activeTab === 'monthly-reports';
+  const isReportsTab = activeTab === 'daily-reports' || activeTab === 'monthly-reports' || activeTab === 'telemetry-processor';
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -357,8 +359,8 @@ export default function App() {
     <div className="flex h-screen bg-slate-50 dark:bg-slate-900 overflow-hidden">
       {/* Sidebar Navigation */}
       <Sidebar
-        activeTab={activeTab as TabType}
-        setActiveTab={setActiveTab as (tab: TabType) => void}
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
         criticalAlertsCount={criticalAlertsCount}
@@ -408,7 +410,8 @@ export default function App() {
                                             activeTab === 'maintenance' ? 'Mantenimiento' :
                                               activeTab === 'alert-config' ? 'Configuración de Alertas' :
                                               activeTab === 'daily-reports' ? 'Informes Diarios' :
-                                              activeTab === 'monthly-reports' ? 'Informes Mensuales' : 'Magnex'}
+                                              activeTab === 'monthly-reports' ? 'Informes Mensuales' :
+                                              activeTab === 'telemetry-processor' ? 'Procesador Satelital Directo' : 'Magnex'}
                 </h2>
                 <div className="ml-4 opacity-80 scale-90 origin-left">
                   {getStatusBadge()}
@@ -619,6 +622,7 @@ export default function App() {
               {activeTab === 'alert-config' && <AlertSeverityConfig />}
               {activeTab === 'daily-reports' && <DailyReports />}
               {activeTab === 'monthly-reports' && <MonthlyReports />}
+              {activeTab === 'telemetry-processor' && <TelemetryProcessor />}
             </div>
           </div>
         </main>

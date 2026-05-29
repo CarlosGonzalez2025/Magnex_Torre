@@ -93,6 +93,8 @@ export const MonthlyReports: React.FC = () => {
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
+
+
   useEffect(() => {
     Promise.all([getConductores(), getVehiculos(), getProyectos(), getContratos()]).then(([c, v, p, ct]) => {
       setConductores(c);
@@ -344,7 +346,7 @@ export const MonthlyReports: React.FC = () => {
   ];
 
   return (
-    <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto">
+    <div className="p-4 md:p-6 space-y-6 w-full mx-auto">
       {/* Encabezado */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
@@ -384,21 +386,31 @@ export const MonthlyReports: React.FC = () => {
       <SheetsSyncPanel />
 
       {vista === 'subir' ? (
-        <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6 space-y-4">
-          <h2 className="font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-2">
-            <Upload className="w-4 h-4" /> Carga de datos desde Excel (Mensual)
-          </h2>
+        <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6 space-y-6">
+          <div className="flex flex-col gap-2">
+            <h2 className="font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-2 text-lg">
+              <Upload className="w-5 h-5 text-blue-600 dark:text-blue-400" /> Centro de Importación Mensual
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Sube el archivo consolidado tradicional que unifica los kilometrajes, ralentís y calificaciones en un solo libro de Excel. Asegúrate de que las hojas del archivo tengan los nombres correctos: <code>Conductor</code>, <code>Coltrack_Vehiculos</code> o <code>Ralentis</code>.
+            </p>
+          </div>
+
           <ExcelDropzone
             onFile={handleFile}
             loading={uploadLoading}
             exito={uploadResult?.exito ?? false}
             error={uploadError}
           />
+
           {uploadResult && (
-            <div className={`rounded-lg p-3 text-sm ${uploadResult.exito ? 'bg-green-50 dark:bg-green-950/20 text-green-700 dark:text-green-400' : 'bg-amber-50 dark:bg-amber-950/20 text-amber-700 dark:text-amber-400'}`}>
+            <div className={`rounded-xl p-4 text-xs border ${uploadResult.exito ? 'bg-green-50 dark:bg-green-950/20 text-green-700 dark:text-green-400 border-green-200/50 dark:border-green-900/50' : 'bg-amber-50 dark:bg-amber-950/20 text-amber-700 dark:text-amber-400 border-amber-200/50 dark:border-amber-900/50'}`}>
+              <strong className="font-bold block mb-1">
+                {uploadResult.exito ? '✓ Importación exitosa' : '⚠ Advertencia en la importación'}
+              </strong>
               {uploadResult.exito
-                ? `✓ ${uploadResult.registrosInsertados} registros importados correctamente${uploadResult.errores.length ? ` con ${uploadResult.errores.length} observación(es).` : '.'}`
-                : `⚠ ${uploadResult.errores.length} errores. Ningún dato fue insertado.`
+                ? `Se han procesado e ingresado ${uploadResult.registrosInsertados} registros del informe consolidado tradicional.`
+                : `Se presentaron observaciones en la carga. Registros insertados: ${uploadResult.registrosInsertados}.`
               }
             </div>
           )}

@@ -10,7 +10,7 @@ import {
   listarAlertasDiarias,
   listarAlertasDiariasPendientes,
 } from '../../services/reportService';
-import { descargarPDFAlertasDiarias } from '../../services/pdfTemplates';
+import { descargarPDFAlertasDiarias, descargarPDFAlertasDiariasGerencial } from '../../services/pdfTemplates';
 import type { ContratoOption } from '../../services/reportService';
 
 type Vista = 'historial' | 'subir';
@@ -32,6 +32,7 @@ export const DailyReports: React.FC = () => {
   const [contratos, setContratos] = useState<ContratoOption[]>([]);
 
   const [generando, setGenerando] = useState(false);
+  const [generandoGerencial, setGenerandoGerencial] = useState(false);
   const [historial, setHistorial] = useState<Record<string, unknown>[]>([]);
   const [pendientes, setPendientes] = useState<Record<string, unknown>[]>([]);
   const [cargandoHistorial, setCargandoHistorial] = useState(false);
@@ -88,6 +89,27 @@ export const DailyReports: React.FC = () => {
     }
   };
 
+  const handleGenerarGerencial = async () => {
+    setGenerandoGerencial(true);
+    try {
+      const data = await getReporteAlertasDiarias({
+        fechaInicio,
+        fechaFin,
+        contratoId: contratoId || undefined,
+      });
+      if (!data) {
+        alert('No se encontraron alertas GPS para el rango seleccionado.');
+        return;
+      }
+      await descargarPDFAlertasDiariasGerencial(data);
+    } catch (err) {
+      console.error(err);
+      alert('Error generando el informe gerencial de alertas.');
+    } finally {
+      setGenerandoGerencial(false);
+    }
+  };
+
   const handleFile = async (file: File) => {
     setUploadLoading(true);
     setUploadError(null);
@@ -122,6 +144,7 @@ export const DailyReports: React.FC = () => {
       contrato: string;
       excesos80: number;
       excesos50a80: number;
+      excesosVarios: number;
       frenadas: number;
     }>();
 
@@ -129,9 +152,10 @@ export const DailyReports: React.FC = () => {
       const fecha = fechaCorta(row.fecha_dia || row.fecha);
       const contrato = String(row.contrato_nombre || 'Sin contrato').trim() || 'Sin contrato';
       const key = `${fecha}|${contrato}`;
-      const current = grupos.get(key) ?? { fecha, contrato, excesos80: 0, excesos50a80: 0, frenadas: 0 };
+      const current = grupos.get(key) ?? { fecha, contrato, excesos80: 0, excesos50a80: 0, excesosVarios: 0, frenadas: 0 };
       current.excesos80 += toNum(row.infraccion_80_kmh);
       current.excesos50a80 += toNum(row.excesos_50_80_kmh);
+      current.excesosVarios += toNum(row.excesos_varios_parametros);
       current.frenadas += toNum(row.frenadas_bruscas);
       grupos.set(key, current);
     });
@@ -148,8 +172,8 @@ export const DailyReports: React.FC = () => {
     { key: 'contrato_nombre', header: 'Contrato' },
     { key: 'velocidad', header: 'Vel.', render: (v: unknown) => Number(v ?? 0).toFixed(0) },
     { key: 'infraccion_80_kmh', header: '80 km/h' },
-    { key: 'excesos_varios_parametros', header: '10-40' },
     { key: 'excesos_50_80_kmh', header: '50-80' },
+    { key: 'excesos_varios_parametros', header: '10-40' },
     { key: 'frenadas_bruscas', header: 'Frenadas' },
     { key: 'gps', header: 'GPS' },
   ];
@@ -162,15 +186,15 @@ export const DailyReports: React.FC = () => {
     { key: 'lugar', header: 'Lugar' },
     { key: 'velocidad', header: 'Vel.', render: (v: unknown) => Number(v ?? 0).toFixed(0) },
     { key: 'infraccion_80_kmh', header: '80 km/h' },
-    { key: 'excesos_varios_parametros', header: '10-40' },
     { key: 'excesos_50_80_kmh', header: '50-80' },
+    { key: 'excesos_varios_parametros', header: '10-40' },
     { key: 'frenadas_bruscas', header: 'Frenadas' },
     { key: 'gps', header: 'GPS' },
     { key: 'created_at', header: 'Registrada', render: (v: unknown) => String(v ?? '').replace('T', ' ').slice(0, 16) },
   ];
 
   return (
-    <div className="space-y-4 max-w-[1600px] mx-auto">
+    <div className="space-y-4 w-full mx-auto">
       <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 shadow-sm">
         <div className="flex flex-col xl:flex-row xl:items-end gap-4 justify-between">
           <div className="flex items-center gap-3 min-w-[260px]">
@@ -184,7 +208,7 @@ export const DailyReports: React.FC = () => {
           </div>
 
           {vista === 'historial' && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-[170px_170px_minmax(240px,1fr)_auto] gap-3 xl:flex-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-[170px_170px_minmax(180px,1fr)_auto_auto] gap-3 xl:flex-1">
               <div>
                 <label className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 block">Fecha inicio</label>
                 <input type="date" value={fechaInicio} onChange={(e) => setFechaInicio(e.target.value)} className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-blue-500" />
@@ -202,11 +226,19 @@ export const DailyReports: React.FC = () => {
               </div>
               <button
                 onClick={handleGenerar}
-                disabled={generando || !fechaInicio || !fechaFin}
-                className="self-end w-full xl:w-auto px-5 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 dark:disabled:bg-slate-700 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2 whitespace-nowrap"
+                disabled={generando || generandoGerencial || !fechaInicio || !fechaFin}
+                className="self-end w-full xl:w-auto px-4 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 dark:disabled:bg-slate-700 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2 whitespace-nowrap"
               >
                 {generando ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <Download className="w-4 h-4" />}
                 {generando ? 'Generando...' : 'Generar PDF'}
+              </button>
+              <button
+                onClick={handleGenerarGerencial}
+                disabled={generando || generandoGerencial || !fechaInicio || !fechaFin}
+                className="self-end w-full xl:w-auto px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 dark:disabled:bg-slate-700 text-white font-semibold text-sm transition-colors flex items-center justify-center gap-2 whitespace-nowrap"
+              >
+                {generandoGerencial ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <Download className="w-4 h-4" />}
+                {generandoGerencial ? 'Generando...' : 'Generar PDF Gerencial'}
               </button>
             </div>
           )}
@@ -302,13 +334,13 @@ export const DailyReports: React.FC = () => {
                     <span className="text-xl font-bold text-red-600 dark:text-red-400">{analisisDiario.infracciones80}</span>
                     <span className="text-xs text-slate-500 dark:text-slate-400 text-center">Infracciones ≥ 80 km/h</span>
                   </div>
-                  <div className="flex-1 min-w-[110px] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-3 flex flex-col items-center gap-0.5">
-                    <span className="text-xl font-bold text-slate-800 dark:text-slate-100">{analisisDiario.excesosVarios}</span>
-                    <span className="text-xs text-slate-500 dark:text-slate-400 text-center">Excesos varios (10-40)</span>
-                  </div>
                   <div className="flex-1 min-w-[110px] bg-white dark:bg-slate-800 border border-amber-200 dark:border-amber-900 rounded-xl p-3 flex flex-col items-center gap-0.5">
                     <span className="text-xl font-bold text-amber-500 dark:text-amber-400">{analisisDiario.excesos50a80}</span>
                     <span className="text-xs text-slate-500 dark:text-slate-400 text-center">Excesos 50-80 km/h</span>
+                  </div>
+                  <div className="flex-1 min-w-[110px] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-3 flex flex-col items-center gap-0.5">
+                    <span className="text-xl font-bold text-slate-800 dark:text-slate-100">{analisisDiario.excesosVarios}</span>
+                    <span className="text-xs text-slate-500 dark:text-slate-400 text-center">Excesos varios (10-40)</span>
                   </div>
                   <div className="flex-1 min-w-[110px] bg-white dark:bg-slate-800 border border-orange-200 dark:border-orange-900 rounded-xl p-3 flex flex-col items-center gap-0.5">
                     <span className="text-xl font-bold text-orange-500 dark:text-orange-400">{analisisDiario.frenadas}</span>
@@ -329,6 +361,7 @@ export const DailyReports: React.FC = () => {
                         <th className="px-3 py-2 text-left">Contrato</th>
                         <th className="px-3 py-2 text-right">Excesos 80</th>
                         <th className="px-3 py-2 text-right">50-80</th>
+                        <th className="px-3 py-2 text-right">10-40</th>
                         <th className="px-3 py-2 text-right">Frenadas</th>
                       </tr>
                     </thead>
@@ -339,6 +372,7 @@ export const DailyReports: React.FC = () => {
                           <td className="px-3 py-1.5 text-slate-700 dark:text-slate-300">{row.contrato}</td>
                           <td className="px-3 py-1.5 text-right font-semibold text-red-600">{row.excesos80}</td>
                           <td className="px-3 py-1.5 text-right font-semibold text-amber-600">{row.excesos50a80}</td>
+                          <td className="px-3 py-1.5 text-right font-semibold text-slate-700 dark:text-slate-300">{row.excesosVarios}</td>
                           <td className="px-3 py-1.5 text-right font-semibold text-orange-600">{row.frenadas}</td>
                         </tr>
                       ))}

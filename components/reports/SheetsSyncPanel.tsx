@@ -6,7 +6,8 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { RefreshCw, CheckCircle, AlertTriangle, Users, Truck, FileText, Clock } from 'lucide-react';
+import { RefreshCw, CheckCircle, AlertTriangle, Users, Truck, FileText, Clock, FileSpreadsheet } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import {
   sincronizarDesdeSheetsCompleto,
   sincronizarConductores,
@@ -59,6 +60,8 @@ export const SheetsSyncPanel: React.FC = () => {
   const [result, setResult]           = useState<SyncResult | null>(null);
   const [conteo, setConteo]           = useState<Conteo>({ conductores: 0, vehiculos: 0, contratos: 0 });
   const [ultimaSync, setUltimaSync]   = useState<UltimaSync>({ conductores: null, vehiculos: null });
+  const [pendingDrivers, setPendingDrivers]   = useState<any[]>([]);
+  const [pendingVehicles, setPendingVehicles] = useState<any[]>([]);
   const [expanded, setExpanded]       = useState(false);
   const mountedRef                    = useRef(true);
 
@@ -69,6 +72,59 @@ export const SheetsSyncPanel: React.FC = () => {
 
   // ── Carga inicial: conteo + última sync + auto-sync si procede ────────────
 
+  const cargarPendientes = async () => {
+    try {
+      const { data: dPending } = await supabase
+        .from('conductores')
+        .select('id, nombres, cedula, ibutton')
+        .eq('proyecto', 'PENDIENTE GOOGLE SHEETS');
+      
+      const { data: vPending } = await supabase
+        .from('vehiculos')
+        .select('id, placa, cliente')
+        .eq('cliente', 'PENDIENTE GOOGLE SHEETS');
+
+      if (mountedRef.current) {
+        setPendingDrivers(dPending ?? []);
+        setPendingVehicles(vPending ?? []);
+      }
+    } catch (err) {
+      console.error('Error al cargar pendientes de Google Sheets:', err);
+    }
+  };
+
+  const descargarExcelPendientes = () => {
+    try {
+      const wb = XLSX.utils.book_new();
+
+      const dataConductores = pendingDrivers.map(c => ({
+        'Nombre Conductor': c.nombres,
+        'Cédula': c.cedula,
+        'iButton': c.ibutton || 'Sin asignar'
+      }));
+
+      const dataVehiculos = pendingVehicles.map(v => ({
+        'Placa': v.placa,
+        'Estado': 'Pendiente en Google Sheets'
+      }));
+
+      if (dataConductores.length > 0) {
+        const wsCond = XLSX.utils.json_to_sheet(dataConductores);
+        XLSX.utils.book_append_sheet(wb, wsCond, 'Conductores Pendientes');
+      }
+
+      if (dataVehiculos.length > 0) {
+        const wsVeh = XLSX.utils.json_to_sheet(dataVehiculos);
+        XLSX.utils.book_append_sheet(wb, wsVeh, 'Vehículos Pendientes');
+      }
+
+      XLSX.writeFile(wb, `registros_pendientes_sheets_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    } catch (err) {
+      console.error('Error al generar Excel de pendientes:', err);
+      alert('Error generando el archivo de Excel.');
+    }
+  };
+
   const cargarConteo = async () => {
     const [{ count: c }, { count: v }, { count: ct }] = await Promise.all([
       supabase.from('conductores').select('*', { count: 'exact', head: true }),
@@ -76,6 +132,7 @@ export const SheetsSyncPanel: React.FC = () => {
       supabase.from('contratos').select('*', { count: 'exact', head: true }),
     ]);
     if (mountedRef.current) setConteo({ conductores: c ?? 0, vehiculos: v ?? 0, contratos: ct ?? 0 });
+    await cargarPendientes();
   };
 
   useEffect(() => {
@@ -307,6 +364,70 @@ export const SheetsSyncPanel: React.FC = () => {
                     {result.errores.length > 5 && (
                       <p className="text-red-500">… y {result.errores.length - 5} errores más</p>
                     )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ── Registros Pendientes en Google Sheets ── */}
+          {(pendingDrivers.length > 0 || pendingVehicles.length > 0) && (
+            <div className="border-t border-slate-100 dark:border-slate-700 pt-3.5 mt-3 space-y-3">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <p className="font-bold text-slate-800 dark:text-slate-200 text-xs flex items-center gap-1.5 text-amber-600 dark:text-amber-400 uppercase tracking-wide">
+                  <AlertTriangle className="w-4 h-4 text-amber-500" />
+                  Registros pendientes de Google Sheets ({pendingDrivers.length + pendingVehicles.length})
+                </p>
+                <button
+                  onClick={descargarExcelPendientes}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-bold transition-all shadow-sm"
+                  title="Descargar listado en formato Excel"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5" />
+                  <span>Descargar Excel</span>
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                Estos registros se crearon provisionalmente durante el procesamiento de archivos planos satelitales. Para normalizarlos, agrégalos en tu hoja principal de Google Sheets y haz clic en <strong>Sincronizar Todo</strong>.
+              </p>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {/* Conductores Pendientes */}
+                {pendingDrivers.length > 0 && (
+                  <div className="bg-amber-500/5 dark:bg-amber-500/10 rounded-xl border border-amber-500/20 p-3 space-y-2">
+                    <p className="text-[10px] font-bold text-amber-700 dark:text-amber-400 uppercase tracking-wider flex justify-between items-center">
+                      <span>👤 Conductores ({pendingDrivers.length})</span>
+                    </p>
+                    <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1 divide-y divide-amber-500/10 dark:divide-amber-500/20">
+                      {pendingDrivers.map((c) => (
+                        <div key={c.id} className="text-xs pt-1.5 first:pt-0">
+                          <p className="font-semibold text-slate-700 dark:text-slate-300">{c.nombres}</p>
+                          <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                            CC: <code className="bg-slate-100 dark:bg-slate-900 px-1 py-0.5 rounded font-mono font-bold text-[9px]">{c.cedula}</code>
+                            {c.ibutton && <span className="ml-2">iButton: <code className="bg-slate-100 dark:bg-slate-900 px-1 py-0.5 rounded font-mono text-[9px]">{c.ibutton}</code></span>}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Vehículos Pendientes */}
+                {pendingVehicles.length > 0 && (
+                  <div className="bg-amber-500/5 dark:bg-amber-500/10 rounded-xl border border-amber-500/20 p-3 space-y-2">
+                    <p className="text-[10px] font-bold text-amber-700 dark:text-amber-400 uppercase tracking-wider">
+                      <span>🚘 Vehículos ({pendingVehicles.length})</span>
+                    </p>
+                    <div className="max-h-36 overflow-y-auto space-y-1.5 pr-1 divide-y divide-amber-500/10 dark:divide-amber-500/20">
+                      {pendingVehicles.map((v) => (
+                        <div key={v.id} className="text-xs pt-1.5 first:pt-0">
+                          <p className="font-semibold text-slate-700 dark:text-slate-300">
+                            Placa: <code className="bg-slate-100 dark:bg-slate-900 px-1.5 py-0.5 rounded font-bold font-mono text-[10px] text-amber-700 dark:text-amber-400">{v.placa}</code>
+                          </p>
+                          <p className="text-[10px] text-slate-500 dark:text-slate-400">Estado: Pendiente Sincronización Maestro</p>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>

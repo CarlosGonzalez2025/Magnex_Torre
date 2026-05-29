@@ -1146,6 +1146,55 @@ function AlertSummaryCard({ label, value, accent = COLORS.azul }: { label: strin
   );
 }
 
+function ExecutiveMetricRow({ label, value, detail, accent = COLORS.negro, alt = false }: { label: string; value: string; detail?: string; accent?: string; alt?: boolean }) {
+  return (
+    <View style={[base.tableRow, alt ? base.tableRowAlt : {}, { paddingVertical: 3 }]} wrap={false}>
+      <Text style={[base.tableCell, { flex: 1.8, textAlign: 'left', fontWeight: 700 }]}>{label}</Text>
+      <Text style={[base.tableCell, { flex: 0.55, color: accent, fontWeight: 700, fontSize: 7 }]}>{value}</Text>
+      <Text style={[base.tableCell, { flex: 2.25, textAlign: 'left', color: COLORS.gris }]}>{detail || ''}</Text>
+    </View>
+  );
+}
+
+function TiposVehiculoAlertasTable({ rows }: { rows: ReporteAlertasDiariasData['resumen']['tiposVehiculo'] }) {
+  const visibles = rows.filter(r => r.totalVehiculos > 0 || r.totalAlertas > 0);
+  return (
+    <View style={{ marginBottom: 5 }}>
+      <Band>Vehiculos activos y alertas por tipo de vehiculo</Band>
+      <View style={base.tableHeader}>
+        {[
+          ['TIPO', 1.55],
+          ['ACTIVOS BD', 0.62],
+          ['VEH. ALERTA', 0.62],
+          ['%', 0.45],
+          ['>80', 0.42],
+          ['50-80', 0.46],
+          ['10-40', 0.46],
+          ['FREN.', 0.46],
+        ].map(([h, flex]) => (
+          <Text key={String(h)} style={[base.tableHeaderCell, { flex: Number(flex) }]}>{h}</Text>
+        ))}
+      </View>
+      {visibles.length === 0 ? (
+        <View style={base.tableRow}>
+          <Text style={[base.tableCell, { flex: 5, textAlign: 'center' }]}>No hay informacion de tipos de vehiculo para el periodo</Text>
+        </View>
+      ) : visibles.slice(0, 16).map((r, i) => (
+        <View key={`${r.tipo}-${i}`} style={[base.tableRow, i % 2 ? base.tableRowAlt : {}]} wrap={false}>
+          <Text style={[base.tableCell, { flex: 1.55, textAlign: 'left', fontWeight: 700 }]}>{mayuscula(r.tipo)}</Text>
+          <Text style={[base.tableCell, { flex: 0.62 }]}>{n(r.totalVehiculos)}</Text>
+          <Text style={[base.tableCell, { flex: 0.62, color: r.vehiculosConAlertas > 0 ? COLORS.rojo : COLORS.verde, fontWeight: 700 }]}>{n(r.vehiculosConAlertas)}</Text>
+          <Text style={[base.tableCell, { flex: 0.45 }]}>{n(r.porcentajeConAlertas, 1)}%</Text>
+          <Text style={[base.tableCell, { flex: 0.42, color: r.infracciones80 > 0 ? COLORS.rojo : COLORS.negro }]}>{n(r.infracciones80)}</Text>
+          <Text style={[base.tableCell, { flex: 0.46 }]}>{n(r.excesos50a80)}</Text>
+          <Text style={[base.tableCell, { flex: 0.46 }]}>{n(r.excesosVarios)}</Text>
+          <Text style={[base.tableCell, { flex: 0.46 }]}>{n(r.frenadas)}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 function AlertasTable({
   title,
   rows,
@@ -1208,7 +1257,7 @@ function generarAnalisis(data: ReporteAlertasDiariasData, rows80: ReturnType<typ
   const partesFecha = mismaFecha
     ? `con fecha de reporte ${fmt(fechaReporte)}`
     : `con fecha de reporte ${fmt(fechaReporte)}`;
-  const resumenTexto = `Se ha realizado el analisis de comportamiento vial correspondiente a ${periodo} para el contrato ${contratoNombre}, ${partesFecha}. Se identificaron ${n(totalAlertas)} alertas en ${n(resumen.vehiculosConAlertas)} vehiculos.`;
+  const resumenTexto = `Se ha realizado el analisis de comportamiento vial correspondiente a ${periodo} para el contrato ${contratoNombre}, ${partesFecha}. La base activa registra ${n(resumen.vehiculosActivosBase)} vehiculos y ${n(resumen.personasAutorizadas)} conductores autorizados. En el periodo se identificaron ${n(totalAlertas)} alertas en ${n(resumen.vehiculosConAlertas)} vehiculos.`;
 
   // Positivos destacables
   const positivos: string[] = [];
@@ -1228,7 +1277,7 @@ function generarAnalisis(data: ReporteAlertasDiariasData, rows80: ReturnType<typ
 
   // Trazabilidad iButton
   const sinIdTexto = resumen.personasSinIdentificar > 0
-    ? `Se registran ${n(resumen.personasSinIdentificar)} situacion(es) operativas con conductor sin identificar mediante iButton; se recomienda reforzar su uso obligatorio.`
+    ? `Se registran ${n(resumen.alertasSinConductorIdentificado)} alerta(s) sin conductor plenamente identificado, equivalentes a ${n(resumen.personasSinIdentificar)} situacion(es) operativas vehiculo-dia; se recomienda reforzar el uso obligatorio del iButton.`
     : `El nivel de trazabilidad de conductores es adecuado; todos los eventos registran identificacion.`;
   const trazabilidadTexto = `De las ${n(resumen.personasAutorizadas)} personas autorizadas, se identificaron alertas en ${n(resumen.personasIdentificadas)} conductores mediante llave iButton. ${sinIdTexto}`;
 
@@ -1261,6 +1310,13 @@ export function InformeAlertasDiariasPDF({ data }: { data: ReporteAlertasDiarias
   const rows50a80 = agruparAlertas(alertas, 'excesos_50_80_kmh');
   const rowsFrenadas = agruparAlertas(alertas, 'frenadas_bruscas');
   const analisis = generarAnalisis(data, rows80, rows50a80, rowsFrenadas);
+  const vehiculosSinAlertas = Math.max(0, resumen.vehiculosActivosBase - resumen.vehiculosConAlertas);
+  const porcentajeVehiculosConAlertas = resumen.vehiculosActivosBase > 0
+    ? (resumen.vehiculosConAlertas / resumen.vehiculosActivosBase) * 100
+    : 0;
+  const porcentajeConductoresIdentificados = resumen.personasAutorizadas > 0
+    ? (resumen.personasIdentificadas / resumen.personasAutorizadas) * 100
+    : 0;
 
   return (
     <Document title={`Informe diario alertas GPS - ${periodoInicio}`}>
@@ -1280,23 +1336,61 @@ export function InformeAlertasDiariasPDF({ data }: { data: ReporteAlertasDiarias
           </View>
         </View>
 
-        {/* Tarjetas fila 1: operación */}
-        <View style={{ flexDirection: 'row', gap: 5, marginBottom: 4 }}>
-          <AlertSummaryCard label="Vehiculos con GPS" value={n(resumen.vehiculosConGps)} />
-          <AlertSummaryCard label="Vehiculos con alertas" value={n(resumen.vehiculosConAlertas)} accent={COLORS.rojo} />
-          <AlertSummaryCard label="Conductores autorizados" value={n(resumen.personasAutorizadas)} />
-          <AlertSummaryCard label="Conductores identificados" value={n(resumen.personasIdentificadas)} accent={COLORS.verde} />
-          {/* personasSinIdentificar = situaciones operativas (placa+dia) sin conductor iButton */}
-          <AlertSummaryCard label="Sin iButton (veh-dia)" value={n(resumen.personasSinIdentificar)} accent={COLORS.amarillo} />
+        {/* Resumen ejecutivo inicial */}
+        <View style={{ flexDirection: 'row', gap: 6, marginBottom: 5 }}>
+          <View style={{ flex: 1 }}>
+            <Band>Resumen ejecutivo - flota activa</Band>
+            <ExecutiveMetricRow
+              label="Vehiculos activos en BD"
+              value={n(resumen.vehiculosActivosBase)}
+              detail="Base maestra sincronizada desde Google Sheets"
+            />
+            <ExecutiveMetricRow
+              label="Vehiculos con alertas"
+              value={n(resumen.vehiculosConAlertas)}
+              detail={`${n(porcentajeVehiculosConAlertas, 1)}% de la flota activa`}
+              accent={resumen.vehiculosConAlertas > 0 ? COLORS.rojo : COLORS.verde}
+              alt
+            />
+            <ExecutiveMetricRow
+              label="Vehiculos sin alertas"
+              value={n(vehiculosSinAlertas)}
+              detail="Activos sin eventos reportables en el periodo"
+              accent={COLORS.verde}
+            />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Band>Trazabilidad de conductores</Band>
+            <ExecutiveMetricRow
+              label="Conductores activos BD"
+              value={n(resumen.personasAutorizadas)}
+              detail="Personas autorizadas en base maestra"
+            />
+            <ExecutiveMetricRow
+              label="Con alertas identificadas"
+              value={n(resumen.personasIdentificadas)}
+              detail={`${n(porcentajeConductoresIdentificados, 1)}% de conductores activos`}
+              accent={COLORS.verde}
+              alt
+            />
+            <ExecutiveMetricRow
+              label="Alertas sin identificar"
+              value={n(resumen.alertasSinConductorIdentificado)}
+              detail={`${n(resumen.personasSinIdentificar)} situacion(es) vehiculo-dia sin iButton`}
+              accent={resumen.alertasSinConductorIdentificado > 0 ? COLORS.amarillo : COLORS.verde}
+            />
+          </View>
         </View>
 
-        {/* Tarjetas fila 2: alertas */}
+        {/* Tarjetas de alertas en orden de prioridad */}
         <View style={{ flexDirection: 'row', gap: 5, marginBottom: 5 }}>
           <AlertSummaryCard label="Infraccion >= 80 km/h" value={n(resumen.infracciones80)} accent={COLORS.rojo} />
-          <AlertSummaryCard label="Excesos varios 10/20/30/40" value={n(resumen.excesosVarios)} accent="#ef4444" />
           <AlertSummaryCard label="Excesos 50-80 km/h" value={n(resumen.excesos50a80)} accent={COLORS.amarillo} />
+          <AlertSummaryCard label="Excesos 10/20/30/40 km/h" value={n(resumen.excesosVarios)} accent="#ef4444" />
           <AlertSummaryCard label="Frenadas bruscas" value={n(resumen.frenadas)} accent="#f97316" />
         </View>
+
+        <TiposVehiculoAlertasTable rows={resumen.tiposVehiculo} />
 
         {/* Resumen de tipos + gráfico */}
         <View style={{ flexDirection: 'row', gap: 6, marginBottom: 5 }}>
@@ -1304,8 +1398,8 @@ export function InformeAlertasDiariasPDF({ data }: { data: ReporteAlertasDiarias
             <Band>Distribucion de Alertas por Tipo</Band>
             {[
               ['Infraccion >= 80 km/h', resumen.infracciones80],
-              ['Excesos varios (10/20/30/40 km/h)', resumen.excesosVarios],
               ['Excesos 50-80 km/h', resumen.excesos50a80],
+              ['Excesos varios (10/20/30/40 km/h)', resumen.excesosVarios],
               ['Frenadas Bruscas', resumen.frenadas],
             ].map(([label, value], i) => (
               <View key={String(label)} style={[base.tableRow, i % 2 ? base.tableRowAlt : {}]}>
@@ -1316,16 +1410,16 @@ export function InformeAlertasDiariasPDF({ data }: { data: ReporteAlertasDiarias
           </View>
           <MiniBarChart valores={[
             { label: '>= 80', value: resumen.infracciones80, color: '#d9d9d9' },
-            { label: '10-40', value: resumen.excesosVarios, color: '#ff3b1f' },
             { label: '50-80', value: resumen.excesos50a80, color: '#ffc000' },
+            { label: '10-40', value: resumen.excesosVarios, color: '#ff3b1f' },
             { label: 'Frenadas', value: resumen.frenadas, color: '#ff7f00' },
           ]} />
         </View>
 
         {/* Tablas de detalle por categoría */}
         <AlertasTable title="Infracciones >= 80 km/h" rows={rows80} countLabel="N. EVENTOS" />
-        <AlertasTable title="Excesos varios parametros (10, 20, 30, 40 km/h)" rows={rowsVarios} countLabel="N. EXCESOS" />
         <AlertasTable title="Excesos de velocidad 50 km/h hasta 80 km/h" rows={rows50a80} countLabel="N. EXCESOS" />
+        <AlertasTable title="Excesos varios parametros (10, 20, 30, 40 km/h)" rows={rowsVarios} countLabel="N. EXCESOS" />
         <AlertasTable title="Frenadas Bruscas" rows={rowsFrenadas} countLabel="N. FRENADAS" />
 
         {/* ── ANÁLISIS NARRATIVO ── */}
@@ -1363,10 +1457,10 @@ export function InformeAlertasDiariasPDF({ data }: { data: ReporteAlertasDiarias
         <View style={{ marginTop: 6 }}>
           <Band>Definicion de Tipos de Alerta</Band>
           {[
-            ['Frenada Brusca', 'Desaceleracion repentina superior a los limites seguros; puede asociarse a maniobras de frenado fuerte o perdida de distancia de seguridad.'],
-            ['Infraccion 10-40 Km/h', 'Exceso de velocidad en el rango configurado por parametro operativo (10, 20, 30 o 40 km/h sobre el limite de la via).'],
-            ['Exceso 50-80 Km/h', 'Exceso de velocidad desde 50 km/h y menor a 80 km/h segun el parametro de control vial vigente.'],
             ['Infraccion >= 80 Km/h', 'Exceso de velocidad igual o superior a 80 km/h; clasificado como desviacion critica de seguridad vial.'],
+            ['Exceso 50-80 Km/h', 'Exceso de velocidad desde 50 km/h y menor a 80 km/h segun el parametro de control vial vigente.'],
+            ['Infraccion 10-40 Km/h', 'Exceso de velocidad en el rango configurado por parametro operativo (10, 20, 30 o 40 km/h sobre el limite de la via).'],
+            ['Frenada Brusca', 'Desaceleracion repentina superior a los limites seguros; puede asociarse a maniobras de frenado fuerte o perdida de distancia de seguridad.'],
             ['Sin iButton (veh-dia)', 'Situacion operativa (vehiculo + dia) donde el conductor no fue identificado mediante llave iButton; indica ausencia de trazabilidad del conductor.'],
             ['Observaciones', 'Para el detalle completo revise la plantilla Excel cargada con los registros de GPS del periodo.'],
           ].map(([tipo, definicion], i) => (
@@ -1391,10 +1485,572 @@ export async function descargarPDFVehiculo(data: ReporteVehiculoData): Promise<v
   downloadBlob(blob, `Informe_Vehiculo_${data.vehiculo.placa}_${data.periodoInicio}.pdf`);
 }
 
+// ==============================================================================
+// ── DASHBOARD GERENCIAL DE ALERTAS DIARIAS ───────────────────────────────────
+// ==============================================================================
+
+function SectionTitle({ title }: { title: string }) {
+  return (
+    <View style={{ marginTop: 10, marginBottom: 5 }}>
+      <Text style={{ fontSize: 8.5, fontWeight: 700, color: '#0d9488', letterSpacing: 0.5 }}>{title}</Text>
+      <View style={{ height: 1.5, backgroundColor: '#0d9488', marginTop: 2, width: '100%' }} />
+    </View>
+  );
+}
+
+function DashboardKpiCard({
+  value,
+  label,
+  accentColor,
+  icon,
+}: {
+  value: string | number;
+  label: string;
+  accentColor: string;
+  icon?: string;
+}) {
+  return (
+    <View style={{
+      flex: 1,
+      backgroundColor: '#f8fafc',
+      borderWidth: 0.4,
+      borderColor: '#cbd5e1',
+      borderTopWidth: 2.5,
+      borderTopColor: accentColor,
+      paddingVertical: 6,
+      paddingHorizontal: 3,
+      alignItems: 'center',
+      justifyContent: 'center',
+    }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+        <Text style={{ fontSize: 13, fontWeight: 700, color: accentColor }}>{value}</Text>
+        {icon ? (
+          <Text style={{ fontSize: 8, fontWeight: 700, color: accentColor, marginLeft: 2 }}>{icon}</Text>
+        ) : null}
+      </View>
+      <Text style={{ fontSize: 5.6, color: '#64748b', textAlign: 'center', marginTop: 3 }}>{label}</Text>
+    </View>
+  );
+}
+
+function AlertProgressBar({ val, maxVal, color }: { val: number; maxVal: number; color: string }) {
+  const percentage = maxVal > 0 ? (val / maxVal) * 100 : 0;
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 2 }}>
+      <View style={{ width: 5, height: 5, backgroundColor: color, marginRight: 5, borderRadius: 1 }} />
+      <View style={{ width: 130, height: 6, backgroundColor: '#e2e8f0', borderRadius: 1.5, position: 'relative' }}>
+        {percentage > 0 ? (
+          <View style={{ width: `${percentage}%`, height: '100%', backgroundColor: color, borderRadius: 1.5 }} />
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+function NivelPesvBadge({ nivel }: { nivel: 'CRÍTICO' | 'OBSERV.' | 'BAJO' }) {
+  let bgColor = '#dc2626';
+  let textColor = '#ffffff';
+  let dotColor = '#fca5a5';
+  if (nivel === 'OBSERV.') {
+    bgColor = '#eab308';
+    textColor = '#0f172a';
+    dotColor = '#fef08a';
+  } else if (nivel === 'BAJO') {
+    bgColor = '#16a34a';
+    textColor = '#ffffff';
+    dotColor = '#86efac';
+  }
+  return (
+    <View style={{
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: bgColor,
+      borderRadius: 4,
+      paddingVertical: 1.5,
+      paddingHorizontal: 4,
+      width: 48,
+      alignSelf: 'center'
+    }}>
+      <View style={{ width: 3.5, height: 3.5, borderRadius: 1.8, backgroundColor: dotColor, marginRight: 3 }} />
+      <Text style={{ fontSize: 5.2, fontWeight: 700, color: textColor }}>{nivel}</Text>
+    </View>
+  );
+}
+
+function PrioridadOrb({ color }: { color: string }) {
+  return (
+    <View style={{
+      width: 6,
+      height: 6,
+      borderRadius: 3,
+      backgroundColor: color,
+      alignSelf: 'center',
+      borderWidth: 0.5,
+      borderColor: '#cbd5e1'
+    }} />
+  );
+}
+
+export function InformeGerencialAlertasDiariasPDF({ data }: { data: ReporteAlertasDiariasData }) {
+  const { alertas, resumen, contrato, periodoInicio, periodoFin, fechaReporte } = data;
+
+  const totalVehiculosConAlertas = resumen.vehiculosConAlertas;
+  const activeVehicles = resumen.vehiculosActivosBase;
+  const porcentajeVehiculosConAlertas = activeVehicles > 0
+    ? (totalVehiculosConAlertas / activeVehicles) * 100
+    : 0;
+  const porcentajeSinAlertas = 100 - porcentajeVehiculosConAlertas;
+  const dias = (periodoInicio && periodoFin)
+    ? Math.ceil((new Date(periodoFin).getTime() - new Date(periodoInicio).getTime()) / (1000 * 60 * 60 * 24)) + 1
+    : 1;
+
+  // Clasificación del nivel de riesgo general de la flota
+  let riskLevel: 'CRÍTICO' | 'EN OBSERVACIÓN' | 'BUENO' = 'BUENO';
+  let riskColor = '#16a34a'; // Verde
+  let riskDotColor = '#86efac';
+  let riskBg = '#dcfce7';
+
+  if (resumen.infracciones80 > 0) {
+    riskLevel = 'CRÍTICO';
+    riskColor = '#dc2626'; // Rojo
+    riskDotColor = '#fca5a5';
+    riskBg = '#fee2e2';
+  } else if (resumen.excesos50a80 > 0 || resumen.frenadas > 0 || resumen.alertasSinConductorIdentificado > 0) {
+    riskLevel = 'EN OBSERVACIÓN';
+    riskColor = '#d97706'; // Ámbar/Amarillo
+    riskDotColor = '#fef08a';
+    riskBg = '#fef3c7';
+  }
+
+  // Agrupación y clasificación para ranking de conductores
+  const rankingMap = new Map<string, { placa: string; conductor: string; infracciones80: number; excesos50a80: number; excesosVarios: number; frenadas: number; total: number }>();
+  for (const a of alertas) {
+    const condName = a.conductor || 'SIN IDENTIFICAR';
+    const key = `${a.placa}|${condName}`;
+    const current = rankingMap.get(key) ?? {
+      placa: a.placa,
+      conductor: condName,
+      infracciones80: 0,
+      excesos50a80: 0,
+      excesosVarios: 0,
+      frenadas: 0,
+      total: 0,
+    };
+    current.infracciones80 += Number(a.infraccion_80_kmh ?? 0);
+    current.excesos50a80 += Number(a.excesos_50_80_kmh ?? 0);
+    current.excesosVarios += Number(a.excesos_varios_parametros ?? 0);
+    current.frenadas += Number(a.frenadas_bruscas ?? 0);
+    current.total += Number(a.infraccion_80_kmh ?? 0) + Number(a.excesos_50_80_kmh ?? 0) + Number(a.excesos_varios_parametros ?? 0) + Number(a.frenadas_bruscas ?? 0);
+    rankingMap.set(key, current);
+  }
+
+  const rankingSorted = Array.from(rankingMap.values())
+    .filter(r => r.total > 0)
+    .sort((a, b) => b.total - a.total || a.placa.localeCompare(b.placa));
+
+  const topOffenders = rankingSorted.slice(0, 4);
+  const groupedOffenders = rankingSorted.slice(4);
+
+  // Recolectar datos para Plan de Acción
+  const placasSinIbuttonSet = new Set<string>();
+  const conductoresObservSet = new Set<string>();
+  const placasBrakingSet = new Set<string>();
+
+  for (const a of alertas) {
+    const cond = a.conductor || '';
+    const isSinIbutton = !a.conductor_identificado || cond.toUpperCase().includes('SIN IDENTIFICAR') || cond.toUpperCase().includes('NO REGISTRA');
+    if (isSinIbutton) {
+      placasSinIbuttonSet.add(a.placa);
+    } else {
+      if (Number(a.infraccion_80_kmh ?? 0) > 0 || Number(a.excesos_50_80_kmh ?? 0) > 0 || Number(a.frenadas_bruscas ?? 0) > 0) {
+        conductoresObservSet.add(mayuscula(cond));
+      }
+    }
+    if (Number(a.frenadas_bruscas ?? 0) > 0) {
+      placasBrakingSet.add(a.placa);
+    }
+  }
+
+  const placasSinIbutton = Array.from(placasSinIbuttonSet);
+  const conductoresObserv = Array.from(conductoresObservSet).slice(0, 4);
+  const placasBraking = Array.from(placasBrakingSet).slice(0, 4);
+  const vehiculosSinAlertas = Math.max(0, activeVehicles - totalVehiculosConAlertas);
+
+  // Generar correctivos dinámicos
+  const correctivos = [];
+  if (rankingSorted.length === 0) {
+    correctivos.push({
+      accion: `Felicitar formalmente a los ${activeVehicles} vehículos y conductores activos por operar con 100% de cumplimiento y CERO alertas viales en el periodo.`,
+      responsable: "Gerencia / HSEQ",
+      plazo: "15 días",
+      plazoColor: "#16a34a",
+      refPesv: "Paso 24",
+      priorColor: "#16a34a",
+    });
+  } else {
+    if (placasSinIbutton.length > 0) {
+      correctivos.push({
+        accion: `Bloquear circulación de vehículos con iButton inactivo: ${placasSinIbutton.slice(0, 4).join(', ')}${placasSinIbutton.length > 4 ? '...' : ''}. Descargo formal al conductor.`,
+        responsable: "Coord. HSEQ / Operaciones",
+        plazo: "48 h",
+        plazoColor: "#dc2626",
+        refPesv: "Paso 10 / 15",
+        priorColor: "#dc2626",
+      });
+      correctivos.push({
+        accion: "Aplicar política 'Cero circulación sin iButton': ningún vehículo sale a ruta sin registro activo en Torre de Control.",
+        responsable: "Gerencia Operaciones",
+        plazo: "48 h",
+        plazoColor: "#dc2626",
+        refPesv: "Paso 8 / 15",
+        priorColor: "#dc2626",
+      });
+    }
+
+    const speeders80 = rankingSorted.filter(r => r.infracciones80 > 0);
+    if (speeders80.length > 0) {
+      const placas80 = speeders80.map(s => s.placa);
+      correctivos.push({
+        accion: `Bloquear circulación de vehículos con infracciones >= 80 km/h: ${placas80.slice(0, 3).join(', ')}. Citación formal a comité extraordinario.`,
+        responsable: "Coord. HSEQ / Operaciones",
+        plazo: "48 h",
+        plazoColor: "#dc2626",
+        refPesv: "Paso 15 / 16",
+        priorColor: "#dc2626",
+      });
+    }
+
+    if (conductoresObserv.length > 0) {
+      correctivos.push({
+        accion: `Retroalimentación individual y firma de actas de compromiso vial con conductores: ${conductoresObserv.join(', ')}.`,
+        responsable: "Líder PESV / HSEQ",
+        plazo: "7 días",
+        plazoColor: "#d97706",
+        refPesv: "Paso 10",
+        priorColor: "#d97706",
+      });
+    }
+
+    if (placasBraking.length > 0) {
+      correctivos.push({
+        accion: `Inspección preventiva y revisión de sistema de frenos y amortiguación en vehículos con maniobras bruscas: ${placasBraking.join(', ')}.`,
+        responsable: "Jefe Mantenimiento",
+        plazo: "10 días",
+        plazoColor: "#d97706",
+        refPesv: "Paso 17",
+        priorColor: "#d97706",
+      });
+    }
+
+    correctivos.push({
+      accion: `Reconocimiento formal a los ${vehiculosSinAlertas} vehículos sin alertas. Activar incentivo económico/operativo de conducción segura.`,
+      responsable: "Gerencia / RRHH",
+      plazo: "15 días",
+      plazoColor: "#16a34a",
+      refPesv: "Paso 24",
+      priorColor: "#16a34a",
+    });
+  }
+
+  const maxVal = Math.max(resumen.infracciones80, resumen.excesos50a80, resumen.excesosVarios, resumen.frenadas, resumen.alertasSinConductorIdentificado, 1);
+
+  return (
+    <Document title={`Dashboard de Comportamiento Vial - ${periodoInicio}`}>
+      {/* PÁGINA 1: Diagnóstico de Comportamiento Vial */}
+      <Page size="LETTER" orientation="portrait" style={[base.page, { padding: 22, paddingBottom: 42 }]}>
+        <ReportHeaderDiario title="DASHBOARD DE COMPORTAMIENTO VIAL" />
+        <ReportFooterDiario />
+
+        {/* Fila de Metadatos */}
+        <View style={{ flexDirection: 'row', borderTopWidth: 1.5, borderTopColor: '#0d9488', paddingTop: 4, marginBottom: 6 }}>
+          <View style={{ flex: 1.2 }}>
+            <Text style={{ fontSize: 6.8, fontWeight: 700 }}>Contrato: {contrato?.nombre || 'Todos los contratos'}</Text>
+            <Text style={{ fontSize: 5.8, color: '#64748b', marginTop: 1 }}>Token ID: COL-0038 v2   |   Clasificación: Confidencial</Text>
+          </View>
+          <View style={{ flex: 1, alignItems: 'flex-end' }}>
+            <Text style={{ fontSize: 6.8, fontWeight: 700 }}>Periodo: {fmt(periodoInicio)} - {fmt(periodoFin)}</Text>
+            <Text style={{ fontSize: 5.8, color: '#64748b', marginTop: 1 }}>Fecha Generación: {fmt(fechaReporte)}</Text>
+          </View>
+        </View>
+
+        {/* ESTADO GENERAL DE LA FLOTA */}
+        <SectionTitle title="ESTADO GENERAL DE LA FLOTA" />
+        <View style={{
+          flexDirection: 'row',
+          borderWidth: 1.2,
+          borderColor: riskColor,
+          borderRadius: 4,
+          backgroundColor: riskBg,
+          minHeight: 46,
+          marginBottom: 4
+        }}>
+          {/* Lado Izquierdo: Orbe */}
+          <View style={{
+            width: '25%',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRightWidth: 0.5,
+            borderRightColor: '#cbd5e1',
+            padding: 6
+          }}>
+            <View style={{
+              width: 20,
+              height: 20,
+              borderRadius: 10,
+              backgroundColor: riskColor,
+              borderWidth: 1.2,
+              borderColor: riskDotColor,
+              marginBottom: 3
+            }} />
+            <Text style={{ fontSize: 6.5, fontWeight: 700, color: riskColor, textAlign: 'center' }}>
+              {riskLevel}
+            </Text>
+          </View>
+
+          {/* Lado Derecho: Narrativo */}
+          <View style={{
+            width: '75%',
+            padding: '6 8',
+            justifyContent: 'center'
+          }}>
+            <Text style={{ fontSize: 7.2, fontWeight: 700, color: '#1e293b', marginBottom: 2 }}>
+              {resumen.totalAlertas} alertas en {resumen.vehiculosConAlertas} vehículos ({n(porcentajeVehiculosConAlertas, 1)}% flota) — período {dias} días.
+            </Text>
+            
+            {resumen.infracciones80 > 0 ? (
+              <Text style={{ fontSize: 6.2, lineHeight: 1.35, color: '#334155', marginBottom: 2 }}>
+                <Text style={{ fontWeight: 700, color: '#dc2626' }}>Riesgo crítico: </Text>
+                Excesos de velocidad mayores o iguales a 80 km/h detectados. Incumplimiento grave de la política de velocidad y el Paso 15 del PESV.
+              </Text>
+            ) : resumen.alertasSinConductorIdentificado > 0 ? (
+              <Text style={{ fontSize: 6.2, lineHeight: 1.35, color: '#334155', marginBottom: 2 }}>
+                <Text style={{ fontWeight: 700, color: '#dc2626' }}>Riesgo crítico: </Text>
+                {resumen.alertasSinConductorIdentificado} alertas sin conductor identificado (iButton inactivo). Incumplimiento del registro PESV Paso 15.
+              </Text>
+            ) : resumen.frenadas > 0 ? (
+              <Text style={{ fontSize: 6.2, lineHeight: 1.35, color: '#334155', marginBottom: 2 }}>
+                <Text style={{ fontWeight: 700, color: '#d97706' }}>Riesgo moderado: </Text>
+                {resumen.frenadas} maniobra(s) brusca(s) detectada(s). Requiere retroalimentación preventiva de hábitos de conducción.
+              </Text>
+            ) : (
+              <Text style={{ fontSize: 6.2, lineHeight: 1.35, color: '#334155', marginBottom: 2 }}>
+                <Text style={{ fontWeight: 700, color: '#16a34a' }}>Riesgo bajo: </Text>
+                Flota operando bajo parámetros ideales de conducción segura. Cero desviaciones críticas reportadas.
+              </Text>
+            )}
+
+            <Text style={{ fontSize: 6.2, color: '#16a34a', fontWeight: 700 }}>
+              ✓ 0 infracciones &gt;= 80 km/h. {n(porcentajeSinAlertas, 1)}% de la flota opera sin alertas.
+            </Text>
+          </View>
+        </View>
+
+        {/* INDICADORES CLAVE — PERIODO */}
+        <SectionTitle title="INDICADORES CLAVE — PERIODO" />
+        <View style={{ flexDirection: 'row', gap: 4, marginBottom: 4 }}>
+          <DashboardKpiCard value={resumen.vehiculosActivosBase} label="Vehículos activos" accentColor="#1e3a8a" />
+          <DashboardKpiCard value={resumen.personasAutorizadas} label="Conductores autorizados" accentColor="#1e3a8a" />
+          <DashboardKpiCard
+            value={`${n(porcentajeVehiculosConAlertas, 1)}%`}
+            label="Flota con alertas"
+            accentColor={porcentajeVehiculosConAlertas > 15 ? '#d97706' : '#16a34a'}
+          />
+          <DashboardKpiCard
+            value={resumen.totalAlertas}
+            label="Total alertas"
+            accentColor={resumen.totalAlertas > 20 ? '#d97706' : '#1e3a8a'}
+          />
+          <DashboardKpiCard
+            value={resumen.alertasSinConductorIdentificado}
+            label="Sin iButton"
+            accentColor={resumen.alertasSinConductorIdentificado > 0 ? '#dc2626' : '#64748b'}
+            icon={resumen.alertasSinConductorIdentificado > 0 ? '▲' : ''}
+          />
+          <DashboardKpiCard
+            value={resumen.infracciones80}
+            label="Infracc. >= 80 km/h"
+            accentColor={resumen.infracciones80 > 0 ? '#dc2626' : '#16a34a'}
+            icon={resumen.infracciones80 === 0 ? '✓' : ''}
+          />
+        </View>
+
+        {/* DISTRIBUCIÓN DE ALERTAS POR TIPO */}
+        <SectionTitle title="DISTRIBUCION DE ALERTAS POR TIPO" />
+        <View style={{ marginBottom: 4 }}>
+          {/* Header */}
+          <View style={{ flexDirection: 'row', backgroundColor: '#0f3a60', paddingVertical: 4, paddingHorizontal: 6, alignItems: 'center' }}>
+            <Text style={{ fontSize: 6.8, fontWeight: 700, color: '#ffffff', flex: 2.2 }}>Tipo de alerta</Text>
+            <Text style={{ fontSize: 6.8, fontWeight: 700, color: '#ffffff', flex: 2.8 }}>Distribución visual (max = {maxVal})</Text>
+            <Text style={{ fontSize: 6.8, fontWeight: 700, color: '#ffffff', flex: 0.5, textAlign: 'center' }}>N°</Text>
+          </View>
+          {/* Rows */}
+          <View style={{ borderLeftWidth: 0.4, borderRightWidth: 0.4, borderBottomWidth: 0.4, borderColor: '#cbd5e1' }}>
+            <View style={{ flexDirection: 'row', paddingVertical: 4, paddingHorizontal: 6, borderBottomWidth: 0.4, borderBottomColor: '#cbd5e1', alignItems: 'center' }}>
+              <Text style={{ fontSize: 6.5, flex: 2.2, color: '#0f172a' }}>Infracciones &gt;= 80 km/h (PESV: prohibición absoluta)</Text>
+              <View style={{ flex: 2.8 }}><AlertProgressBar val={resumen.infracciones80} maxVal={maxVal} color="#dc2626" /></View>
+              <Text style={{ fontSize: 7, fontWeight: 700, flex: 0.5, textAlign: 'center', color: resumen.infracciones80 > 0 ? '#dc2626' : '#16a34a' }}>{resumen.infracciones80}</Text>
+            </View>
+            <View style={{ flexDirection: 'row', paddingVertical: 4, paddingHorizontal: 6, borderBottomWidth: 0.4, borderBottomColor: '#cbd5e1', alignItems: 'center', backgroundColor: '#f8fafc' }}>
+              <Text style={{ fontSize: 6.5, flex: 2.2, color: '#0f172a' }}>Excesos velocidad 50-80 km/h (meta: 0)</Text>
+              <View style={{ flex: 2.8 }}><AlertProgressBar val={resumen.excesos50a80} maxVal={maxVal} color="#d97706" /></View>
+              <Text style={{ fontSize: 7, fontWeight: 700, flex: 0.5, textAlign: 'center', color: resumen.excesos50a80 > 0 ? '#d97706' : '#16a34a' }}>{resumen.excesos50a80}</Text>
+            </View>
+            <View style={{ flexDirection: 'row', paddingVertical: 4, paddingHorizontal: 6, borderBottomWidth: 0.4, borderBottomColor: '#cbd5e1', alignItems: 'center' }}>
+              <Text style={{ fontSize: 6.5, flex: 2.2, color: '#0f172a' }}>Excesos velocidad 10-40 km/h (meta: 0)</Text>
+              <View style={{ flex: 2.8 }}><AlertProgressBar val={resumen.excesosVarios} maxVal={maxVal} color="#dc2626" /></View>
+              <Text style={{ fontSize: 7, fontWeight: 700, flex: 0.5, textAlign: 'center', color: resumen.excesosVarios > 0 ? '#dc2626' : '#16a34a' }}>{resumen.excesosVarios}</Text>
+            </View>
+            <View style={{ flexDirection: 'row', paddingVertical: 4, paddingHorizontal: 6, borderBottomWidth: 0.4, borderBottomColor: '#cbd5e1', alignItems: 'center', backgroundColor: '#f8fafc' }}>
+              <Text style={{ fontSize: 6.5, flex: 2.2, color: '#0f172a' }}>Frenadas bruscas (meta: &lt; 4)</Text>
+              <View style={{ flex: 2.8 }}><AlertProgressBar val={resumen.frenadas} maxVal={maxVal} color="#d97706" /></View>
+              <Text style={{ fontSize: 7, fontWeight: 700, flex: 0.5, textAlign: 'center', color: resumen.frenadas > 3 ? '#dc2626' : (resumen.frenadas > 0 ? '#d97706' : '#16a34a') }}>{resumen.frenadas}</Text>
+            </View>
+            <View style={{ flexDirection: 'row', paddingVertical: 4, paddingHorizontal: 6, alignItems: 'center' }}>
+              <Text style={{ fontSize: 6.5, flex: 2.2, color: '#0f172a' }}>Eventos sin iButton (meta: 0 — PESV obligatorio)</Text>
+              <View style={{ flex: 2.8 }}><AlertProgressBar val={resumen.alertasSinConductorIdentificado} maxVal={maxVal} color="#dc2626" /></View>
+              <Text style={{ fontSize: 7, fontWeight: 700, flex: 0.5, textAlign: 'center', color: resumen.alertasSinConductorIdentificado > 0 ? '#dc2626' : '#16a34a' }}>{resumen.alertasSinConductorIdentificado}</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* RANKING CONDUCTORES — NIVEL DE RIESGO PESV */}
+        <SectionTitle title="RANKING CONDUCTORES — NIVEL DE RIESGO PESV" />
+        <View style={{ marginBottom: 4 }}>
+          {/* Header */}
+          <View style={{ flexDirection: 'row', backgroundColor: '#0f3a60', paddingVertical: 4, paddingHorizontal: 6, alignItems: 'center' }}>
+            <Text style={{ fontSize: 6.8, fontWeight: 700, color: '#ffffff', flex: 0.3, textAlign: 'center' }}>#</Text>
+            <Text style={{ fontSize: 6.8, fontWeight: 700, color: '#ffffff', flex: 0.8, textAlign: 'center' }}>Placa</Text>
+            <Text style={{ fontSize: 6.8, fontWeight: 700, color: '#ffffff', flex: 1.8 }}>Conductor</Text>
+            <Text style={{ fontSize: 6.8, fontWeight: 700, color: '#ffffff', flex: 0.6, textAlign: 'center' }}>Alertas</Text>
+            <Text style={{ fontSize: 6.8, fontWeight: 700, color: '#ffffff', flex: 1.2, textAlign: 'center' }}>Nivel PESV</Text>
+            <Text style={{ fontSize: 6.8, fontWeight: 700, color: '#ffffff', flex: 2.3 }}>Acción requerida</Text>
+          </View>
+          {/* Rows */}
+          <View style={{ borderLeftWidth: 0.4, borderRightWidth: 0.4, borderBottomWidth: 0.4, borderColor: '#cbd5e1' }}>
+            {topOffenders.length === 0 ? (
+              <View style={{ padding: 6, alignItems: 'center' }}>
+                <Text style={{ fontSize: 6.5, color: '#16a34a', fontWeight: 700 }}>✓ Excelente: Cero conductores con alertas registradas.</Text>
+              </View>
+            ) : (
+              topOffenders.map((r, i) => {
+                const isSinIdentificar = r.conductor.toUpperCase().includes('SIN IDENTIFICAR') || r.conductor.toUpperCase().includes('NO REGISTRA');
+                const condLabel = isSinIdentificar ? 'SIN IDENTIFICAR (iButton)' : mayuscula(r.conductor);
+                const condColor = isSinIdentificar ? '#dc2626' : '#0f172a';
+                const condWeight = isSinIdentificar ? '700' : '400';
+
+                let nivel: 'CRÍTICO' | 'OBSERV.' | 'BAJO' = 'BAJO';
+                let accion = "Notificación y seguimiento preventivo. 15 días.";
+                let actionColor = '#0f172a';
+
+                if (r.infracciones80 > 0 || r.total >= 5) {
+                  nivel = 'CRÍTICO';
+                  accion = isSinIdentificar ? "Bloquear circulación. Identificar conductor. 48 h." : "Bloquear circulación. Comité extraordinario. 48 h.";
+                  actionColor = '#dc2626';
+                } else if (r.excesos50a80 > 0 || r.frenadas > 0 || r.total >= 2) {
+                  nivel = 'OBSERV.';
+                  accion = "Retroalimentación individual y firma de acta. 7 días.";
+                  actionColor = '#d97706';
+                }
+
+                return (
+                  <View key={i} style={{ flexDirection: 'row', paddingVertical: 5, paddingHorizontal: 6, borderBottomWidth: 0.4, borderBottomColor: '#cbd5e1', alignItems: 'center', backgroundColor: i % 2 === 1 ? '#f8fafc' : '#ffffff' }}>
+                    <Text style={{ fontSize: 6.5, flex: 0.3, textAlign: 'center', color: '#64748b' }}>{i + 1}</Text>
+                    <Text style={{ fontSize: 6.5, flex: 0.8, textAlign: 'center', fontWeight: '700', color: condColor }}>{r.placa}</Text>
+                    <Text style={{ fontSize: 6.5, flex: 1.8, fontWeight: condWeight, color: condColor }}>{condLabel}</Text>
+                    <Text style={{ fontSize: 7, flex: 0.6, textAlign: 'center', fontWeight: '700' }}>{r.total}</Text>
+                    <View style={{ flex: 1.2, alignItems: 'center', justifyContent: 'center' }}>
+                      <NivelPesvBadge nivel={nivel} />
+                    </View>
+                    <Text style={{ fontSize: 6.2, flex: 2.3, color: actionColor, fontWeight: nivel === 'CRÍTICO' ? '700' : '400' }}>{accion}</Text>
+                  </View>
+                );
+              })
+            )}
+
+            {/* Fila agrupada (Rank 5+) si existen más de 4 */}
+            {groupedOffenders.length > 0 ? (
+              <View style={{ flexDirection: 'row', paddingVertical: 5, paddingHorizontal: 6, alignItems: 'center', backgroundColor: topOffenders.length % 2 === 1 ? '#f8fafc' : '#ffffff' }}>
+                <Text style={{ fontSize: 6.5, flex: 0.3, textAlign: 'center', color: '#64748b' }}>5+</Text>
+                <Text style={{ fontSize: 5.2, flex: 0.8, textAlign: 'center', color: '#64748b', lineHeight: 1.2 }}>
+                  {groupedOffenders.map(g => g.placa).slice(0, 3).join(', ')}{groupedOffenders.length > 3 ? ', ...' : ''}
+                </Text>
+                <Text style={{ fontSize: 6.5, flex: 1.8, color: '#64748b' }}>
+                  {groupedOffenders.length} conductores/vehículos adicionales
+                </Text>
+                <Text style={{ fontSize: 6.5, flex: 0.6, textAlign: 'center', color: '#64748b' }}>
+                  {groupedOffenders.reduce((acc, curr) => acc + curr.total, 0)}
+                </Text>
+                <View style={{ flex: 1.2, alignItems: 'center', justifyContent: 'center' }}>
+                  <NivelPesvBadge nivel="BAJO" />
+                </View>
+                <Text style={{ fontSize: 6.2, flex: 2.3, color: '#64748b' }}>Notificación y seguimiento preventivo. 15 días.</Text>
+              </View>
+            ) : null}
+          </View>
+        </View>
+
+        {/* PLAN DE ACCIÓN — ACCIONES PENDIENTES */}
+        <SectionTitle title="PLAN DE ACCION — ACCIONES PENDIENTES" />
+        <View style={{ marginBottom: 8 }}>
+          {/* Header */}
+          <View style={{ flexDirection: 'row', backgroundColor: '#0f3a60', paddingVertical: 4, paddingHorizontal: 6, alignItems: 'center' }}>
+            <Text style={{ fontSize: 6.8, fontWeight: 700, color: '#ffffff', flex: 2.8 }}>Acción requerida (Llamado a la acción)</Text>
+            <Text style={{ fontSize: 6.8, fontWeight: 700, color: '#ffffff', flex: 1.4 }}>Responsable</Text>
+            <Text style={{ fontSize: 6.8, fontWeight: 700, color: '#ffffff', flex: 0.8, textAlign: 'center' }}>Plazo</Text>
+            <Text style={{ fontSize: 6.8, fontWeight: 700, color: '#ffffff', flex: 1.2, textAlign: 'center' }}>Ref. PESV</Text>
+            <Text style={{ fontSize: 6.8, fontWeight: 700, color: '#ffffff', flex: 0.6, textAlign: 'center' }}>Prior.</Text>
+          </View>
+          {/* Rows */}
+          <View style={{ borderLeftWidth: 0.4, borderRightWidth: 0.4, borderBottomWidth: 0.4, borderColor: '#cbd5e1' }}>
+            {correctivos.map((r, i) => (
+              <View key={i} style={{ flexDirection: 'row', paddingVertical: 5, paddingHorizontal: 6, borderBottomWidth: i === correctivos.length - 1 ? 0 : 0.4, borderBottomColor: '#cbd5e1', alignItems: 'center', backgroundColor: i % 2 === 1 ? '#f8fafc' : '#ffffff' }}>
+                <Text style={{ fontSize: 6.2, flex: 2.8, color: '#1e293b', lineHeight: 1.3 }}>{r.accion}</Text>
+                <Text style={{ fontSize: 6.2, flex: 1.4, color: '#475569' }}>{r.responsable}</Text>
+                <Text style={{ fontSize: 6.5, flex: 0.8, textAlign: 'center', fontWeight: '700', color: r.plazoColor }}>{r.plazo}</Text>
+                <Text style={{ fontSize: 6.2, flex: 1.2, textAlign: 'center', color: '#64748b' }}>{r.refPesv}</Text>
+                <View style={{ flex: 0.6, alignItems: 'center', justifyContent: 'center' }}>
+                  <PrioridadOrb color={r.priorColor} />
+                </View>
+              </View>
+            ))}
+          </View>
+        </View>
+
+        <View wrap={false}>
+          {/* CONTROL DE COMPROMISO Y CIERRE */}
+          <SectionTitle title="CONTROL DE COMPROMISO Y CIERRE" />
+          <View style={{ borderWidth: 0.4, borderColor: '#cbd5e1', padding: 5, marginBottom: 8, backgroundColor: '#f8fafc', borderRadius: 2 }}>
+            <Text style={{ fontSize: 5.8, lineHeight: 1.4, color: '#334155' }}>
+              Las acciones correctivas y preventivas contenidas en este plan son de cumplimiento obligatorio y forman parte integral del Plan Estratégico de Seguridad Vial (PESV). El supervisor de operaciones del contrato y el líder de seguridad vial (SST) deben registrar en la bitácora interna las citaciones de descargo, las actas firmadas de compromiso y los mantenimientos preventivos realizados, asegurando la trazabilidad del 100% de los llamados a la acción establecidos.
+            </Text>
+          </View>
+
+          {/* REFERENCIA NORMATIVA */}
+          <View style={{ borderLeftWidth: 2, borderLeftColor: '#0d9488', backgroundColor: '#f0fdfa', padding: 5, marginTop: 10 }}>
+            <Text style={{ fontSize: 5.6, lineHeight: 1.3, color: '#0f766e' }}>
+              <Text style={{ fontWeight: 700 }}>Referencia normativa: </Text>
+              Manual PESV COL-0038 V2 (07/03/2025) — Res. 20223040040595/2022. Objetivo corporativo: 0 accidentes viales. Meta de conducta: &lt;50% eventos atribuidos a conductores. Ciclo PHVA activo.
+            </Text>
+          </View>
+
+          <Text style={{ textAlign: 'center', fontSize: 6, fontWeight: 700, marginTop: 15, color: '#64748b' }}>*** FIN DEL INFORME GERENCIAL ***</Text>
+        </View>
+      </Page>
+    </Document>
+  );
+}
+
 export async function descargarPDFAlertasDiarias(data: ReporteAlertasDiariasData): Promise<void> {
   const blob = await pdf(<InformeAlertasDiariasPDF data={data} />).toBlob();
   const contrato = safeFileName(data.contrato?.nombre || data.alertas[0]?.contrato_nombre || 'alertas');
   downloadBlob(blob, `Alertas_Diarias_${contrato}_${data.periodoInicio}_${data.periodoFin}.pdf`);
+}
+
+export async function descargarPDFAlertasDiariasGerencial(data: ReporteAlertasDiariasData): Promise<void> {
+  const blob = await pdf(<InformeGerencialAlertasDiariasPDF data={data} />).toBlob();
+  const contrato = safeFileName(data.contrato?.nombre || data.alertas[0]?.contrato_nombre || 'alertas');
+  downloadBlob(blob, `Informe_Gerencial_${contrato}_${data.periodoInicio}_${data.periodoFin}.pdf`);
 }
 
 export async function descargarConsolidadoConductoresContrato(

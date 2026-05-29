@@ -192,6 +192,18 @@ export interface AlertaDiariaGps {
   contrato_id?: string | null;
 }
 
+export interface ResumenTipoVehiculoDiario {
+  tipo: string;
+  totalVehiculos: number;
+  vehiculosConAlertas: number;
+  porcentajeConAlertas: number;
+  infracciones80: number;
+  excesos50a80: number;
+  excesosVarios: number;
+  frenadas: number;
+  totalAlertas: number;
+}
+
 export interface ReporteAlertasDiariasData {
   alertas: AlertaDiariaGps[];
   periodoInicio: string;
@@ -200,10 +212,12 @@ export interface ReporteAlertasDiariasData {
   contrato?: ContratoOption;
   resumen: {
     totalAlertas: number;
+    vehiculosActivosBase: number;
     vehiculosConAlertas: number;
     personasAutorizadas: number;
     personasIdentificadas: number;
     personasSinIdentificar: number;
+    alertasSinConductorIdentificado: number;
     motocicletasConAlertas: number;
     vehiculosConGps: number;
     motocicletasConGps: number;
@@ -211,6 +225,7 @@ export interface ReporteAlertasDiariasData {
     excesosVarios: number;
     excesos50a80: number;
     frenadas: number;
+    tiposVehiculo: ResumenTipoVehiculoDiario[];
   };
 }
 
@@ -248,6 +263,15 @@ function tieneGpsConfigurado(value: unknown): boolean {
 
 function esMoto(tipo: unknown): boolean {
   return normalizeText(tipo).includes('MOTO');
+}
+
+function tipoVehiculoLabel(tipo: unknown): string {
+  const label = String(tipo ?? '').trim();
+  return label || 'Sin tipo registrado';
+}
+
+function tipoVehiculoKey(tipo: unknown): string {
+  return normalizeText(tipoVehiculoLabel(tipo)) || 'SIN_TIPO_REGISTRADO';
 }
 
 export async function getConductores(): Promise<ConductorOption[]> {
@@ -588,6 +612,126 @@ export async function listarReportesConductores(filtro: Partial<FiltroReporte> &
   return listarReportesConductoresDesdeColtrack(filtro);
 }
 
+async function listarReportesVehiculosDesdeColtrack(filtro: Partial<FiltroReporte>): Promise<Record<string, unknown>[]> {
+  const select = filtro.contratoId
+    ? '*, vehiculos!inner(id, placa, marca, tipo_activo, contrato_id, estado, lugar, cliente)'
+    : '*, vehiculos(id, placa, marca, tipo_activo, contrato_id, estado, lugar, cliente)';
+  let q = supabase
+    .from('coltrack_datos_vehiculo')
+    .select(select)
+    .order('fecha', { ascending: false });
+
+  if (filtro.vehiculoId) q = q.eq('vehiculo_id', filtro.vehiculoId);
+  if (filtro.fechaInicio) q = q.gte('fecha', filtro.fechaInicio);
+  if (filtro.fechaFin) q = q.lte('fecha', filtro.fechaFin);
+  if (filtro.proyecto) q = q.eq('vehiculos.cliente', filtro.proyecto);
+  if (filtro.contratoId) q = q.eq('vehiculos.contrato_id', filtro.contratoId);
+
+  const data = await fetchAllRows<Record<string, unknown>>(q);
+
+  // También obtener datos de ralentí para el mismo periodo
+  let dataRalenti: Record<string, unknown>[] = [];
+  if (filtro.fechaInicio && filtro.fechaFin) {
+    let qRalenti = supabase
+      .from('ralentis')
+      .select('*')
+      .gte('fecha', filtro.fechaInicio)
+      .lte('fecha', filtro.fechaFin);
+    if (filtro.vehiculoId) qRalenti = qRalenti.eq('vehiculo_id', filtro.vehiculoId);
+    dataRalenti = await fetchAllRows<Record<string, unknown>>(qRalenti);
+  }
+
+  // Mapear ralentís por vehiculo_id + fecha
+  const ralentiMap = new Map<string, Record<string, unknown>>();
+  for (const r of dataRalenti) {
+    const key = `${r.vehiculo_id}|${String(r.fecha).slice(0, 10)}`;
+    ralentiMap.set(key, r);
+  }
+
+  const grupos = new Map<string, Record<string, unknown> & { _calificaciones: number[] }>();
+  for (const row of data) {
+    const vehiculo = row.vehiculos as Record<string, unknown> | null;
+    if (!vehiculo || normalizeText(vehiculo.estado) !== 'ACTIVO') continue;
+
+    const fecha = String(row.fecha ?? '').slice(0, 10);
+    const mes = fecha ? fecha.slice(0, 7) : String(row.mes ?? '');
+    const vehiculoId = String(row.vehiculo_id ?? vehiculo.id ?? '');
+    const key = `${vehiculoId}|${mes}`;
+
+    if (!grupos.has(key)) {
+      grupos.set(key, {
+        vehiculo_id: vehiculoId,
+        vehiculos: {
+          placa: vehiculo.placa,
+          marca: vehiculo.marca,
+          tipo_activo: vehiculo.tipo_activo,
+          contrato_id: vehiculo.contrato_id,
+        },
+        periodo_inicio: fecha,
+        periodo_fin: fecha,
+        mes,
+        calificacion: 0,
+        kms: 0,
+        horas_conduccion: 0,
+        excesos_10_kph: 0,
+        excesos_20_kph: 0,
+        excesos_30_kph: 0,
+        excesos_40_kph: 0,
+        excesos_50_kph: 0,
+        excesos_60_kph: 0,
+        excesos_80_kph: 0,
+        aceleraciones_bruscas: 0,
+        frenadas_bruscas: 0,
+        horas_motor_ralenti: 0,
+        proyecto: String(vehiculo.cliente ?? row.proyecto ?? ''),
+        base: String(vehiculo.lugar ?? ''),
+        fecha_reporte: new Date().toISOString().slice(0, 10),
+        _calificaciones: [],
+      });
+    }
+
+    const acc = grupos.get(key)!;
+    if (fecha) {
+      const inicio = String(acc.periodo_inicio || fecha);
+      const fin = String(acc.periodo_fin || fecha);
+      acc.periodo_inicio = fecha < inicio ? fecha : inicio;
+      acc.periodo_fin = fecha > fin ? fecha : fin;
+    }
+
+    const calificacion = Number(row.calificacion ?? 0);
+    if (calificacion > 0) acc._calificaciones.push(calificacion);
+    for (const campo of [
+      'kms',
+      'horas_conduccion',
+      'excesos_10_kph',
+      'excesos_20_kph',
+      'excesos_30_kph',
+      'excesos_40_kph',
+      'excesos_50_kph',
+      'excesos_60_kph',
+      'excesos_80_kph',
+    ]) {
+      acc[campo] = Number(acc[campo] ?? 0) + Number(row[campo] ?? 0);
+    }
+    acc.aceleraciones_bruscas = Number(acc.aceleraciones_bruscas ?? 0) + Number(row.aceleraciones ?? 0);
+    acc.frenadas_bruscas = Number(acc.frenadas_bruscas ?? 0) + Number(row.frenadas ?? 0);
+
+    // Sumar ralentís
+    const rKey = `${vehiculoId}|${fecha}`;
+    const ral = ralentiMap.get(rKey);
+    if (ral) {
+      acc.horas_motor_ralenti = Number(acc.horas_motor_ralenti ?? 0) + Number(ral.horas_motor_ralenti ?? 0);
+    }
+  }
+
+  return Array.from(grupos.values()).map(({ _calificaciones, ...row }) => ({
+    ...row,
+    calificacion: _calificaciones.length
+      ? Math.round((_calificaciones.reduce((a, b) => a + b, 0) / _calificaciones.length) * 100) / 100
+      : 0,
+  }));
+}
+
 export async function listarReportesVehiculos(filtro: Partial<FiltroReporte> & { mes?: string }) {
   let q = supabase
     .from('reportes_vehiculos')
@@ -603,7 +747,9 @@ export async function listarReportesVehiculos(filtro: Partial<FiltroReporte> & {
     q = q.eq('mes', filtro.mes);
   }
 
-  return fetchAllRows<Record<string, unknown>>(q);
+  const data = await fetchAllRows<Record<string, unknown>>(q);
+  if (data.length > 0) return data;
+  return listarReportesVehiculosDesdeColtrack(filtro);
 }
 
 export async function getReporteAlertasDiarias(filtro: Pick<FiltroReporte, 'fechaInicio' | 'fechaFin' | 'contratoId'>): Promise<ReporteAlertasDiariasData | null> {
@@ -684,12 +830,11 @@ export async function getReporteAlertasDiarias(filtro: Pick<FiltroReporte, 'fech
   let personasAutorizadas = 0;
   const vehiculosQuery = supabase
     .from('vehiculos')
-    .select('id, tipo_activo, gps_compañia', { count: 'exact' })
+    .select('id, tipo_activo, gps_compañia')
     .eq('estado', 'ACTIVO');
   if (filtro.contratoId) vehiculosQuery.eq('contrato_id', filtro.contratoId);
-  const { data: vehiculosBase, count: vehCount } = await vehiculosQuery;
-  void vehCount;
-  const _vehBase = (vehiculosBase as unknown as Record<string, unknown>[]) ?? [];
+  const _vehBase = await fetchAllRows<Record<string, unknown>>(vehiculosQuery);
+  const vehiculosActivosBase = _vehBase.length;
   vehiculosConGps = _vehBase.filter((v) => tieneGpsConfigurado(v.gps_compañia)).length;
   motocicletasConGps = _vehBase.filter((v) => esMoto(v.tipo_activo) && tieneGpsConfigurado(v.gps_compañia)).length;
 
@@ -703,6 +848,78 @@ export async function getReporteAlertasDiarias(filtro: Pick<FiltroReporte, 'fech
 
   const identificados = new Set(alertas.filter(a => a.conductor_identificado).map(a => normalizeText(a.conductor)).filter(Boolean));
   const sinIdentificar = new Set(alertas.filter(a => !a.conductor_identificado).map(a => `${a.placa}|${a.fecha_dia}`));
+  const alertasSinConductorIdentificado = alertas
+    .filter(a => !a.conductor_identificado)
+    .reduce((acc, a) => acc + a.infraccion_80_kmh + a.excesos_varios_parametros + a.excesos_50_80_kmh + a.frenadas_bruscas, 0);
+
+  const tiposVehiculoMap = new Map<string, {
+    tipo: string;
+    vehiculoIds: Set<string>;
+    vehiculosConAlertas: Set<string>;
+    infracciones80: number;
+    excesos50a80: number;
+    excesosVarios: number;
+    frenadas: number;
+  }>();
+  const tipoPorVehiculoId = new Map<string, unknown>();
+
+  for (const vehiculo of _vehBase) {
+    const id = String(vehiculo.id ?? '');
+    const key = tipoVehiculoKey(vehiculo.tipo_activo);
+    const current = tiposVehiculoMap.get(key) ?? {
+      tipo: tipoVehiculoLabel(vehiculo.tipo_activo),
+      vehiculoIds: new Set<string>(),
+      vehiculosConAlertas: new Set<string>(),
+      infracciones80: 0,
+      excesos50a80: 0,
+      excesosVarios: 0,
+      frenadas: 0,
+    };
+    if (id) {
+      current.vehiculoIds.add(id);
+      tipoPorVehiculoId.set(id, vehiculo.tipo_activo);
+    }
+    tiposVehiculoMap.set(key, current);
+  }
+
+  for (const alerta of alertas) {
+    const vehiculoId = String(alerta.vehiculo_id ?? '');
+    const tipo = tipoPorVehiculoId.get(vehiculoId) ?? alerta.tipo_activo;
+    const key = tipoVehiculoKey(tipo);
+    const current = tiposVehiculoMap.get(key) ?? {
+      tipo: tipoVehiculoLabel(tipo),
+      vehiculoIds: new Set<string>(),
+      vehiculosConAlertas: new Set<string>(),
+      infracciones80: 0,
+      excesos50a80: 0,
+      excesosVarios: 0,
+      frenadas: 0,
+    };
+    if (vehiculoId) current.vehiculosConAlertas.add(vehiculoId);
+    current.infracciones80 += alerta.infraccion_80_kmh;
+    current.excesos50a80 += alerta.excesos_50_80_kmh;
+    current.excesosVarios += alerta.excesos_varios_parametros;
+    current.frenadas += alerta.frenadas_bruscas;
+    tiposVehiculoMap.set(key, current);
+  }
+
+  const tiposVehiculo = Array.from(tiposVehiculoMap.values())
+    .map((tipo) => {
+      const totalVehiculos = tipo.vehiculoIds.size;
+      const vehiculosConAlertas = tipo.vehiculosConAlertas.size;
+      return {
+        tipo: tipo.tipo,
+        totalVehiculos,
+        vehiculosConAlertas,
+        porcentajeConAlertas: totalVehiculos > 0 ? (vehiculosConAlertas / totalVehiculos) * 100 : 0,
+        infracciones80: tipo.infracciones80,
+        excesos50a80: tipo.excesos50a80,
+        excesosVarios: tipo.excesosVarios,
+        frenadas: tipo.frenadas,
+        totalAlertas: tipo.infracciones80 + tipo.excesos50a80 + tipo.excesosVarios + tipo.frenadas,
+      };
+    })
+    .sort((a, b) => b.totalAlertas - a.totalAlertas || b.vehiculosConAlertas - a.vehiculosConAlertas || a.tipo.localeCompare(b.tipo, 'es'));
 
   return {
     alertas,
@@ -712,10 +929,12 @@ export async function getReporteAlertasDiarias(filtro: Pick<FiltroReporte, 'fech
     contrato,
     resumen: {
       totalAlertas: alertas.reduce((acc, a) => acc + a.infraccion_80_kmh + a.excesos_varios_parametros + a.excesos_50_80_kmh + a.frenadas_bruscas, 0),
+      vehiculosActivosBase,
       vehiculosConAlertas: new Set(alertas.map(a => a.placa)).size,
       personasAutorizadas,
       personasIdentificadas: identificados.size,
       personasSinIdentificar: sinIdentificar.size,
+      alertasSinConductorIdentificado,
       motocicletasConAlertas: new Set(alertas.filter(a => esMoto(a.tipo_activo)).map(a => a.placa)).size,
       vehiculosConGps,
       motocicletasConGps,
@@ -723,6 +942,7 @@ export async function getReporteAlertasDiarias(filtro: Pick<FiltroReporte, 'fech
       excesosVarios: alertas.reduce((acc, a) => acc + a.excesos_varios_parametros, 0),
       excesos50a80: alertas.reduce((acc, a) => acc + a.excesos_50_80_kmh, 0),
       frenadas: alertas.reduce((acc, a) => acc + a.frenadas_bruscas, 0),
+      tiposVehiculo,
     },
   };
 }
