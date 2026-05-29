@@ -84,9 +84,53 @@ export const SheetsSyncPanel: React.FC = () => {
         .select('id, placa, cliente')
         .eq('cliente', 'PENDIENTE GOOGLE SHEETS');
 
+      // Obtener KMs para conductores pendientes
+      const driverIds = (dPending ?? []).map(d => d.id);
+      const driverKmsMap: Record<string, number> = {};
+      if (driverIds.length > 0) {
+        const { data: dKms } = await supabase
+          .from('coltrack_datos_conductor')
+          .select('conductor_id, kms')
+          .in('conductor_id', driverIds);
+        
+        if (dKms) {
+          dKms.forEach(row => {
+            const id = row.conductor_id;
+            driverKmsMap[id] = (driverKmsMap[id] || 0) + Number(row.kms || 0);
+          });
+        }
+      }
+
+      // Obtener KMs para vehículos pendientes
+      const vehicleIds = (vPending ?? []).map(v => v.id);
+      const vehicleKmsMap: Record<string, number> = {};
+      if (vehicleIds.length > 0) {
+        const { data: vKms } = await supabase
+          .from('coltrack_datos_vehiculo')
+          .select('vehiculo_id, kms')
+          .in('vehiculo_id', vehicleIds);
+        
+        if (vKms) {
+          vKms.forEach(row => {
+            const id = row.vehiculo_id;
+            vehicleKmsMap[id] = (vehicleKmsMap[id] || 0) + Number(row.kms || 0);
+          });
+        }
+      }
+
+      const driversWithKms = (dPending ?? []).map(c => ({
+        ...c,
+        kms: driverKmsMap[c.id] || 0
+      }));
+
+      const vehiclesWithKms = (vPending ?? []).map(v => ({
+        ...v,
+        kms: vehicleKmsMap[v.id] || 0
+      }));
+
       if (mountedRef.current) {
-        setPendingDrivers(dPending ?? []);
-        setPendingVehicles(vPending ?? []);
+        setPendingDrivers(driversWithKms);
+        setPendingVehicles(vehiclesWithKms);
       }
     } catch (err) {
       console.error('Error al cargar pendientes de Google Sheets:', err);
@@ -100,11 +144,13 @@ export const SheetsSyncPanel: React.FC = () => {
       const dataConductores = pendingDrivers.map(c => ({
         'Nombre Conductor': c.nombres,
         'Cédula': c.cedula,
-        'iButton': c.ibutton || 'Sin asignar'
+        'iButton': c.ibutton || 'Sin asignar',
+        'KM Recorridos (Plataforma)': Number(c.kms || 0)
       }));
 
       const dataVehiculos = pendingVehicles.map(v => ({
         'Placa': v.placa,
+        'KM Recorridos (Plataforma)': Number(v.kms || 0),
         'Estado': 'Pendiente en Google Sheets'
       }));
 
@@ -402,9 +448,18 @@ export const SheetsSyncPanel: React.FC = () => {
                       {pendingDrivers.map((c) => (
                         <div key={c.id} className="text-xs pt-1.5 first:pt-0">
                           <p className="font-semibold text-slate-700 dark:text-slate-300">{c.nombres}</p>
-                          <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                            CC: <code className="bg-slate-100 dark:bg-slate-900 px-1 py-0.5 rounded font-mono font-bold text-[9px]">{c.cedula}</code>
-                            {c.ibutton && <span className="ml-2">iButton: <code className="bg-slate-100 dark:bg-slate-900 px-1 py-0.5 rounded font-mono text-[9px]">{c.ibutton}</code></span>}
+                          <p className="text-[10px] text-slate-500 dark:text-slate-400 flex items-center flex-wrap gap-1.5 mt-0.5">
+                            <span>CC:</span>
+                            <code className="bg-slate-100 dark:bg-slate-950 px-1 py-0.5 rounded font-mono font-bold text-[9px] text-slate-700 dark:text-slate-300">{c.cedula}</code>
+                            {c.ibutton && (
+                              <>
+                                <span>iButton:</span>
+                                <code className="bg-slate-100 dark:bg-slate-950 px-1 py-0.5 rounded font-mono text-[9px] text-slate-700 dark:text-slate-300">{c.ibutton}</code>
+                              </>
+                            )}
+                            <span className="bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 px-1.5 py-0.5 rounded font-semibold text-[9px]">
+                              KM: {(c.kms || 0).toLocaleString('es-CO', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} km
+                            </span>
                           </p>
                         </div>
                       ))}
@@ -422,9 +477,14 @@ export const SheetsSyncPanel: React.FC = () => {
                       {pendingVehicles.map((v) => (
                         <div key={v.id} className="text-xs pt-1.5 first:pt-0">
                           <p className="font-semibold text-slate-700 dark:text-slate-300">
-                            Placa: <code className="bg-slate-100 dark:bg-slate-900 px-1.5 py-0.5 rounded font-bold font-mono text-[10px] text-amber-700 dark:text-amber-400">{v.placa}</code>
+                            Placa: <code className="bg-slate-105 dark:bg-slate-950 px-1.5 py-0.5 rounded font-bold font-mono text-[10px] text-amber-700 dark:text-amber-400">{v.placa}</code>
                           </p>
-                          <p className="text-[10px] text-slate-500 dark:text-slate-400">Estado: Pendiente Sincronización Maestro</p>
+                          <p className="text-[10px] text-slate-500 dark:text-slate-400 flex items-center flex-wrap gap-2 mt-0.5">
+                            <span>Estado: Pendiente Sincronización Maestro</span>
+                            <span className="bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 px-1.5 py-0.5 rounded font-semibold text-[9px]">
+                              KM: {(v.kms || 0).toLocaleString('es-CO', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} km
+                            </span>
+                          </p>
                         </div>
                       ))}
                     </div>
