@@ -529,9 +529,28 @@ function conductorTableFlex(index: number): number {
   return 0.72;
 }
 
+function tieneGpsConfigurado(value: unknown): boolean {
+  const normalizado = String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toUpperCase();
+  return Boolean(normalizado) && !['NO', 'N/A', 'NA', 'SIN GPS', 'NINGUNO', 'NO APLICA', '0'].includes(normalizado);
+}
+
 function vehiculoTableFlex(index: number): number {
-  if (index === 0) return 0.38;
-  if (index === 1) return 1;
+  if (index === 0) return 0.22;  // '#'
+  if (index === 1) return 0.55;  // 'Placa'
+  if (index === 2) return 0.58;  // 'Dispositivo GPS'
+  if (index === 3) return 0.65;  // 'KM Recorridos'
+  if (index === 4) return 0.65;  // 'Horas Conducción'
+  if (index === 5) return 0.65;  // '# Excesos 80 Km/h'
+  if (index === 6) return 0.65;  // 'Máxima Vel. 80 Km/h'
+  if (index === 7) return 1.15;  // '# Exceso Velocidad Maxima (varios parametros 20,30,40,50,60,70)'
+  if (index === 8) return 0.65;  // '# Frenadas bruscas'
+  if (index === 9) return 0.65;  // '# Sobre Aceleraciones'
+  if (index === 10) return 0.52; // '# Ralenti'
+  if (index === 11) return 0.52; // 'Horas Ralenti'
   return 0.78;
 }
 
@@ -1082,7 +1101,12 @@ export function ConsolidadoVehiculosContratoPDF({
         </View>
         <Band>2.4. DESVIACIONES POR VEHICULO - PERIODO EVALUADO</Band>
         <View style={base.tableHeader}>
-          {['#', 'Placa', 'Calificacion', 'Km recorridos', 'Horas Conduccion', '# Excesos 80 Km/h', '# Exceso Velocidad Maxima', '# Frenadas bruscas', '# Sobre Aceleraciones'].map((h, i) => (
+          {[
+            '#', 'Placa', 'Dispositivo GPS', 'KM Recorridos', 'Horas Conducción',
+            '# Excesos 80 Km/h', 'Máxima Vel. 80 Km/h',
+            '# Exceso Velocidad Maxima (varios parametros 20,30,40,50,60,70)',
+            '# Frenadas bruscas', '# Sobre Aceleraciones', '# Ralenti', 'Horas Ralenti'
+          ].map((h, i) => (
             <Text key={h} style={[base.tableHeaderCell, { flex: vehiculoTableFlex(i) }]}>{h}</Text>
           ))}
         </View>
@@ -1090,15 +1114,19 @@ export function ConsolidadoVehiculosContratoPDF({
           <View key={d.vehiculo.id} style={[base.tableRow, i % 2 ? base.tableRowAlt : {}]} wrap={false}>
             <Text style={[base.tableCell, { flex: vehiculoTableFlex(0) }]}>{i + 1}</Text>
             <Text style={[base.tableCell, { flex: vehiculoTableFlex(1), fontWeight: 700 }]}>{d.vehiculo.placa}</Text>
-            <Text style={[base.tableCell, { flex: vehiculoTableFlex(2) }]}>{n(d.metricas.calificacion, 0)}</Text>
+            <Text style={[base.tableCell, { flex: vehiculoTableFlex(2) }]}>{tieneGpsConfigurado(d.vehiculo.gps_compañia) ? 'Si' : 'No'}</Text>
             <Text style={[base.tableCell, { flex: vehiculoTableFlex(3) }]}>{n(d.metricas.kms, 1)}</Text>
-            <Text style={[base.tableCell, { flex: vehiculoTableFlex(4) }]}>{n(d.metricas.horas_conduccion, 1)}</Text>
-            <Text style={[base.tableCell, { flex: vehiculoTableFlex(5) }]}>{n(d.metricas.excesos_80_kph)}</Text>
-            <Text style={[base.tableCell, { flex: vehiculoTableFlex(6) }]}>{n(excesosVarios(d.metricas))}</Text>
-            <Text style={[base.tableCell, { flex: vehiculoTableFlex(7) }]}>{n(d.metricas.frenadas)}</Text>
-            <Text style={[base.tableCell, { flex: vehiculoTableFlex(8) }]}>{n(d.metricas.aceleraciones)}</Text>
+            <Text style={[base.tableCell, { flex: vehiculoTableFlex(4) }]}>{n(d.metricas.horas_conduccion, 0)}</Text>
+            <Text style={[base.tableCell, { flex: vehiculoTableFlex(5) }]}>{d.metricas.excesos_80_kph > 0 ? n(d.metricas.excesos_80_kph) : '-'}</Text>
+            <Text style={[base.tableCell, { flex: vehiculoTableFlex(6) }]}>{d.metricas.maxima_vel_80_kph && d.metricas.maxima_vel_80_kph > 0 ? n(d.metricas.maxima_vel_80_kph, 0) : '-'}</Text>
+            <Text style={[base.tableCell, { flex: vehiculoTableFlex(7) }]}>{excesosVarios(d.metricas) > 0 ? n(excesosVarios(d.metricas)) : '-'}</Text>
+            <Text style={[base.tableCell, { flex: vehiculoTableFlex(8) }]}>{d.metricas.frenadas > 0 ? n(d.metricas.frenadas) : '-'}</Text>
+            <Text style={[base.tableCell, { flex: vehiculoTableFlex(9) }]}>{d.metricas.aceleraciones > 0 ? n(d.metricas.aceleraciones) : '-'}</Text>
+            <Text style={[base.tableCell, { flex: vehiculoTableFlex(10) }]}>{d.ralenti.ralentis_excesivos > 0 ? n(d.ralenti.ralentis_excesivos) : '-'}</Text>
+            <Text style={[base.tableCell, { flex: vehiculoTableFlex(11) }]}>{d.ralenti.horas_motor_ralenti > 0 ? n(d.ralenti.horas_motor_ralenti, 0) : '-'}</Text>
           </View>
         ))}
+
         <AccionesYFirmas
           tipoEntidad="vehiculos"
           metricas={m}
@@ -1114,7 +1142,12 @@ export function ConsolidadoVehiculosContratoPDF({
         <ReportHeader title="FORMATO LOCAL PARA INFORME GESTION MENSUAL COMPORTAMIENTO FLOTA VEHICULAR (GPS)" />
         <ReportFooter />
         <View style={base.tableHeader}>
-          {['#', 'Placa', 'Calificacion', 'Km recorridos', 'Horas Conduccion', '# Excesos 80 Km/h', '# Exceso Velocidad Maxima', '# Frenadas bruscas', '# Sobre Aceleraciones'].map((h, i) => (
+          {[
+            '#', 'Placa', 'Dispositivo GPS', 'KM Recorridos', 'Horas Conducción',
+            '# Excesos 80 Km/h', 'Máxima Vel. 80 Km/h',
+            '# Exceso Velocidad Maxima (varios parametros 20,30,40,50,60,70)',
+            '# Frenadas bruscas', '# Sobre Aceleraciones', '# Ralenti', 'Horas Ralenti'
+          ].map((h, i) => (
             <Text key={h} style={[base.tableHeaderCell, { flex: vehiculoTableFlex(i) }]}>{h}</Text>
           ))}
         </View>
@@ -1122,13 +1155,16 @@ export function ConsolidadoVehiculosContratoPDF({
           <View key={d.vehiculo.id} style={[base.tableRow, i % 2 ? base.tableRowAlt : {}]} wrap={false}>
             <Text style={[base.tableCell, { flex: vehiculoTableFlex(0) }]}>{i + 1}</Text>
             <Text style={[base.tableCell, { flex: vehiculoTableFlex(1), fontWeight: 700 }]}>{d.vehiculo.placa}</Text>
-            <Text style={[base.tableCell, { flex: vehiculoTableFlex(2) }]}>{n(d.metricas.calificacion, 0)}</Text>
+            <Text style={[base.tableCell, { flex: vehiculoTableFlex(2) }]}>{tieneGpsConfigurado(d.vehiculo.gps_compañia) ? 'Si' : 'No'}</Text>
             <Text style={[base.tableCell, { flex: vehiculoTableFlex(3) }]}>{n(d.metricas.kms, 1)}</Text>
-            <Text style={[base.tableCell, { flex: vehiculoTableFlex(4) }]}>{n(d.metricas.horas_conduccion, 1)}</Text>
-            <Text style={[base.tableCell, { flex: vehiculoTableFlex(5) }]}>{n(d.metricas.excesos_80_kph)}</Text>
-            <Text style={[base.tableCell, { flex: vehiculoTableFlex(6) }]}>{n(excesosVarios(d.metricas))}</Text>
-            <Text style={[base.tableCell, { flex: vehiculoTableFlex(7) }]}>{n(d.metricas.frenadas)}</Text>
-            <Text style={[base.tableCell, { flex: vehiculoTableFlex(8) }]}>{n(d.metricas.aceleraciones)}</Text>
+            <Text style={[base.tableCell, { flex: vehiculoTableFlex(4) }]}>{n(d.metricas.horas_conduccion, 0)}</Text>
+            <Text style={[base.tableCell, { flex: vehiculoTableFlex(5) }]}>{d.metricas.excesos_80_kph > 0 ? n(d.metricas.excesos_80_kph) : '-'}</Text>
+            <Text style={[base.tableCell, { flex: vehiculoTableFlex(6) }]}>{d.metricas.maxima_vel_80_kph && d.metricas.maxima_vel_80_kph > 0 ? n(d.metricas.maxima_vel_80_kph, 0) : '-'}</Text>
+            <Text style={[base.tableCell, { flex: vehiculoTableFlex(7) }]}>{excesosVarios(d.metricas) > 0 ? n(excesosVarios(d.metricas)) : '-'}</Text>
+            <Text style={[base.tableCell, { flex: vehiculoTableFlex(8) }]}>{d.metricas.frenadas > 0 ? n(d.metricas.frenadas) : '-'}</Text>
+            <Text style={[base.tableCell, { flex: vehiculoTableFlex(9) }]}>{d.metricas.aceleraciones > 0 ? n(d.metricas.aceleraciones) : '-'}</Text>
+            <Text style={[base.tableCell, { flex: vehiculoTableFlex(10) }]}>{d.ralenti.ralentis_excesivos > 0 ? n(d.ralenti.ralentis_excesivos) : '-'}</Text>
+            <Text style={[base.tableCell, { flex: vehiculoTableFlex(11) }]}>{d.ralenti.horas_motor_ralenti > 0 ? n(d.ralenti.horas_motor_ralenti, 0) : '-'}</Text>
           </View>
         ))}
       </Page>

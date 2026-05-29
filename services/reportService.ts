@@ -150,6 +150,7 @@ export interface ReporteVehiculoData {
     dispositivo_gps?: string;
     estado_gps?: string;
     base?: string;
+    maxima_vel_80_kph?: number;
   };
   ralenti: {
     kms_recorridos: number;
@@ -455,6 +456,7 @@ export async function getReporteVehiculo(filtro: FiltroReporte): Promise<Reporte
     dispositivo_gps: metrics.length > 0 ? String(metrics[0].gps_proveedor ?? '') : '',
     estado_gps: '',
     base: veh.lugar as string ?? '',
+    maxima_vel_80_kph: metrics.length > 0 ? Math.max(...metrics.map(m => Number(m.maxima_vel_80_kph ?? 0))) : 0,
   };
 
   const ralenti = {
