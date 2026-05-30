@@ -2044,6 +2044,9 @@ export async function importarDatosPlanosFagor(
   // Se usa SOLO para complementar vehículos NO encontrados en el archivo principal — nunca se suman.
   let fileKmVehRespaldo: File | null = null;
   const filesRalenti: File[] = [];
+  const filesExcesos: File[] = [];
+  const filesFrenadas: File[] = [];
+  const filesAceleraciones: File[] = [];
 
   for (const file of files) {
     const arrayBuffer = await file.arrayBuffer();
@@ -2057,38 +2060,80 @@ export async function importarDatosPlanosFagor(
     } else if (rawRows.length > 0 && rawRows[0].includes('Matrícula') && rawRows[0].includes('T. Ralentí')) {
       filesRalenti.push(file);
     } else {
-      // Detección dinámica de cabeceras en las primeras 15 filas
-      let esKmCond = false;
-      let esKmVeh = false;
-      let esKmVehRespaldo = false;
-      const limiteFilas = Math.min(rawRows.length, 15);
-      
-      for (let i = 0; i < limiteFilas; i++) {
-        const row = rawRows[i] || [];
-        const rowStr = row.map(c => String(c ?? '').trim());
-        if (rowStr.includes('Conductor') && (rowStr.includes('Km. Recorridos') || rowStr.includes('Kms'))) {
-          esKmCond = true;
-          break;
-        }
-        if (rowStr.includes('Matrícula') && (rowStr.includes('Km. Recorridos') || rowStr.includes('Kms'))) {
-          esKmVeh = true;
-          break;
-        }
-        if (rowStr.includes('Matrícula') && rowStr.includes('Distancia(km)')) {
-          esKmVehRespaldo = true;
-          break;
+      // Detección dinámica de tipo de archivo detallado de alarmas (Excesos, Frenadas, Aceleraciones)
+      let esExcesos = false;
+      let esFrenadas = false;
+      let esAceleraciones = false;
+
+      const nameNorm = normalizeText(file.name).toUpperCase();
+      if (nameNorm.includes('EXCESO')) {
+        esExcesos = true;
+      } else if (nameNorm.includes('FRENADA')) {
+        esFrenadas = true;
+      } else if (nameNorm.includes('ACELERACION')) {
+        esAceleraciones = true;
+      } else {
+        // Respaldo dinámico mediante escaneo de la columna de Estado en las primeras filas
+        const limiteFilas = Math.min(rawRows.length, 10);
+        for (let i = 1; i < limiteFilas; i++) {
+          const row = rawRows[i] || [];
+          const estadoVal = String(row[3] ?? '').toUpperCase();
+          if (estadoVal.includes('EXCESO')) {
+            esExcesos = true;
+            break;
+          }
+          if (estadoVal.includes('FRENADA')) {
+            esFrenadas = true;
+            break;
+          }
+          if (estadoVal.includes('ACELERACION')) {
+            esAceleraciones = true;
+            break;
+          }
         }
       }
 
-      if (esKmCond) {
-        fileKmCond = file;
-      } else if (esKmVeh) {
-        fileKmVeh = file;
-      } else if (esKmVehRespaldo) {
-        fileKmVehRespaldo = file;
+      if (esExcesos) {
+        filesExcesos.push(file);
+      } else if (esFrenadas) {
+        filesFrenadas.push(file);
+      } else if (esAceleraciones) {
+        filesAceleraciones.push(file);
+      } else {
+        // Detección dinámica de cabeceras en las primeras 15 filas para consolidado Km y respaldo
+        let esKmCond = false;
+        let esKmVeh = false;
+        let esKmVehRespaldo = false;
+        const limiteFilas = Math.min(rawRows.length, 15);
+        
+        for (let i = 0; i < limiteFilas; i++) {
+          const row = rawRows[i] || [];
+          const rowStr = row.map(c => String(c ?? '').trim());
+          if (rowStr.includes('Conductor') && (rowStr.includes('Km. Recorridos') || rowStr.includes('Kms'))) {
+            esKmCond = true;
+            break;
+          }
+          if (rowStr.includes('Matrícula') && (rowStr.includes('Km. Recorridos') || rowStr.includes('Kms'))) {
+            esKmVeh = true;
+            break;
+          }
+          if (rowStr.includes('Matrícula') && rowStr.includes('Distancia(km)')) {
+            esKmVehRespaldo = true;
+            break;
+          }
+        }
+
+        if (esKmCond) {
+          fileKmCond = file;
+        } else if (esKmVeh) {
+          fileKmVeh = file;
+        } else if (esKmVehRespaldo) {
+          fileKmVehRespaldo = file;
+        }
       }
     }
   }
+
 
   if (!fileKmCond && !fileKmVeh) {
     throw new Error('Faltan los archivos de consolidado de trayectos de Fagor (Km_Conductor o Km_Vehículos).');
@@ -2133,6 +2178,108 @@ export async function importarDatosPlanosFagor(
     (dbVehiculos ?? []).forEach(v => {
       vehicPorPlaca.set(normPlate(v.placa), v);
     });
+
+    // --- PREPROCESAMIENTO DE DETALLE DE ALARMAS FAGOR ---
+    interface AlarmCounters {
+      excesos_10_kph: number;
+      excesos_20_kph: number;
+      excesos_30_kph: number;
+      excesos_40_kph: number;
+      excesos_50_kph: number;
+      excesos_60_kph: number;
+      excesos_80_kph: number;
+      aceleraciones_bruscas: number;
+      frenadas_bruscas: number;
+    }
+
+    const driverAlarms = new Map<string, AlarmCounters>(); // key: conductor_id
+    const vehicAlarms = new Map<string, AlarmCounters>(); // key: vehiculo_id
+
+    const obtenerContadoresVacios = (): AlarmCounters => ({
+      excesos_10_kph: 0, excesos_20_kph: 0, excesos_30_kph: 0,
+      excesos_40_kph: 0, excesos_50_kph: 0, excesos_60_kph: 0,
+      excesos_80_kph: 0, aceleraciones_bruscas: 0, frenadas_bruscas: 0
+    });
+
+    const acumularAlarma = async (placaRaw: string, condName: string, tipo: 'frenada' | 'aceleracion' | 'exceso', velocidad = 0) => {
+      const placaNorm = normPlate(placaRaw);
+      
+      let foundVeh: any = null;
+      if (placaNorm) {
+        foundVeh = await asegurarVehiculoEnMaestro(placaRaw, vehicPorPlaca, normPlate);
+        if (foundVeh) {
+          if (!vehicAlarms.has(foundVeh.id)) vehicAlarms.set(foundVeh.id, obtenerContadoresVacios());
+          const c = vehicAlarms.get(foundVeh.id)!;
+          if (tipo === 'frenada') c.frenadas_bruscas++;
+          else if (tipo === 'aceleracion') c.aceleraciones_bruscas++;
+          else if (tipo === 'exceso') {
+            if (velocidad >= 80) c.excesos_80_kph++;
+            else if (velocidad >= 60) c.excesos_60_kph++;
+            else if (velocidad >= 50) c.excesos_50_kph++;
+            else if (velocidad >= 40) c.excesos_40_kph++;
+            else if (velocidad >= 30) c.excesos_30_kph++;
+            else if (velocidad >= 20) c.excesos_20_kph++;
+            else if (velocidad >= 10) c.excesos_10_kph++;
+          }
+        }
+      }
+
+      const condNameClean = String(condName ?? '').trim();
+      if (condNameClean && condNameClean !== 'N/A') {
+        const foundCond = await asegurarConductorEnMaestro(
+          condNameClean, undefined, undefined, conductPorNombreNorm, conductPorCedula, normName
+        );
+        if (foundCond) {
+          if (!driverAlarms.has(foundCond.id)) driverAlarms.set(foundCond.id, obtenerContadoresVacios());
+          const c = driverAlarms.get(foundCond.id)!;
+          if (tipo === 'frenada') c.frenadas_bruscas++;
+          else if (tipo === 'aceleracion') c.aceleraciones_bruscas++;
+          else if (tipo === 'exceso') {
+            if (velocidad >= 80) c.excesos_80_kph++;
+            else if (velocidad >= 60) c.excesos_60_kph++;
+            else if (velocidad >= 50) c.excesos_50_kph++;
+            else if (velocidad >= 40) c.excesos_40_kph++;
+            else if (velocidad >= 30) c.excesos_30_kph++;
+            else if (velocidad >= 20) c.excesos_20_kph++;
+            else if (velocidad >= 10) c.excesos_10_kph++;
+          }
+        }
+      }
+    };
+
+    // Procesar archivos detallados de excesos
+    for (const file of filesExcesos) {
+      const arrayBuffer = await file.arrayBuffer();
+      const wb = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet) as any[];
+      for (const row of rows) {
+        const vel = parseInt(String(row['Velocidad'] ?? row['VelocidadVehiculoTaco'] ?? '0'), 10) || 0;
+        await acumularAlarma(row['Matricula'] ?? '', row['Conductor'] ?? '', 'exceso', vel);
+      }
+    }
+
+    // Procesar archivos detallados de frenadas
+    for (const file of filesFrenadas) {
+      const arrayBuffer = await file.arrayBuffer();
+      const wb = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet) as any[];
+      for (const row of rows) {
+        await acumularAlarma(row['Matricula'] ?? '', row['Conductor'] ?? '', 'frenada');
+      }
+    }
+
+    // Procesar archivos detallados de aceleraciones
+    for (const file of filesAceleraciones) {
+      const arrayBuffer = await file.arrayBuffer();
+      const wb = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet) as any[];
+      for (const row of rows) {
+        await acumularAlarma(row['Matricula'] ?? '', row['Conductor'] ?? '', 'aceleracion');
+      }
+    }
 
     // 2. Procesar Conductores Fagor
     if (fileKmCond) {
@@ -2194,6 +2341,7 @@ export async function importarDatosPlanosFagor(
             );
 
             if (foundCond) {
+              const alarms = driverAlarms.get(foundCond.id);
               reportesConductores.push({
                 conductor_id: foundCond.id,
                 periodo_inicio: periodoInicio,
@@ -2201,15 +2349,15 @@ export async function importarDatosPlanosFagor(
                 calificacion: 100, // Defecto Fagor
                 kms: num(row['Km. Recorridos']),
                 horas_conduccion: num(parseTimeStringToHours(row['Horas Conducción'])),
-                excesos_10_kph: 0,
-                excesos_20_kph: 0,
-                excesos_30_kph: 0,
-                excesos_40_kph: 0,
-                excesos_50_kph: 0,
-                excesos_60_kph: 0,
-                excesos_80_kph: 0,
-                aceleraciones_bruscas: 0,
-                frenadas_bruscas: num(row['Uso de Freno nº veces']),
+                excesos_10_kph: alarms?.excesos_10_kph ?? 0,
+                excesos_20_kph: alarms?.excesos_20_kph ?? 0,
+                excesos_30_kph: alarms?.excesos_30_kph ?? 0,
+                excesos_40_kph: alarms?.excesos_40_kph ?? 0,
+                excesos_50_kph: alarms?.excesos_50_kph ?? 0,
+                excesos_60_kph: alarms?.excesos_60_kph ?? 0,
+                excesos_80_kph: alarms?.excesos_80_kph ?? 0,
+                aceleraciones_bruscas: alarms?.aceleraciones_bruscas ?? 0,
+                frenadas_bruscas: alarms?.frenadas_bruscas ?? num(row['Uso de Freno nº veces']),
                 ibutton: String(mapped?.ibutton ?? foundCond.ibutton ?? ''),
                 estado_conductor: String(foundCond.estado ?? 'ACTIVO'),
                 proyecto: String(foundCond.proyecto ?? ''),
@@ -2290,6 +2438,7 @@ export async function importarDatosPlanosFagor(
 
           if (foundVeh) {
             const alarmCount = ralentiAlarmsMap.get(placaNorm) ?? 0;
+            const alarms = vehicAlarms.get(foundVeh.id);
             reportesVehiculos.push({
               _placaOriginal: placaNorm, // campo interno para tracking (se elimina antes del upsert)
               vehiculo_id: foundVeh.id,
@@ -2299,15 +2448,15 @@ export async function importarDatosPlanosFagor(
               calificacion: 100, // Defecto Fagor
               kms: num(row['Km. Recorridos']),
               horas_conduccion: num(parseTimeStringToHours(row['Horas Conducción'])),
-              excesos_10_kph: 0,
-              excesos_20_kph: 0,
-              excesos_30_kph: 0,
-              excesos_40_kph: 0,
-              excesos_50_kph: 0,
-              excesos_60_kph: 0,
-              excesos_80_kph: 0,
-              aceleraciones_bruscas: 0,
-              frenadas_bruscas: num(row['Uso de Freno nº veces']),
+              excesos_10_kph: alarms?.excesos_10_kph ?? 0,
+              excesos_20_kph: alarms?.excesos_20_kph ?? 0,
+              excesos_30_kph: alarms?.excesos_30_kph ?? 0,
+              excesos_40_kph: alarms?.excesos_40_kph ?? 0,
+              excesos_50_kph: alarms?.excesos_50_kph ?? 0,
+              excesos_60_kph: alarms?.excesos_60_kph ?? 0,
+              excesos_80_kph: alarms?.excesos_80_kph ?? 0,
+              aceleraciones_bruscas: alarms?.aceleraciones_bruscas ?? 0,
+              frenadas_bruscas: alarms?.frenadas_bruscas ?? num(row['Uso de Freno nº veces']),
               dispositivo_gps: String('FAGOR'),
               base: '',
               estado_gps: 'ACTIVO',
