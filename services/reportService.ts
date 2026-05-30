@@ -433,8 +433,34 @@ export async function getReporteVehiculo(filtro: FiltroReporte): Promise<Reporte
     .gte('fecha', filtro.fechaInicio)
     .lte('fecha', filtro.fechaFin);
 
-  const metrics = (metricsRaw ?? []) as Record<string, unknown>[];
-  const ralentisData = (ralentiRaw ?? []) as Record<string, unknown>[];
+  let metrics = (metricsRaw ?? []) as Record<string, unknown>[];
+  let ralentisData = (ralentiRaw ?? []) as Record<string, unknown>[];
+
+  if (metrics.length === 0) {
+    const { data: reportesRaw } = await supabase
+      .from('reportes_vehiculos')
+      .select('*')
+      .eq('vehiculo_id', filtro.vehiculoId)
+      .lte('periodo_inicio', filtro.fechaFin)
+      .gte('periodo_fin', filtro.fechaInicio);
+    
+    metrics = ((reportesRaw ?? []) as Record<string, unknown>[]).map(r => ({
+      ...r,
+      aceleraciones: r.aceleraciones ?? r.aceleraciones_bruscas,
+      frenadas: r.frenadas ?? r.frenadas_bruscas,
+      fecha: r.periodo_inicio,
+    }));
+
+    if (ralentisData.length === 0 && reportesRaw && reportesRaw.length > 0) {
+      ralentisData = reportesRaw.map(r => ({
+        ...r,
+        kms_recorridos: r.kms ?? r.km_recorridos_ralenti,
+        horas_motor_ralenti: r.horas_motor_ralenti,
+        horas_motor_encendido: r.horas_motor_encendido,
+        consumo_combustible: r.consumo_combustible,
+      }));
+    }
+  }
 
   const calificacion = metrics.length > 0 ? promedio(metrics, 'calificacion') : 0;
   const contrato = veh.contratos as Record<string, unknown> | null;

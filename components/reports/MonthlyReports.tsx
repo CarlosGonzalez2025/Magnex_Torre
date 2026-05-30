@@ -41,6 +41,35 @@ const defaultFiltro: FiltroState = {
   contratoId: '',
 };
 
+function obtenerPeriodoAnterior(fechaInicioStr: string, fechaFinStr: string): { fechaInicio: string; fechaFin: string } {
+  const inicio = new Date(fechaInicioStr + 'T00:00:00');
+  
+  if (inicio.getDate() === 1) {
+    const prevMesInicio = new Date(inicio.getFullYear(), inicio.getMonth() - 1, 1);
+    const prevMesFin = new Date(inicio.getFullYear(), inicio.getMonth(), 0);
+    return {
+      fechaInicio: prevMesInicio.toISOString().slice(0, 10),
+      fechaFin: prevMesFin.toISOString().slice(0, 10),
+    };
+  } else {
+    const fin = new Date(fechaFinStr + 'T23:59:59');
+    const diffMs = fin.getTime() - inicio.getTime();
+    const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+    
+    const prevInicio = new Date(inicio.getTime());
+    prevInicio.setDate(prevInicio.getDate() - diffDays - 1);
+    
+    const prevFin = new Date(fin.getTime());
+    prevFin.setDate(prevFin.getDate() - diffDays - 1);
+    
+    return {
+      fechaInicio: prevInicio.toISOString().slice(0, 10),
+      fechaFin: prevFin.toISOString().slice(0, 10),
+    };
+  }
+}
+
+
 function tieneGpsConfigurado(valor?: string | null): boolean {
   const normalizado = String(valor ?? '').trim().toUpperCase();
   return Boolean(normalizado) && !['NO', 'N/A', 'NA', 'SIN GPS', 'NINGUNO', 'NO APLICA', '0'].includes(normalizado);
@@ -211,7 +240,9 @@ export const MonthlyReports: React.FC = () => {
       const conductoresContrato = conductores.filter(c => c.contrato_id === filtro.contratoId);
       const vehiculosContrato = vehiculos.filter(v => v.contrato_id === filtro.contratoId);
 
-      const [datosConductores, datosVehiculos] = await Promise.all([
+      const prevPeriodo = obtenerPeriodoAnterior(filtro.fechaInicio, filtro.fechaFin);
+
+      const [datosConductores, datosVehiculos, datosConductoresAnterior, datosVehiculosAnterior] = await Promise.all([
         Promise.all(conductoresContrato.map(c => getReporteConductor({
           conductorId: c.id,
           fechaInicio: filtro.fechaInicio,
@@ -224,10 +255,25 @@ export const MonthlyReports: React.FC = () => {
           fechaFin: filtro.fechaFin,
           contratoId: filtro.contratoId,
         }))),
+        Promise.all(conductoresContrato.map(c => getReporteConductor({
+          conductorId: c.id,
+          fechaInicio: prevPeriodo.fechaInicio,
+          fechaFin: prevPeriodo.fechaFin,
+          contratoId: filtro.contratoId,
+        }))),
+        Promise.all(vehiculosContrato.map(v => getReporteVehiculo({
+          vehiculoId: v.id,
+          fechaInicio: prevPeriodo.fechaInicio,
+          fechaFin: prevPeriodo.fechaFin,
+          contratoId: filtro.contratoId,
+        }))),
       ]);
 
       const conductoresValidos = datosConductores.filter(Boolean) as ReporteConductorData[];
       const vehiculosValidos = datosVehiculos.filter(Boolean) as ReporteVehiculoData[];
+      const conductoresAnteriorValidos = datosConductoresAnterior.filter(Boolean) as ReporteConductorData[];
+      const vehiculosAnteriorValidos = datosVehiculosAnterior.filter(Boolean) as ReporteVehiculoData[];
+
       const vehiculosConGps = vehiculosContrato.filter(v => tieneGpsConfigurado(v.gps_compañia)).length;
       const resumenContrato = {
         totalVehiculos: vehiculosContrato.length,
@@ -242,10 +288,28 @@ export const MonthlyReports: React.FC = () => {
       }
 
       if (conductoresValidos.length > 0) {
-        await descargarConsolidadoConductoresContrato(contrato, conductoresValidos, vehiculosValidos, resumenContrato, filtro.fechaInicio, filtro.fechaFin);
+        await descargarConsolidadoConductoresContrato(
+          contrato,
+          conductoresValidos,
+          vehiculosValidos,
+          resumenContrato,
+          filtro.fechaInicio,
+          filtro.fechaFin,
+          conductoresAnteriorValidos,
+          vehiculosAnteriorValidos
+        );
       }
       if (vehiculosValidos.length > 0) {
-        await descargarConsolidadoVehiculosContrato(contrato, vehiculosValidos, conductoresValidos, resumenContrato, filtro.fechaInicio, filtro.fechaFin);
+        await descargarConsolidadoVehiculosContrato(
+          contrato,
+          vehiculosValidos,
+          conductoresValidos,
+          resumenContrato,
+          filtro.fechaInicio,
+          filtro.fechaFin,
+          vehiculosAnteriorValidos,
+          conductoresAnteriorValidos
+        );
       }
     } catch (err) {
       console.error(err);

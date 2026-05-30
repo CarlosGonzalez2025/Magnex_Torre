@@ -458,6 +458,74 @@ export interface ConsolidadoContratoResumen {
   vehiculosSinGps: number;
 }
 
+interface VariacionResultado {
+  texto: string;
+  bgColor: string;
+  textColor: string;
+}
+
+function calcularVariacion(actual: number, anterior: number, menorEsMejor = false): VariacionResultado {
+  if (anterior === 0) {
+    if (actual === 0) {
+      return { texto: '0,00%', bgColor: '#c6efce', textColor: '#006100' };
+    }
+    const esMejora = menorEsMejor ? false : true;
+    return {
+      texto: '+100,00%',
+      bgColor: esMejora ? '#c6efce' : '#ffc7ce',
+      textColor: esMejora ? '#006100' : '#9c0006'
+    };
+  }
+  
+  const variacion = ((actual - anterior) / anterior) * 100;
+  const signo = variacion >= 0 ? '+' : '';
+  const texto = `${signo}${variacion.toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
+  
+  let esMejora = false;
+  if (menorEsMejor) {
+    esMejora = variacion <= 0;
+  } else {
+    esMejora = variacion >= 0;
+  }
+
+  return {
+    texto,
+    bgColor: esMejora ? '#c6efce' : '#ffc7ce',
+    textColor: esMejora ? '#006100' : '#9c0006'
+  };
+}
+
+function CellWithVariation({
+  label,
+  value,
+  varResultado,
+  labelFlex = 2.2,
+  valueFlex = 1,
+  varFlex = 1
+}: {
+  label: string;
+  value: string;
+  varResultado: VariacionResultado;
+  labelFlex?: number;
+  valueFlex?: number;
+  varFlex?: number;
+}) {
+  return (
+    <View style={{ flexDirection: 'row', minHeight: 13 }}>
+      <View style={{ flex: labelFlex, backgroundColor: '#b7e2f7', justifyContent: 'center', padding: 2, borderWidth: 0.3, borderColor: COLORS.sombra }}>
+        <Text style={{ fontSize: 5.3, fontWeight: 700, textAlign: 'left', paddingLeft: 4 }}>{label}</Text>
+      </View>
+      <View style={{ flex: valueFlex, justifyContent: 'center', padding: 2, borderWidth: 0.3, borderColor: COLORS.sombra, backgroundColor: COLORS.blanco }}>
+        <Text style={{ fontSize: 5.7, fontWeight: 700, textAlign: 'center' }}>{value}</Text>
+      </View>
+      <View style={{ flex: varFlex, justifyContent: 'center', padding: 2, borderWidth: 0.3, borderColor: COLORS.sombra, backgroundColor: varResultado.bgColor }}>
+        <Text style={{ fontSize: 5.3, fontWeight: 700, textAlign: 'center', color: varResultado.textColor }}>{varResultado.texto}</Text>
+      </View>
+    </View>
+  );
+}
+
+
 type TipoConsolidado = 'conductores' | 'vehiculos';
 
 function metricasConsolidado(
@@ -654,18 +722,33 @@ function Cell({ label, value, labelFlex = 1.5, valueFlex = 2 }: { label: string;
   );
 }
 
-function MetricCell({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+function MetricCell({
+  label,
+  value,
+  highlight,
+  bgColor,
+  textColor
+}: {
+  label: string;
+  value: string;
+  highlight?: boolean;
+  bgColor?: string;
+  textColor?: string;
+}) {
+  const bg = bgColor || (highlight ? '#c6efce' : COLORS.blanco);
+  const tc = textColor || COLORS.negro;
   return (
     <View style={{ flex: 1, flexDirection: 'row', minHeight: 16 }}>
       <View style={{ flex: 1.4, backgroundColor: '#b7e2f7', justifyContent: 'center', padding: 2, borderWidth: 0.3, borderColor: COLORS.sombra }}>
         <Text style={{ fontSize: 5.1, fontWeight: 700, textAlign: 'center' }}>{label}</Text>
       </View>
-      <View style={{ flex: 1, backgroundColor: highlight ? '#c6efce' : COLORS.blanco, justifyContent: 'center', padding: 2, borderWidth: 0.3, borderColor: COLORS.sombra }}>
-        <Text style={{ fontSize: 5.5, fontWeight: 700, textAlign: 'center' }}>{value}</Text>
+      <View style={{ flex: 1, backgroundColor: bg, justifyContent: 'center', padding: 2, borderWidth: 0.3, borderColor: COLORS.sombra }}>
+        <Text style={{ fontSize: 5.5, fontWeight: 700, textAlign: 'center', color: tc }}>{value}</Text>
       </View>
     </View>
   );
 }
+
 
 function MiniBarChart({ valores }: { valores: Array<{ label: string; value: number; color: string }> }) {
   const max = Math.max(...valores.map(v => v.value), 1);
@@ -913,6 +996,8 @@ export function ConsolidadoConductoresContratoPDF({
   resumen,
   periodoInicio,
   periodoFin,
+  datosAnteriores,
+  vehiculosAnteriores,
 }: {
   contrato: ContratoOption;
   datos: ReporteConductorData[];
@@ -920,12 +1005,24 @@ export function ConsolidadoConductoresContratoPDF({
   resumen: ConsolidadoContratoResumen;
   periodoInicio: string;
   periodoFin: string;
+  datosAnteriores?: ReporteConductorData[];
+  vehiculosAnteriores?: ReporteVehiculoData[];
 }) {
   const m = metricasConsolidado('conductores', datos, vehiculos);
+  const mAnt = metricasConsolidado('conductores', datosAnteriores || [], vehiculosAnteriores || []);
   const top = [...datos].sort((a, b) => totalIncidencias(b.metricas) - totalIncidencias(a.metricas)).slice(0, 10);
   const entidadesExceso80 = datos.filter(d => d.metricas.excesos_80_kph > 0).length;
   const entidadesFrenadas = datos.filter(d => d.metricas.frenadas > 0).length;
   const entidadesAceleraciones = datos.filter(d => d.metricas.aceleraciones > 0).length;
+
+  const varKms = calcularVariacion(m.kms, mAnt.kms);
+  const varRalenti = calcularVariacion(m.horasRalenti, mAnt.horasRalenti, true);
+  const varConduccion = calcularVariacion(m.horasConduccion, mAnt.horasConduccion);
+
+  const varExcesos80 = calcularVariacion(m.excesos80, mAnt.excesos80, true);
+  const varExcesosVarios = calcularVariacion(m.excesosVarios, mAnt.excesosVarios, true);
+  const varFrenadas = calcularVariacion(m.frenadas, mAnt.frenadas, true);
+  const varAceleraciones = calcularVariacion(m.aceleraciones, mAnt.aceleraciones, true);
 
   return (
     <Document title={`Conductores - ${contrato.nombre}`}>
@@ -952,26 +1049,40 @@ export function ConsolidadoConductoresContratoPDF({
           <MetricCell label="HORAS DE CONDUCCION:" value={n(m.horasConduccion, 1)} />
         </View>
         <View style={{ flexDirection: 'row' }}>
-          <MetricCell label="VARIACION MES ANTERIOR (%)" value="0,00%" highlight />
-          <MetricCell label="VARIACION MES ANTERIOR (%)" value="0,00%" highlight />
-          <MetricCell label="VARIACION MES ANTERIOR (%)" value="0,00%" highlight />
+          <MetricCell label="VARIACION MES ANTERIOR (%)" value={varKms.texto} bgColor={varKms.bgColor} textColor={varKms.textColor} />
+          <MetricCell label="VARIACION MES ANTERIOR (%)" value={varRalenti.texto} bgColor={varRalenti.bgColor} textColor={varRalenti.textColor} />
+          <MetricCell label="VARIACION MES ANTERIOR (%)" value={varConduccion.texto} bgColor={varConduccion.bgColor} textColor={varConduccion.textColor} />
         </View>
 
         <Band>2.3. DESVIACIONES DE COMPORTAMIENTO VIAL</Band>
         <View style={{ flexDirection: 'row' }}>
-          <View style={{ flex: 1 }}>
-            <Cell label="# EXCESOS DE VELOCIDAD 80 KM/H:" value={n(m.excesos80)} />
-            <Cell label="# EXCESOS DE VELOCIDAD VARIOS PARAMETROS (10/20/30/40/50/60):" value={n(m.excesosVarios)} />
-            <Cell label="# FRENADAS BRUSCAS:" value={n(m.frenadas)} />
-            <Cell label="# ACELERACIONES BRUSCAS:" value={n(m.aceleraciones)} />
+          <View style={{ flex: 1.3 }}>
+            <View style={{ flexDirection: 'row', minHeight: 11, backgroundColor: '#d9d9d9' }}>
+              <View style={{ flex: 2.2, justifyContent: 'center', padding: 2, borderWidth: 0.3, borderColor: COLORS.sombra }}>
+                <Text style={{ fontSize: 4.8, fontWeight: 700, textAlign: 'center' }}>DESVIACION</Text>
+              </View>
+              <View style={{ flex: 1, justifyContent: 'center', padding: 2, borderWidth: 0.3, borderColor: COLORS.sombra }}>
+                <Text style={{ fontSize: 4.8, fontWeight: 700, textAlign: 'center' }}>CANTIDAD</Text>
+              </View>
+              <View style={{ flex: 1, justifyContent: 'center', padding: 2, borderWidth: 0.3, borderColor: COLORS.sombra }}>
+                <Text style={{ fontSize: 4.8, fontWeight: 700, textAlign: 'center' }}>VAR. MES ANT.</Text>
+              </View>
+            </View>
+            <CellWithVariation label="# EXCESOS DE VELOCIDAD 80 KM/H:" value={n(m.excesos80)} varResultado={varExcesos80} />
+            <CellWithVariation label="# EXCESOS DE VELOCIDAD VARIOS PARAMETROS (10/20/30/40/50/60):" value={n(m.excesosVarios)} varResultado={varExcesosVarios} />
+            <CellWithVariation label="# FRENADAS BRUSCAS:" value={n(m.frenadas)} varResultado={varFrenadas} />
+            <CellWithVariation label="# ACELERACIONES BRUSCAS:" value={n(m.aceleraciones)} varResultado={varAceleraciones} />
           </View>
-          <MiniBarChart valores={[
-            { label: 'Excesos 80 Km/h', value: m.excesos80, color: '#d9d9d9' },
-            { label: 'Excesos varios', value: m.excesosVarios, color: '#ff3b1f' },
-            { label: 'Frenadas Bruscas', value: m.frenadas, color: '#ffc000' },
-            { label: 'Aceleraciones', value: m.aceleraciones, color: '#d9d9d9' },
-          ]} />
+          <View style={{ flex: 1, paddingLeft: 10 }}>
+            <MiniBarChart valores={[
+              { label: 'Excesos 80 Km/h', value: m.excesos80, color: '#d9d9d9' },
+              { label: 'Excesos varios', value: m.excesosVarios, color: '#ff3b1f' },
+              { label: 'Frenadas Bruscas', value: m.frenadas, color: '#ffc000' },
+              { label: 'Aceleraciones', value: m.aceleraciones, color: '#d9d9d9' },
+            ]} />
+          </View>
         </View>
+
 
         <Band>2.4. DESVIACIONES POR CONDUCTOR - PERIODO EVALUADO</Band>
         <View style={base.tableHeader}>
@@ -1043,6 +1154,8 @@ export function ConsolidadoVehiculosContratoPDF({
   resumen,
   periodoInicio,
   periodoFin,
+  datosAnteriores,
+  conductoresAnteriores,
 }: {
   contrato: ContratoOption;
   datos: ReporteVehiculoData[];
@@ -1050,12 +1163,24 @@ export function ConsolidadoVehiculosContratoPDF({
   resumen: ConsolidadoContratoResumen;
   periodoInicio: string;
   periodoFin: string;
+  datosAnteriores?: ReporteVehiculoData[];
+  conductoresAnteriores?: ReporteConductorData[];
 }) {
   const m = metricasConsolidado('vehiculos', conductores, datos);
+  const mAnt = metricasConsolidado('vehiculos', conductoresAnteriores || [], datosAnteriores || []);
   const top = [...datos].sort((a, b) => totalIncidencias(b.metricas) - totalIncidencias(a.metricas)).slice(0, 10);
   const entidadesExceso80 = datos.filter(d => d.metricas.excesos_80_kph > 0).length;
   const entidadesFrenadas = datos.filter(d => d.metricas.frenadas > 0).length;
   const entidadesAceleraciones = datos.filter(d => d.metricas.aceleraciones > 0).length;
+
+  const varKms = calcularVariacion(m.kms, mAnt.kms);
+  const varRalenti = calcularVariacion(m.horasRalenti, mAnt.horasRalenti, true);
+  const varConduccion = calcularVariacion(m.horasConduccion, mAnt.horasConduccion);
+
+  const varExcesos80 = calcularVariacion(m.excesos80, mAnt.excesos80, true);
+  const varExcesosVarios = calcularVariacion(m.excesosVarios, mAnt.excesosVarios, true);
+  const varFrenadas = calcularVariacion(m.frenadas, mAnt.frenadas, true);
+  const varAceleraciones = calcularVariacion(m.aceleraciones, mAnt.aceleraciones, true);
 
   return (
     <Document title={`Vehiculos - ${contrato.nombre}`}>
@@ -1080,25 +1205,39 @@ export function ConsolidadoVehiculosContratoPDF({
           <MetricCell label="HORAS DE CONDUCCION:" value={n(m.horasConduccion, 1)} />
         </View>
         <View style={{ flexDirection: 'row' }}>
-          <MetricCell label="VARIACION MES ANTERIOR (%)" value="0,00%" highlight />
-          <MetricCell label="VARIACION MES ANTERIOR (%)" value="0,00%" highlight />
-          <MetricCell label="VARIACION MES ANTERIOR (%)" value="0,00%" highlight />
+          <MetricCell label="VARIACION MES ANTERIOR (%)" value={varKms.texto} bgColor={varKms.bgColor} textColor={varKms.textColor} />
+          <MetricCell label="VARIACION MES ANTERIOR (%)" value={varRalenti.texto} bgColor={varRalenti.bgColor} textColor={varRalenti.textColor} />
+          <MetricCell label="VARIACION MES ANTERIOR (%)" value={varConduccion.texto} bgColor={varConduccion.bgColor} textColor={varConduccion.textColor} />
         </View>
         <Band>2.3. DESVIACIONES DE COMPORTAMIENTO VIAL</Band>
         <View style={{ flexDirection: 'row' }}>
-          <View style={{ flex: 1 }}>
-            <Cell label="# EXCESOS DE VELOCIDAD 80 KM/H:" value={n(m.excesos80)} />
-            <Cell label="# EXCESOS DE VELOCIDAD VARIOS PARAMETROS (10/20/30/40/50/60):" value={n(m.excesosVarios)} />
-            <Cell label="# FRENADAS BRUSCAS:" value={n(m.frenadas)} />
-            <Cell label="# ACELERACIONES BRUSCAS:" value={n(m.aceleraciones)} />
+          <View style={{ flex: 1.3 }}>
+            <View style={{ flexDirection: 'row', minHeight: 11, backgroundColor: '#d9d9d9' }}>
+              <View style={{ flex: 2.2, justifyContent: 'center', padding: 2, borderWidth: 0.3, borderColor: COLORS.sombra }}>
+                <Text style={{ fontSize: 4.8, fontWeight: 700, textAlign: 'center' }}>DESVIACION</Text>
+              </View>
+              <View style={{ flex: 1, justifyContent: 'center', padding: 2, borderWidth: 0.3, borderColor: COLORS.sombra }}>
+                <Text style={{ fontSize: 4.8, fontWeight: 700, textAlign: 'center' }}>CANTIDAD</Text>
+              </View>
+              <View style={{ flex: 1, justifyContent: 'center', padding: 2, borderWidth: 0.3, borderColor: COLORS.sombra }}>
+                <Text style={{ fontSize: 4.8, fontWeight: 700, textAlign: 'center' }}>VAR. MES ANT.</Text>
+              </View>
+            </View>
+            <CellWithVariation label="# EXCESOS DE VELOCIDAD 80 KM/H:" value={n(m.excesos80)} varResultado={varExcesos80} />
+            <CellWithVariation label="# EXCESOS DE VELOCIDAD VARIOS PARAMETROS (10/20/30/40/50/60):" value={n(m.excesosVarios)} varResultado={varExcesosVarios} />
+            <CellWithVariation label="# FRENADAS BRUSCAS:" value={n(m.frenadas)} varResultado={varFrenadas} />
+            <CellWithVariation label="# ACELERACIONES BRUSCAS:" value={n(m.aceleraciones)} varResultado={varAceleraciones} />
           </View>
-          <MiniBarChart valores={[
-            { label: 'Excesos 80 Km/h', value: m.excesos80, color: '#d9d9d9' },
-            { label: 'Excesos varios', value: m.excesosVarios, color: '#ff3b1f' },
-            { label: 'Frenadas Bruscas', value: m.frenadas, color: '#ffc000' },
-            { label: 'Aceleraciones', value: m.aceleraciones, color: '#d9d9d9' },
-          ]} />
+          <View style={{ flex: 1, paddingLeft: 10 }}>
+            <MiniBarChart valores={[
+              { label: 'Excesos 80 Km/h', value: m.excesos80, color: '#d9d9d9' },
+              { label: 'Excesos varios', value: m.excesosVarios, color: '#ff3b1f' },
+              { label: 'Frenadas Bruscas', value: m.frenadas, color: '#ffc000' },
+              { label: 'Aceleraciones', value: m.aceleraciones, color: '#d9d9d9' },
+            ]} />
+          </View>
         </View>
+
         <Band>2.4. DESVIACIONES POR VEHICULO - PERIODO EVALUADO</Band>
         <View style={base.tableHeader}>
           {[
@@ -2102,6 +2241,8 @@ export async function descargarConsolidadoConductoresContrato(
   resumen: ConsolidadoContratoResumen,
   periodoInicio: string,
   periodoFin: string,
+  datosAnteriores?: ReporteConductorData[],
+  vehiculosAnteriores?: ReporteVehiculoData[],
 ): Promise<void> {
   const blob = await pdf(
     <ConsolidadoConductoresContratoPDF
@@ -2111,6 +2252,8 @@ export async function descargarConsolidadoConductoresContrato(
       resumen={resumen}
       periodoInicio={periodoInicio}
       periodoFin={periodoFin}
+      datosAnteriores={datosAnteriores}
+      vehiculosAnteriores={vehiculosAnteriores}
     />
   ).toBlob();
   downloadBlob(blob, `Conductores_${safeFileName(contrato.nombre)}_${periodoInicio}.pdf`);
@@ -2123,6 +2266,8 @@ export async function descargarConsolidadoVehiculosContrato(
   resumen: ConsolidadoContratoResumen,
   periodoInicio: string,
   periodoFin: string,
+  datosAnteriores?: ReporteVehiculoData[],
+  conductoresAnteriores?: ReporteConductorData[],
 ): Promise<void> {
   const blob = await pdf(
     <ConsolidadoVehiculosContratoPDF
@@ -2132,10 +2277,13 @@ export async function descargarConsolidadoVehiculosContrato(
       resumen={resumen}
       periodoInicio={periodoInicio}
       periodoFin={periodoFin}
+      datosAnteriores={datosAnteriores}
+      conductoresAnteriores={conductoresAnteriores}
     />
   ).toBlob();
   downloadBlob(blob, `Vehiculos_${safeFileName(contrato.nombre)}_${periodoInicio}.pdf`);
 }
+
 
 export async function descargarLotePDFs(
   datos: Array<ReporteConductorData | ReporteVehiculoData>,
