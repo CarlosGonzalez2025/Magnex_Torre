@@ -173,8 +173,8 @@ export const SheetsSyncPanel: React.FC = () => {
 
   const cargarConteo = async () => {
     const [{ count: c }, { count: v }, { count: ct }] = await Promise.all([
-      supabase.from('conductores').select('*', { count: 'exact', head: true }),
-      supabase.from('vehiculos').select('*', { count: 'exact', head: true }),
+      supabase.from('conductores').select('*', { count: 'exact', head: true }).eq('estado', 'ACTIVO'),
+      supabase.from('vehiculos').select('*', { count: 'exact', head: true }).eq('estado', 'ACTIVO'),
       supabase.from('contratos').select('*', { count: 'exact', head: true }),
     ]);
     if (mountedRef.current) setConteo({ conductores: c ?? 0, vehiculos: v ?? 0, contratos: ct ?? 0 });
