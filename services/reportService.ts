@@ -2,6 +2,14 @@ import { supabase } from './supabaseClient';
 
 const PAGE_SIZE = 1000;
 
+function getLocalDateISO(): string {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 async function fetchAllRows<T = Record<string, unknown>>(query: any): Promise<T[]> {
   const allRows: T[] = [];
   let from = 0;
@@ -27,6 +35,7 @@ export interface FiltroReporte {
   fechaFin: string;      // YYYY-MM-DD
   proyecto?: string;
   contratoId?: string;
+  reporteId?: string;
 }
 
 export interface ContratoOption {
@@ -276,40 +285,44 @@ function tipoVehiculoKey(tipo: unknown): string {
 }
 
 export async function getConductores(): Promise<ConductorOption[]> {
-  const { data, error } = await supabase
+  const query = supabase
     .from('conductores')
     .select('id, nombres, cedula, proyecto, contrato_id, estado')
+    .eq('estado', 'ACTIVO')
     .order('nombres');
-  if (error) throw new Error(error.message);
-  return (data ?? [])
-    .filter((c: Record<string, unknown>) => normalizeText(c.estado) === 'ACTIVO')
-    .map(({ estado: _estado, ...c }: Record<string, unknown>) => c) as unknown as ConductorOption[];
+  const data = await fetchAllRows<Record<string, unknown>>(query);
+  return data.map(({ estado: _estado, ...c }) => c) as unknown as ConductorOption[];
 }
 
 export async function getVehiculos(): Promise<VehiculoOption[]> {
-  const { data, error } = await supabase
+  const query = supabase
     .from('vehiculos')
     .select('id, placa, cliente, contrato_id, gps_compañia, tipo_activo')
     .eq('estado', 'ACTIVO')
     .order('placa');
-  if (error) throw new Error(error.message);
-  return (data ?? []) as unknown as VehiculoOption[];
+  const data = await fetchAllRows<Record<string, unknown>>(query);
+  return data as unknown as VehiculoOption[];
 }
 
 export async function getContratos(): Promise<ContratoOption[]> {
-  const { data, error } = await supabase
+  const query = supabase
     .from('contratos')
     .select('id, nombre, cliente, proyecto')
     .order('nombre');
-  if (error) throw new Error(error.message);
-  return (data ?? []) as ContratoOption[];
+  const data = await fetchAllRows<Record<string, unknown>>(query);
+  return data as unknown as ContratoOption[];
 }
 
 export async function getProyectos(): Promise<string[]> {
-  const { data } = await supabase.from('conductores').select('proyecto').neq('proyecto', '');
-  const set = new Set((data ?? []).map((d: { proyecto: string }) => d.proyecto).filter(Boolean));
+  const query = supabase
+    .from('conductores')
+    .select('proyecto')
+    .neq('proyecto', '');
+  const data = await fetchAllRows<{ proyecto: string }>(query);
+  const set = new Set(data.map((d: { proyecto: string }) => d.proyecto).filter(Boolean));
   return Array.from(set).sort() as string[];
 }
+
 
 // ── Reporte de conductor ─────────────────────────────────────────────────────
 
@@ -324,27 +337,49 @@ export async function getReporteConductor(filtro: FiltroReporte): Promise<Report
   if (eCond || !cond) return null;
   if (String(cond.estado ?? '').toUpperCase() !== 'ACTIVO') return null;
 
-  const { data: metricsRaw } = await supabase
-    .from('coltrack_datos_conductor')
-    .select('*')
-    .eq('conductor_id', filtro.conductorId)
-    .gte('fecha', filtro.fechaInicio)
-    .lte('fecha', filtro.fechaFin);
-
-  let metrics = (metricsRaw ?? []) as Record<string, unknown>[];
-  if (metrics.length === 0) {
-    const { data: reportesRaw } = await supabase
+  let metrics: Record<string, unknown>[] = [];
+  if (filtro.reporteId) {
+    const { data: rep } = await supabase
+      .from('reportes_conductores')
+      .select('*')
+      .eq('id', filtro.reporteId)
+      .single();
+    if (rep) {
+      metrics = [{
+        ...rep,
+        aceleraciones: rep.aceleraciones ?? rep.aceleraciones_bruscas,
+        frenadas: rep.frenadas ?? rep.frenadas_bruscas,
+        fecha: rep.periodo_inicio,
+      }];
+    }
+  } else {
+    // 1. Fuente primaria: reportes_conductores (resúmenes mensuales authoritativos).
+    //    coltrack_datos_conductor puede tener registros desactualizados con fecha=inicio
+    //    del período que representan el mes completo y no solo el rango solicitado.
+    const { data: reportesPrimary } = await supabase
       .from('reportes_conductores')
       .select('*')
       .eq('conductor_id', filtro.conductorId)
-      .lte('periodo_inicio', filtro.fechaFin)
-      .gte('periodo_fin', filtro.fechaInicio);
-    metrics = ((reportesRaw ?? []) as Record<string, unknown>[]).map(r => ({
-      ...r,
-      aceleraciones: r.aceleraciones ?? r.aceleraciones_bruscas,
-      frenadas: r.frenadas ?? r.frenadas_bruscas,
-      fecha: r.periodo_inicio,
-    }));
+      .gte('periodo_inicio', filtro.fechaInicio)
+      .lte('periodo_fin', filtro.fechaFin);
+
+    if (reportesPrimary && reportesPrimary.length > 0) {
+      metrics = (reportesPrimary as Record<string, unknown>[]).map(r => ({
+        ...r,
+        aceleraciones: r.aceleraciones ?? r.aceleraciones_bruscas,
+        frenadas: r.frenadas ?? r.frenadas_bruscas,
+        fecha: r.periodo_inicio,
+      }));
+    } else {
+      // 2. Fallback: coltrack_datos_conductor (registros diarios individuales)
+      const { data: metricsRaw } = await supabase
+        .from('coltrack_datos_conductor')
+        .select('*')
+        .eq('conductor_id', filtro.conductorId)
+        .gte('fecha', filtro.fechaInicio)
+        .lte('fecha', filtro.fechaFin);
+      metrics = (metricsRaw ?? []) as Record<string, unknown>[];
+    }
   }
   const calificacion = metrics.length > 0 ? promedio(metrics, 'calificacion') : 0;
   const kms = sumar(metrics, 'kms');
@@ -401,7 +436,7 @@ export async function getReporteConductor(filtro: FiltroReporte): Promise<Report
     metricas,
     periodoInicio: filtro.fechaInicio,
     periodoFin: filtro.fechaFin,
-    fechaReporte: new Date().toISOString().slice(0, 10),
+    fechaReporte: getLocalDateISO(),
     semaforo: semaforo(metricas.calificacion),
   };
 }
@@ -419,46 +454,88 @@ export async function getReporteVehiculo(filtro: FiltroReporte): Promise<Reporte
   if (eVeh || !veh) return null;
   if (String(veh.estado ?? '').toUpperCase() !== 'ACTIVO') return null;
 
-  const { data: metricsRaw } = await supabase
-    .from('coltrack_datos_vehiculo')
-    .select('*')
-    .eq('vehiculo_id', filtro.vehiculoId)
-    .gte('fecha', filtro.fechaInicio)
-    .lte('fecha', filtro.fechaFin);
+  let metrics: Record<string, unknown>[] = [];
+  let ralentisData: Record<string, unknown>[] = [];
 
-  const { data: ralentiRaw } = await supabase
-    .from('ralentis')
-    .select('*')
-    .eq('vehiculo_id', filtro.vehiculoId)
-    .gte('fecha', filtro.fechaInicio)
-    .lte('fecha', filtro.fechaFin);
-
-  let metrics = (metricsRaw ?? []) as Record<string, unknown>[];
-  let ralentisData = (ralentiRaw ?? []) as Record<string, unknown>[];
-
-  if (metrics.length === 0) {
-    const { data: reportesRaw } = await supabase
+  if (filtro.reporteId) {
+    const { data: rep } = await supabase
+      .from('reportes_vehiculos')
+      .select('*')
+      .eq('id', filtro.reporteId)
+      .single();
+    if (rep) {
+      metrics = [{
+        ...rep,
+        aceleraciones: rep.aceleraciones ?? rep.aceleraciones_bruscas,
+        frenadas: rep.frenadas ?? rep.frenadas_bruscas,
+        fecha: rep.periodo_inicio,
+      }];
+      ralentisData = [{
+        ...rep,
+        kms_recorridos: rep.kms ?? rep.km_recorridos_ralenti,
+        horas_motor_ralenti: rep.horas_motor_ralenti,
+        horas_motor_encendido: rep.horas_motor_encendido,
+        consumo_combustible: rep.consumo_combustible,
+      }];
+    }
+  } else {
+    // 1. Fuente primaria métricas de conducción: reportes_vehiculos (contención estricta)
+    const { data: reportesPrimary } = await supabase
       .from('reportes_vehiculos')
       .select('*')
       .eq('vehiculo_id', filtro.vehiculoId)
-      .lte('periodo_inicio', filtro.fechaFin)
-      .gte('periodo_fin', filtro.fechaInicio);
-    
-    metrics = ((reportesRaw ?? []) as Record<string, unknown>[]).map(r => ({
-      ...r,
-      aceleraciones: r.aceleraciones ?? r.aceleraciones_bruscas,
-      frenadas: r.frenadas ?? r.frenadas_bruscas,
-      fecha: r.periodo_inicio,
-    }));
+      .gte('periodo_inicio', filtro.fechaInicio)
+      .lte('periodo_fin', filtro.fechaFin);
 
-    if (ralentisData.length === 0 && reportesRaw && reportesRaw.length > 0) {
-      ralentisData = reportesRaw.map(r => ({
+    if (reportesPrimary && reportesPrimary.length > 0) {
+      metrics = (reportesPrimary as Record<string, unknown>[]).map(r => ({
         ...r,
-        kms_recorridos: r.kms ?? r.km_recorridos_ralenti,
-        horas_motor_ralenti: r.horas_motor_ralenti,
-        horas_motor_encendido: r.horas_motor_encendido,
-        consumo_combustible: r.consumo_combustible,
+        aceleraciones: r.aceleraciones ?? r.aceleraciones_bruscas,
+        frenadas: r.frenadas ?? r.frenadas_bruscas,
+        fecha: r.periodo_inicio,
       }));
+    } else {
+      // Fallback: coltrack_datos_vehiculo (registros diarios)
+      const { data: metricsRaw } = await supabase
+        .from('coltrack_datos_vehiculo')
+        .select('*')
+        .eq('vehiculo_id', filtro.vehiculoId)
+        .gte('fecha', filtro.fechaInicio)
+        .lte('fecha', filtro.fechaFin);
+      metrics = (metricsRaw ?? []) as Record<string, unknown>[];
+    }
+
+    // 2. Fuente primaria ralentís: ralentis_periodos (tabla dedicada, 1 registro por período)
+    //    Garantía: clave única vehiculo_id+periodo_inicio+periodo_fin → sin duplicados jamás
+    const { data: ralentiPeriodo } = await supabase
+      .from('ralentis_periodos')
+      .select('*')
+      .eq('vehiculo_id', filtro.vehiculoId)
+      .eq('periodo_inicio', filtro.fechaInicio)
+      .eq('periodo_fin', filtro.fechaFin)
+      .maybeSingle();
+
+    if (ralentiPeriodo) {
+      ralentisData = [ralentiPeriodo as Record<string, unknown>];
+    } else if (metrics.length > 0 && (metrics[0].horas_motor_ralenti || metrics[0].km_recorridos_ralenti)) {
+      // Fallback: campos de ralentí embebidos en reportes_vehiculos (imports anteriores)
+      ralentisData = (metrics as Record<string, unknown>[]).map(r => ({
+        kms_recorridos: r.kms ?? r.km_recorridos_ralenti ?? 0,
+        horas_motor_ralenti: r.horas_motor_ralenti ?? 0,
+        horas_motor_encendido: r.horas_motor_encendido ?? 0,
+        consumo_combustible: r.consumo_combustible ?? 0,
+        ralentis_excesivos: r.ralentis_excesivos ?? 0,
+        encendidos_apagados: r.encendidos_apagados ?? 0,
+      }));
+    } else {
+      // Fallback: tabla ralentis diaria (imports vía Excel estándar)
+      const { data: ralentiRaw } = await supabase
+        .from('ralentis')
+        .select('*')
+        .eq('vehiculo_id', filtro.vehiculoId)
+        .gte('fecha', filtro.fechaInicio)
+        .lte('fecha', filtro.fechaFin);
+      ralentisData = (ralentiRaw ?? []) as Record<string, unknown>[];
     }
   }
 
@@ -522,7 +599,7 @@ export async function getReporteVehiculo(filtro: FiltroReporte): Promise<Reporte
     ralenti,
     periodoInicio: filtro.fechaInicio,
     periodoFin: filtro.fechaFin,
-    fechaReporte: new Date().toISOString().slice(0, 10),
+    fechaReporte: getLocalDateISO(),
     semaforo: semaforo(metricas.calificacion),
   };
 }
@@ -551,7 +628,10 @@ async function listarReportesConductoresDesdeColtrack(filtro: Partial<FiltroRepo
     const fecha = String(row.fecha ?? '').slice(0, 10);
     const mes = fecha ? fecha.slice(0, 7) : String(row.mes ?? '');
     const conductorId = String(row.conductor_id ?? conductor.id ?? '');
-    const key = `${conductorId}|${mes}`;
+    // Cuando hay un rango de fechas explícito, agrupa todo el período en una sola fila
+    // (evita dividir períodos cross-mes como 29/04–28/05 en dos filas de calendario)
+    const useRangePeriod = !!(filtro.fechaInicio && filtro.fechaFin);
+    const key = useRangePeriod ? conductorId : `${conductorId}|${mes}`;
 
     if (!grupos.has(key)) {
       grupos.set(key, {
@@ -561,9 +641,9 @@ async function listarReportesConductoresDesdeColtrack(filtro: Partial<FiltroRepo
           cedula: conductor.cedula,
           contrato_id: conductor.contrato_id,
         },
-        periodo_inicio: fecha,
-        periodo_fin: fecha,
-        mes,
+        periodo_inicio: useRangePeriod ? filtro.fechaInicio! : fecha,
+        periodo_fin: useRangePeriod ? filtro.fechaFin! : fecha,
+        mes: useRangePeriod ? (filtro.fechaInicio?.slice(0, 7) ?? mes) : mes,
         calificacion: 0,
         kms: 0,
         horas_conduccion: 0,
@@ -577,13 +657,14 @@ async function listarReportesConductoresDesdeColtrack(filtro: Partial<FiltroRepo
         aceleraciones_bruscas: 0,
         frenadas_bruscas: 0,
         proyecto: String(conductor.proyecto ?? row.proyecto ?? ''),
-        fecha_reporte: new Date().toISOString().slice(0, 10),
+        fecha_reporte: getLocalDateISO(),
         _calificaciones: [],
       });
     }
 
     const acc = grupos.get(key)!;
-    if (fecha) {
+    // Solo actualizar periodo_inicio/fin dinámicamente cuando NO usamos rango fijo
+    if (!useRangePeriod && fecha) {
       const inicio = String(acc.periodo_inicio || fecha);
       const fin = String(acc.periodo_fin || fecha);
       acc.periodo_inicio = fecha < inicio ? fecha : inicio;
@@ -630,7 +711,10 @@ export async function listarReportesConductores(filtro: Partial<FiltroReporte> &
   if (filtro.proyecto) q = q.eq('proyecto', filtro.proyecto);
   if (filtro.contratoId) q = q.eq('conductores.contrato_id', filtro.contratoId);
   if (filtro.fechaInicio && filtro.fechaFin) {
-    q = q.lte('periodo_inicio', filtro.fechaFin).gte('periodo_fin', filtro.fechaInicio);
+    // Contención estricta: solo registros cuyo período cae COMPLETAMENTE dentro del rango.
+    // El overlap traía registros de meses calendario (Abr 1-30, May 1-31) que parcialmente
+    // solapan con períodos custom (29/04-28/05), mostrando datos incorrectos del período anterior.
+    q = q.gte('periodo_inicio', filtro.fechaInicio).lte('periodo_fin', filtro.fechaFin);
   } else if (filtro.mes) {
     q = q.eq('mes', filtro.mes);
   }
@@ -684,7 +768,9 @@ async function listarReportesVehiculosDesdeColtrack(filtro: Partial<FiltroReport
     const fecha = String(row.fecha ?? '').slice(0, 10);
     const mes = fecha ? fecha.slice(0, 7) : String(row.mes ?? '');
     const vehiculoId = String(row.vehiculo_id ?? vehiculo.id ?? '');
-    const key = `${vehiculoId}|${mes}`;
+    // Cuando hay un rango de fechas explícito, agrupa todo el período en una sola fila
+    const useRangePeriod = !!(filtro.fechaInicio && filtro.fechaFin);
+    const key = useRangePeriod ? vehiculoId : `${vehiculoId}|${mes}`;
 
     if (!grupos.has(key)) {
       grupos.set(key, {
@@ -695,9 +781,9 @@ async function listarReportesVehiculosDesdeColtrack(filtro: Partial<FiltroReport
           tipo_activo: vehiculo.tipo_activo,
           contrato_id: vehiculo.contrato_id,
         },
-        periodo_inicio: fecha,
-        periodo_fin: fecha,
-        mes,
+        periodo_inicio: useRangePeriod ? filtro.fechaInicio! : fecha,
+        periodo_fin: useRangePeriod ? filtro.fechaFin! : fecha,
+        mes: useRangePeriod ? (filtro.fechaInicio?.slice(0, 7) ?? mes) : mes,
         calificacion: 0,
         kms: 0,
         horas_conduccion: 0,
@@ -713,13 +799,14 @@ async function listarReportesVehiculosDesdeColtrack(filtro: Partial<FiltroReport
         horas_motor_ralenti: 0,
         proyecto: String(vehiculo.cliente ?? row.proyecto ?? ''),
         base: String(vehiculo.lugar ?? ''),
-        fecha_reporte: new Date().toISOString().slice(0, 10),
+        fecha_reporte: getLocalDateISO(),
         _calificaciones: [],
       });
     }
 
     const acc = grupos.get(key)!;
-    if (fecha) {
+    // Solo actualizar periodo_inicio/fin dinámicamente cuando NO usamos rango fijo
+    if (!useRangePeriod && fecha) {
       const inicio = String(acc.periodo_inicio || fecha);
       const fin = String(acc.periodo_fin || fecha);
       acc.periodo_inicio = fecha < inicio ? fecha : inicio;
@@ -770,7 +857,10 @@ export async function listarReportesVehiculos(filtro: Partial<FiltroReporte> & {
   if (filtro.proyecto) q = q.eq('proyecto', filtro.proyecto);
   if (filtro.contratoId) q = q.eq('contrato_id', filtro.contratoId);
   if (filtro.fechaInicio && filtro.fechaFin) {
-    q = q.lte('periodo_inicio', filtro.fechaFin).gte('periodo_fin', filtro.fechaInicio);
+    // Contención estricta: solo registros cuyo período cae COMPLETAMENTE dentro del rango.
+    // El overlap traía registros de meses calendario (Abr 1-30, May 1-31) que parcialmente
+    // solapan con períodos custom (29/04-28/05), mostrando datos incorrectos del período anterior.
+    q = q.gte('periodo_inicio', filtro.fechaInicio).lte('periodo_fin', filtro.fechaFin);
   } else if (filtro.mes) {
     q = q.eq('mes', filtro.mes);
   }
@@ -953,7 +1043,7 @@ export async function getReporteAlertasDiarias(filtro: Pick<FiltroReporte, 'fech
     alertas,
     periodoInicio: filtro.fechaInicio,
     periodoFin: filtro.fechaFin,
-    fechaReporte: new Date().toISOString().slice(0, 10),
+    fechaReporte: getLocalDateISO(),
     contrato,
     resumen: {
       totalAlertas: alertas.reduce((acc, a) => acc + a.infraccion_80_kmh + a.excesos_varios_parametros + a.excesos_50_80_kmh + a.frenadas_bruscas, 0),

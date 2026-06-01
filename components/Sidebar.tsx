@@ -31,7 +31,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
-export type TabType = 'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'history-analytics' | 'route-investigation' | 'batch-upload' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'users' | 'maintenance' | 'fleet' | 'alert-config' | 'daily-reports' | 'monthly-reports' | 'telemetry-processor';
+export type TabType = 'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'history-analytics' | 'route-investigation' | 'batch-upload' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'users' | 'maintenance' | 'fleet' | 'alert-config' | 'daily-reports' | 'monthly-reports' | 'contract-analysis' | 'telemetry-processor';
 
 interface SidebarProps {
     activeTab: TabType;
@@ -113,6 +113,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             items: [
                 { id: 'daily-reports', label: 'Informes Diarios', icon: CalendarDays },
                 { id: 'monthly-reports', label: 'Informes Mensuales', icon: BarChart3 },
+                { id: 'contract-analysis', label: 'Análisis por Contrato', icon: TrendingUp },
                 { id: 'telemetry-processor', label: 'Procesador Satelital', icon: Radio },
             ]
         },

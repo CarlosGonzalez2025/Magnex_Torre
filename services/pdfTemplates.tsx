@@ -4,7 +4,7 @@
 import React from 'react';
 import {
   Document, Page, Text, View, StyleSheet, Font, pdf,
-  Image,
+  Image, Svg, Circle,
 } from '@react-pdf/renderer';
 import { ContratoOption, ReporteAlertasDiariasData, AlertaDiariaGps, ReporteConductorData, ReporteVehiculoData } from './reportService';
 
@@ -78,6 +78,14 @@ const base = StyleSheet.create({
 });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+function getLocalDateISO(): string {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
 
 function fmt(d?: string | null): string {
   if (!d) return '—';
@@ -536,6 +544,8 @@ function metricasConsolidado(
   const conductorKm = conductores.reduce((acc, d) => acc + d.metricas.kms, 0);
   const vehiculoKm = vehiculos.reduce((acc, d) => acc + d.metricas.kms, 0);
   const conductorHoras = conductores.reduce((acc, d) => acc + d.metricas.horas_conduccion, 0);
+  // Para vehículos: usar estrictamente horas_conduccion (horas de conducción en movimiento)
+  // como referencia operativa de conducción.
   const vehiculoHoras = vehiculos.reduce((acc, d) => acc + d.metricas.horas_conduccion, 0);
   const fuente = tipo === 'conductores' ? conductores.map(d => d.metricas) : vehiculos.map(d => d.metricas);
   const horasRalenti = vehiculos.reduce((acc, d) => acc + d.ralenti.horas_motor_ralenti, 0);
@@ -844,7 +854,7 @@ function ConsolidadoHeader({
       <View style={base.headerRight}>
         <Text style={base.headerDate}>Cliente: {contrato.cliente || '-'}</Text>
         <Text style={base.headerDate}>Periodo: {fmt(periodoInicio)} - {fmt(periodoFin)}</Text>
-        <Text style={base.headerDate}>Generado: {fmt(new Date().toISOString().slice(0, 10))}</Text>
+        <Text style={base.headerDate}>Generado: {fmt(getLocalDateISO())}</Text>
       </View>
     </View>
   );
@@ -1030,7 +1040,7 @@ export function ConsolidadoConductoresContratoPDF({
         <ReportHeader title="FORMATO LOCAL PARA INFORME GESTION MENSUAL COMPORTAMIENTO FLOTA VEHICULAR (GPS)" />
         <ReportFooter />
         <Band dark>1. INFORMACION GENERAL</Band>
-        <Cell label="FECHA DEL REPORTE:" value={fmt(new Date().toISOString().slice(0, 10))} />
+        <Cell label="FECHA DEL REPORTE:" value={fmt(getLocalDateISO())} />
         <Cell label="PERIODO EVALUADO:" value={`${fmt(periodoInicio)} - ${fmt(periodoFin)}`} />
         <Cell label="PROYECTO / CONTRATO:" value={contrato.nombre} />
         <Cell label="BASE / ZONA:" value={baseZonaConductores(datos, contrato.proyecto)} />
@@ -1188,7 +1198,7 @@ export function ConsolidadoVehiculosContratoPDF({
         <ReportHeader title="FORMATO LOCAL PARA INFORME GESTION MENSUAL COMPORTAMIENTO FLOTA VEHICULAR (GPS)" />
         <ReportFooter />
         <Band dark>1. INFORMACION GENERAL</Band>
-        <Cell label="FECHA DEL REPORTE:" value={fmt(new Date().toISOString().slice(0, 10))} />
+        <Cell label="FECHA DEL REPORTE:" value={fmt(getLocalDateISO())} />
         <Cell label="PERIODO EVALUADO:" value={`${fmt(periodoInicio)} - ${fmt(periodoFin)}`} />
         <Cell label="PROYECTO / CONTRATO:" value={contrato.nombre} />
         <Cell label="BASE / ZONA:" value={baseZonaVehiculos(datos, contrato.proyecto)} />
@@ -2300,3 +2310,686 @@ export async function descargarLotePDFs(
     await new Promise(r => setTimeout(r, 300));
   }
 }
+
+// ==============================================================================
+// ── PLANTILLA PDF: ANÁLISIS GERENCIAL DE COMPORTAMIENTO POR CONTRATO ───────────
+// ==============================================================================
+
+interface InformeAnalisisContratoPDFProps {
+  contratosSeleccionados: ContratoOption[];
+  filtro: { fechaInicio: string; fechaFin: string };
+  metricas: {
+    totalConductoresActivos: number;
+    totalVehiculosActivos: number;
+    totalMotosActivas: number;
+    totalFlotaActiva: number;
+    kmVehiculos: number;
+    kmMotos: number;
+    totalKms: number;
+    totalRalentiHoras: number;
+    vehsConKm: number;
+    vehsConExcess: number;
+    vehsConRalenti: number;
+    vehsConFrenadas: number;
+    vehsConAceleraciones: number;
+    totalExcesos: number;
+    totalExcesos80: number;
+    totalExcesosBajo80: number;
+    totalFrenadas: number;
+    totalAceleraciones: number;
+    pctVehConKm: number;
+    pctVehConExcess: number;
+    pctVehConRalenti: number;
+    condConKm: number;
+    condConExcess: number;
+    condConFrenadas: number;
+    condConAceleraciones: number;
+  };
+  vehiculosDetalle: any[];
+}
+
+// Componente vectorial para representar medidores circulares de efectividad en el PDF
+function CircularGauge({ percent, color, label, subLabel }: { percent: number; color: string; label: string; subLabel: string }) {
+  const radius = 22;
+  const strokeWidth = 4;
+  const circumference = 2 * Math.PI * radius;
+  const strokeDashoffset = circumference - (Math.min(percent, 100) / 100) * circumference;
+
+  return (
+    <View style={{ alignItems: 'center', width: 95 }}>
+      <View style={{ width: 56, height: 56, position: 'relative', alignItems: 'center', justifyContent: 'center' }}>
+        <Svg width={56} height={56} viewBox="0 0 56 56">
+          {/* Círculo de fondo */}
+          <Circle
+            cx="28"
+            cy="28"
+            r="22"
+            fill="none"
+            stroke="#cbd5e1"
+            strokeWidth="4"
+          />
+          {/* Círculo de progreso */}
+          <Circle
+            cx="28"
+            cy="28"
+            r="22"
+            fill="none"
+            stroke={color}
+            strokeWidth="4"
+            {...({
+              strokeDasharray: String(circumference),
+              strokeDashoffset: String(strokeDashoffset),
+              strokeLinecap: "round",
+            } as any)}
+            transform="rotate(-90 28 28)"
+          />
+        </Svg>
+        <View style={{ position: 'absolute', top: 21, left: 0, right: 0, alignItems: 'center' }}>
+          <Text style={{ fontSize: 9, fontWeight: 700, color: COLORS.negro }}>{Math.round(percent)}%</Text>
+        </View>
+      </View>
+      <Text style={{ fontSize: 5.6, fontWeight: 700, color: COLORS.negro, marginTop: 4, textAlign: 'center' }}>{label}</Text>
+      <Text style={{ fontSize: 4.8, color: COLORS.gris, textAlign: 'center', marginTop: 1 }}>{subLabel}</Text>
+    </View>
+  );
+}
+
+// Componente vectorial para representar barras de progreso horizontales en el PDF
+function PDFProgressBar({ percent, color, label, valueLabel }: { percent: number; color: string; label: string; valueLabel: string }) {
+  return (
+    <View style={{ marginBottom: 5 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 2 }}>
+        <Text style={{ fontSize: 5.3, fontWeight: 700, color: COLORS.negro }}>{label}</Text>
+        <Text style={{ fontSize: 5.3, fontWeight: 700, color: COLORS.gris }}>
+          {valueLabel} <Text style={{ color: COLORS.negro }}>({Math.round(percent)}%)</Text>
+        </Text>
+      </View>
+      <View style={{ width: '100%', height: 4, backgroundColor: '#cbd5e1', borderRadius: 2, overflow: 'hidden' }}>
+        {percent > 0 ? (
+          <View style={{ width: `${Math.min(percent, 100)}%`, height: 4, backgroundColor: color, borderRadius: 2 }} />
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+export function InformeAnalisisContratoPDF({
+  contratosSeleccionados,
+  filtro,
+  metricas,
+  vehiculosDetalle,
+}: InformeAnalisisContratoPDFProps) {
+  const cLabel = contratosSeleccionados.map(c => c.nombre).join(' / ') || 'Ningún contrato seleccionado';
+
+  return (
+    <Document title="Informe Gerencial de Análisis por Contrato">
+      <Page size="LETTER" orientation="portrait" style={[base.page, { padding: 18, paddingBottom: 54 }]}>
+        <ReportHeader title="FORMATO LOCAL PARA INFORME GESTION MENSUAL COMPORTAMIENTO FLOTA VEHICULAR (GPS)" />
+        <ReportFooter />
+
+        <Band dark>1. INFORMACION GENERAL DEL ANALISIS</Band>
+        <Cell label="FECHA DEL REPORTE:" value={fmt(getLocalDateISO())} />
+        <Cell label="PERIODO EVALUADO:" value={`${fmt(filtro.fechaInicio)} - ${fmt(filtro.fechaFin)}`} />
+        <Cell label="CONTRATOS EVALUADOS:" value={cLabel} />
+        <Cell label="TIPO DE ANÁLISIS:" value="Análisis Gerencial por Contrato (Multiselección)" />
+
+        {/* Fila principal: Reporte PRM a la izquierda y Efectividad Operativa a la derecha */}
+        <View style={{ flexDirection: 'row', gap: 10, marginTop: 6, marginBottom: 8 }}>
+          
+          {/* Tarjeta PRM con fondo oscuro */}
+          <View style={{ flex: 1.1, backgroundColor: '#0f172a', padding: 10, borderRadius: 6, justifyContent: 'space-between' }}>
+            <View>
+              <Text style={{ fontSize: 9, fontWeight: 700, color: COLORS.blanco, borderBottomWidth: 0.5, borderBottomColor: '#334155', paddingBottom: 4, marginBottom: 6 }}>
+                Reporte Oficial PRM
+              </Text>
+              <View style={{ gap: 4 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', borderBottomWidth: 0.3, borderBottomColor: '#1e293b', paddingVertical: 2 }}>
+                  <Text style={{ fontSize: 6.2, color: '#94a3b8' }}>N° Conductores:</Text>
+                  <Text style={{ fontSize: 6.8, fontWeight: 700, color: COLORS.blanco }}>{metricas.totalConductoresActivos}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', borderBottomWidth: 0.3, borderBottomColor: '#1e293b', paddingVertical: 2 }}>
+                  <Text style={{ fontSize: 6.2, color: '#94a3b8' }}>N° Vehículos:</Text>
+                  <Text style={{ fontSize: 6.8, fontWeight: 700, color: COLORS.blanco }}>{metricas.totalVehiculosActivos}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', borderBottomWidth: 0.3, borderBottomColor: '#1e293b', paddingVertical: 2 }}>
+                  <Text style={{ fontSize: 6.2, color: '#94a3b8' }}>N° Motocicletas:</Text>
+                  <Text style={{ fontSize: 6.8, fontWeight: 700, color: COLORS.blanco }}>{metricas.totalMotosActivas}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', borderBottomWidth: 0.3, borderBottomColor: '#1e293b', paddingVertical: 2 }}>
+                  <Text style={{ fontSize: 6.2, color: '#94a3b8' }}>Km recorridos Vehículos:</Text>
+                  <Text style={{ fontSize: 6.8, fontWeight: 700, color: COLORS.blanco }}>{n(metricas.kmVehiculos, 1)} km</Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', borderBottomWidth: 0.3, borderBottomColor: '#1e293b', paddingVertical: 2 }}>
+                  <Text style={{ fontSize: 6.2, color: '#94a3b8' }}>Km recorridos Motocicletas:</Text>
+                  <Text style={{ fontSize: 6.8, fontWeight: 700, color: COLORS.blanco }}>{n(metricas.kmMotos, 1)} km</Text>
+                </View>
+              </View>
+            </View>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#1e293b', padding: 5, borderRadius: 4, marginTop: 8 }}>
+              <Text style={{ fontSize: 5.8, color: '#94a3b8', fontWeight: 700 }}>TOTAL KM CONSOLIDADO</Text>
+              <Text style={{ fontSize: 7.2, fontWeight: 700, color: '#10b981' }}>{n(metricas.totalKms, 1)} km</Text>
+            </View>
+          </View>
+
+          {/* Efectividad Operativa de Flota (Contrato) con Gauges Circulares y Tarjetas */}
+          <View style={{ flex: 1.3, borderWidth: 0.4, borderColor: COLORS.sombra, padding: 8, borderRadius: 6, justifyContent: 'space-between' }}>
+            <View>
+              <Text style={{ fontSize: 9, fontWeight: 700, color: COLORS.azul, borderBottomWidth: 0.5, borderBottomColor: COLORS.sombra, paddingBottom: 4, marginBottom: 8 }}>
+                Efectividad Operativa de Flota
+              </Text>
+              
+              {/* Tres Medidores Circulares */}
+              <View style={{ flexDirection: 'row', justifyContent: 'space-around', gap: 4 }}>
+                <CircularGauge
+                  percent={metricas.pctVehConKm}
+                  color="#16a34a"
+                  label="Flota Activa con Km"
+                  subLabel={`${metricas.vehsConKm} de ${metricas.totalFlotaActiva} rodaron`}
+                />
+                <CircularGauge
+                  percent={metricas.pctVehConRalenti}
+                  color="#d97706"
+                  label="Flota con Ralentí"
+                  subLabel={`${metricas.vehsConRalenti} de ${metricas.totalFlotaActiva} con motor`}
+                />
+                <CircularGauge
+                  percent={metricas.pctVehConExcess}
+                  color="#dc2626"
+                  label="Flota con Excesos"
+                  subLabel={`${metricas.vehsConExcess} de ${metricas.totalFlotaActiva} con alerta`}
+                />
+              </View>
+            </View>
+
+            {/* Tres Tarjetas de Desviaciones */}
+            <View style={{ flexDirection: 'row', gap: 6, marginTop: 8 }}>
+              <View style={{ flex: 1, backgroundColor: '#fee2e2', borderLeftWidth: 2, borderLeftColor: '#dc2626', padding: 3, borderRadius: 2, alignItems: 'center' }}>
+                <Text style={{ fontSize: 4.8, fontWeight: 700, color: '#991b1b' }}>EXCESOS VELOCIDAD</Text>
+                <Text style={{ fontSize: 10, fontWeight: 700, color: '#dc2626', marginTop: 1 }}>{n(metricas.totalExcesos)}</Text>
+              </View>
+              <View style={{ flex: 1, backgroundColor: '#fef3c7', borderLeftWidth: 2, borderLeftColor: '#d97706', padding: 3, borderRadius: 2, alignItems: 'center' }}>
+                <Text style={{ fontSize: 4.8, fontWeight: 700, color: '#92400e' }}>FRENADAS BRUSCAS</Text>
+                <Text style={{ fontSize: 10, fontWeight: 700, color: '#d97706', marginTop: 1 }}>{n(metricas.totalFrenadas)}</Text>
+              </View>
+              <View style={{ flex: 1, backgroundColor: '#dbeafe', borderLeftWidth: 2, borderLeftColor: '#1e40af', padding: 3, borderRadius: 2, alignItems: 'center' }}>
+                <Text style={{ fontSize: 4.8, fontWeight: 700, color: '#1e3a8a' }}>SOBREACELERACIONES</Text>
+                <Text style={{ fontSize: 10, fontWeight: 700, color: '#1e40af', marginTop: 1 }}>{n(metricas.totalAceleraciones)}</Text>
+              </View>
+            </View>
+          </View>
+        </View>
+
+        {/* Participación en Conducción y Desviaciones con Barras de Progreso horizontales */}
+        <Band dark>2. PARTICIPACIÓN EN CONDUCCIÓN Y DESVIACIONES ({contratosSeleccionados.length === 1 ? 'CONTRATO' : 'CONSOLIDADO'})</Band>
+        <View style={{ flexDirection: 'row', gap: 12, padding: 8, borderWidth: 0.4, borderColor: COLORS.sombra, borderRadius: 6, marginBottom: 8 }}>
+          
+          {/* Conductores */}
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 7, fontWeight: 700, color: COLORS.gris, borderBottomWidth: 0.5, borderBottomColor: COLORS.sombra, paddingBottom: 3, marginBottom: 5 }}>
+              ANÁLISIS DE CONDUCTORES (Total Roster: {metricas.totalConductoresActivos})
+            </Text>
+            <View style={{ gap: 4 }}>
+              <PDFProgressBar
+                percent={metricas.totalConductoresActivos > 0 ? (metricas.condConKm / metricas.totalConductoresActivos) * 100 : 0}
+                color="#10b981"
+                label="Generaron Recorridos (KMs > 0)"
+                valueLabel={`${metricas.condConKm} / ${metricas.totalConductoresActivos}`}
+              />
+              <PDFProgressBar
+                percent={metricas.totalConductoresActivos > 0 ? (metricas.condConExcess / metricas.totalConductoresActivos) * 100 : 0}
+                color="#ef4444"
+                label="Presentaron Excesos de Velocidad"
+                valueLabel={`${metricas.condConExcess} / ${metricas.totalConductoresActivos}`}
+              />
+              <PDFProgressBar
+                percent={metricas.totalConductoresActivos > 0 ? (metricas.condConFrenadas / metricas.totalConductoresActivos) * 100 : 0}
+                color="#f97316"
+                label="Presentaron Frenadas Bruscas"
+                valueLabel={`${metricas.condConFrenadas} / ${metricas.totalConductoresActivos}`}
+              />
+              <PDFProgressBar
+                percent={metricas.totalConductoresActivos > 0 ? (metricas.condConAceleraciones / metricas.totalConductoresActivos) * 100 : 0}
+                color="#3b82f6"
+                label="Presentaron Sobreaceleraciones"
+                valueLabel={`${metricas.condConAceleraciones} / ${metricas.totalConductoresActivos}`}
+              />
+            </View>
+          </View>
+
+          {/* Vehículos */}
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 7, fontWeight: 700, color: COLORS.gris, borderBottomWidth: 0.5, borderBottomColor: COLORS.sombra, paddingBottom: 3, marginBottom: 5 }}>
+              ANÁLISIS DE VEHÍCULOS (Flota Roster: {metricas.totalFlotaActiva})
+            </Text>
+            <View style={{ gap: 4 }}>
+              <PDFProgressBar
+                percent={metricas.pctVehConKm}
+                color="#10b981"
+                label="Generaron Recorridos (KMs > 0)"
+                valueLabel={`${metricas.vehsConKm} / ${metricas.totalFlotaActiva}`}
+              />
+              <PDFProgressBar
+                percent={metricas.pctVehConExcess}
+                color="#ef4444"
+                label="Presentaron Excesos de Velocidad"
+                valueLabel={`${metricas.vehsConExcess} / ${metricas.totalFlotaActiva}`}
+              />
+              <PDFProgressBar
+                percent={metricas.totalFlotaActiva > 0 ? (metricas.vehsConFrenadas / metricas.totalFlotaActiva) * 100 : 0}
+                color="#f97316"
+                label="Presentaron Frenadas Bruscas"
+                valueLabel={`${metricas.vehsConFrenadas} / ${metricas.totalFlotaActiva}`}
+              />
+              <PDFProgressBar
+                percent={metricas.totalFlotaActiva > 0 ? (metricas.vehsConAceleraciones / metricas.totalFlotaActiva) * 100 : 0}
+                color="#3b82f6"
+                label="Presentaron Sobreaceleraciones"
+                valueLabel={`${metricas.vehsConAceleraciones} / ${metricas.totalFlotaActiva}`}
+              />
+              <PDFProgressBar
+                percent={metricas.pctVehConRalenti}
+                color="#eab308"
+                label="Presentaron Ralentí Excesivo"
+                valueLabel={`${metricas.vehsConRalenti} / ${metricas.totalFlotaActiva}`}
+              />
+            </View>
+          </View>
+        </View>
+
+        <View wrap={false}>
+          <Band>3. CONTROL HSEQ - BITÁCORA DE LLAMADO A LA ACCIÓN (PESV)</Band>
+          <View style={{ borderWidth: 0.4, borderColor: '#cbd5e1', padding: 5, backgroundColor: '#f8fafc', borderRadius: 2 }}>
+            <Text style={{ fontSize: 5.6, lineHeight: 1.4, color: '#334155' }}>
+              Este análisis gerencial constituye una auditoría periódica de la flota asociada a los contratos descritos. En caso de evidenciarse una tasa de desviación superior al 10% en excesos de velocidad o conducción agresiva, se activará el protocolo de seguridad vial corporativo PESV, convocando a capacitaciones de manejo defensivo y sensibilización técnica a los operadores involucrados.
+            </Text>
+          </View>
+        </View>
+      </Page>
+
+      {/* Página 2 y siguientes: Desglose Operativo Detallado */}
+      <Page size="LETTER" orientation="portrait" style={[base.page, { padding: 18, paddingBottom: 54 }]}>
+        <ReportHeader title="FORMATO LOCAL PARA INFORME GESTION MENSUAL COMPORTAMIENTO FLOTA VEHICULAR (GPS)" />
+        <ReportFooter />
+
+        <Band dark>4. DESGLOSE OPERATIVO DETALLADO POR VEHÍCULO</Band>
+        <View style={[base.tableHeader, { marginTop: 4 }]}>
+          <Text style={[base.tableHeaderCell, { flex: 0.8, textAlign: 'left' }]}>Placa</Text>
+          <Text style={[base.tableHeaderCell, { flex: 1.6 }]}>Contrato</Text>
+          <Text style={[base.tableHeaderCell, { flex: 1.0 }]}>Tipo Activo</Text>
+          <Text style={[base.tableHeaderCell, { flex: 1.0 }]}>Kilómetros</Text>
+          <Text style={[base.tableHeaderCell, { flex: 1.0 }]}>Horas Ralentí</Text>
+          <Text style={[base.tableHeaderCell, { flex: 0.8 }]}>Exc &gt;= 80</Text>
+          <Text style={[base.tableHeaderCell, { flex: 0.8 }]}>Exc &lt; 80</Text>
+          <Text style={[base.tableHeaderCell, { flex: 0.8 }]}>Frenadas</Text>
+          <Text style={[base.tableHeaderCell, { flex: 0.8 }]}>Sobreacel.</Text>
+          <Text style={[base.tableHeaderCell, { flex: 0.8 }]}>Cal.</Text>
+        </View>
+        {vehiculosDetalle.map((rv, idx) => {
+          const placa = rv.vehiculos?.placa ?? rv.placa;
+          const tipo = rv.vehiculos?.tipo_activo ?? rv.tipo_activo ?? '—';
+          const cNom = rv.contratos?.nombre ?? contratosSeleccionados.find(c => c.id === (rv.contrato_id || rv.vehiculos?.contrato_id))?.nombre ?? '—';
+          
+          const exc80 = Number(rv.excesos_80_kph ?? 0);
+          const excBajo80 = Number(rv.excesos_10_kph ?? 0) +
+            Number(rv.excesos_20_kph ?? 0) +
+            Number(rv.excesos_30_kph ?? 0) +
+            Number(rv.excesos_40_kph ?? 0) +
+            Number(rv.excesos_50_kph ?? 0) +
+            Number(rv.excesos_60_kph ?? 0);
+          
+          const score = Number(rv.calificacion ?? 100);
+          const scoreColor = score >= 90 ? COLORS.verde : score >= 70 ? COLORS.amarillo : COLORS.rojo;
+          const frenadas = Number(rv.frenadas_bruscas ?? rv.frenadas ?? 0);
+          const aceleraciones = Number(rv.aceleraciones_bruscas ?? rv.aceleraciones ?? 0);
+
+          return (
+            <View key={rv.id || idx} style={[base.tableRow, idx % 2 ? base.tableRowAlt : {}]} wrap={false}>
+              <Text style={[base.tableCell, { flex: 0.8, fontWeight: 700, textAlign: 'left' }]}>{placa}</Text>
+              <Text style={[base.tableCell, { flex: 1.6 }]}>{cNom}</Text>
+              <Text style={[base.tableCell, { flex: 1.0 }]}>{tipo}</Text>
+              <Text style={[base.tableCell, { flex: 1.0 }]}>{n(rv.kms, 1)} km</Text>
+              <Text style={[base.tableCell, { flex: 1.0, color: Number(rv.horas_motor_ralenti ?? 0) > 2 ? COLORS.amarillo : COLORS.negro }]}>{n(rv.horas_motor_ralenti ?? 0, 1)} h</Text>
+              <Text style={[base.tableCell, { flex: 0.8, color: exc80 > 0 ? COLORS.rojo : COLORS.negro, fontWeight: exc80 > 0 ? 700 : 400 }]}>{exc80}</Text>
+              <Text style={[base.tableCell, { flex: 0.8, color: excBajo80 > 0 ? COLORS.rojo : COLORS.negro }]}>{excBajo80}</Text>
+              <Text style={[base.tableCell, { flex: 0.8, color: frenadas > 0 ? COLORS.amarillo : COLORS.negro }]}>{frenadas}</Text>
+              <Text style={[base.tableCell, { flex: 0.8, color: aceleraciones > 0 ? COLORS.azulClaro : COLORS.negro }]}>{aceleraciones}</Text>
+              <Text style={[base.tableCell, { flex: 0.8, fontWeight: 700, color: scoreColor }]}>{score}</Text>
+            </View>
+          );
+        })}
+        <Text style={{ textAlign: 'center', fontSize: 6, fontWeight: 700, marginTop: 15, color: '#64748b' }}>*** FIN DEL INFORME GERENCIAL POR CONTRATO ***</Text>
+      </Page>
+    </Document>
+  );
+}
+
+interface InformeConsolidadoGlobalPDFProps {
+  consolidadoGlobal: any[];
+  metricasGlobales: any;
+  ghostEntities: { conductores: any[]; vehiculos: any[] };
+  filtro: { fechaInicio: string; fechaFin: string };
+}
+
+export function InformeConsolidadoGlobalPDF({
+  consolidadoGlobal,
+  metricasGlobales,
+  ghostEntities,
+  filtro,
+}: InformeConsolidadoGlobalPDFProps) {
+  return (
+    <Document title="Informe Consolidado Global Corporativo">
+      <Page size="LETTER" orientation="portrait" style={[base.page, { padding: 18, paddingBottom: 54 }]}>
+        <ReportHeader title="FORMATO LOCAL PARA INFORME GESTION MENSUAL COMPORTAMIENTO FLOTA VEHICULAR (GPS)" />
+        <ReportFooter />
+
+        <Band dark>1. INFORMACION GENERAL - AUDITORÍA CORPORATIVA VIAL</Band>
+        <Cell label="FECHA DEL INFORME:" value={fmt(getLocalDateISO())} />
+        <Cell label="PERIODO EVALUADO:" value={`${fmt(filtro.fechaInicio)} - ${fmt(filtro.fechaFin)}`} />
+        <Cell label="CONTRATOS TOTALES DETECTADOS:" value={n(consolidadoGlobal.length)} />
+        <Cell label="TIPO DE ANÁLISIS:" value="Consolidado Global Corporativo (Multi-Contrato)" />
+
+        {/* Fila principal: KPIs a la izquierda y Efectividad Operativa a la derecha */}
+        <View style={{ flexDirection: 'row', gap: 10, marginTop: 6, marginBottom: 8 }}>
+          
+          {/* Tarjeta PRM/Capacidad con fondo oscuro */}
+          <View style={{ flex: 1.1, backgroundColor: '#0f172a', padding: 10, borderRadius: 6, justifyContent: 'space-between' }}>
+            <View>
+              <Text style={{ fontSize: 9, fontWeight: 700, color: COLORS.blanco, borderBottomWidth: 0.5, borderBottomColor: '#334155', paddingBottom: 4, marginBottom: 6 }}>
+                Resumen Operativo País
+              </Text>
+              <View style={{ gap: 4 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', borderBottomWidth: 0.3, borderBottomColor: '#1e293b', paddingVertical: 2 }}>
+                  <Text style={{ fontSize: 6.2, color: '#94a3b8' }}>Total Conductores:</Text>
+                  <Text style={{ fontSize: 6.8, fontWeight: 700, color: COLORS.blanco }}>{metricasGlobales.totalConductores}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', borderBottomWidth: 0.3, borderBottomColor: '#1e293b', paddingVertical: 2 }}>
+                  <Text style={{ fontSize: 6.2, color: '#94a3b8' }}>Total Vehículos (Autos/Buses):</Text>
+                  <Text style={{ fontSize: 6.8, fontWeight: 700, color: COLORS.blanco }}>{metricasGlobales.totalVehiculos}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', borderBottomWidth: 0.3, borderBottomColor: '#1e293b', paddingVertical: 2 }}>
+                  <Text style={{ fontSize: 6.2, color: '#94a3b8' }}>Total Motocicletas:</Text>
+                  <Text style={{ fontSize: 6.8, fontWeight: 700, color: COLORS.blanco }}>{metricasGlobales.totalMotos}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', borderBottomWidth: 0.3, borderBottomColor: '#1e293b', paddingVertical: 2 }}>
+                  <Text style={{ fontSize: 6.2, color: '#94a3b8' }}>Calificación Promedio:</Text>
+                  <Text style={{ fontSize: 6.8, fontWeight: 700, color: '#10b981' }}>{n(metricasGlobales.calificacionPromedio, 1)}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', borderBottomWidth: 0.3, borderBottomColor: '#1e293b', paddingVertical: 2 }}>
+                  <Text style={{ fontSize: 6.2, color: '#94a3b8' }}>Total Horas Ralentí Flota:</Text>
+                  <Text style={{ fontSize: 6.8, fontWeight: 700, color: COLORS.blanco }}>{n(metricasGlobales.totalRalenti, 1)} h</Text>
+                </View>
+              </View>
+            </View>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#1e293b', padding: 5, borderRadius: 4, marginTop: 8 }}>
+              <Text style={{ fontSize: 5.8, color: '#94a3b8', fontWeight: 700 }}>KILÓMETROS TOTALES PAÍS</Text>
+              <Text style={{ fontSize: 7.2, fontWeight: 700, color: '#10b981' }}>{n(metricasGlobales.totalKms, 1)} km</Text>
+            </View>
+          </View>
+
+          {/* Efectividad Operativa de Flota (Global) con Gauges Circulares y Tarjetas */}
+          <View style={{ flex: 1.3, borderWidth: 0.4, borderColor: COLORS.sombra, padding: 8, borderRadius: 6, justifyContent: 'space-between' }}>
+            <View>
+              <Text style={{ fontSize: 9, fontWeight: 700, color: COLORS.azul, borderBottomWidth: 0.5, borderBottomColor: COLORS.sombra, paddingBottom: 4, marginBottom: 8 }}>
+                Efectividad Operativa Flota País
+              </Text>
+              
+              {/* Tres Medidores Circulares */}
+              <View style={{ flexDirection: 'row', justifyContent: 'space-around', gap: 4 }}>
+                <CircularGauge
+                  percent={metricasGlobales.pctVehConKm}
+                  color="#16a34a"
+                  label="Flota Activa con Km"
+                  subLabel={`${metricasGlobales.vehsConKm} de ${metricasGlobales.totalFlotaActiva} rodaron`}
+                />
+                <CircularGauge
+                  percent={metricasGlobales.pctVehConRalenti}
+                  color="#d97706"
+                  label="Flota con Ralentí"
+                  subLabel={`${metricasGlobales.vehsConRalenti} de ${metricasGlobales.totalFlotaActiva} con motor`}
+                />
+                <CircularGauge
+                  percent={metricasGlobales.pctVehConExcess}
+                  color="#dc2626"
+                  label="Flota con Excesos"
+                  subLabel={`${metricasGlobales.vehsConExcess} de ${metricasGlobales.totalFlotaActiva} con alerta`}
+                />
+              </View>
+            </View>
+
+            {/* Tres Tarjetas de Desviaciones */}
+            <View style={{ flexDirection: 'row', gap: 6, marginTop: 8 }}>
+              <View style={{ flex: 1, backgroundColor: '#fee2e2', borderLeftWidth: 2, borderLeftColor: '#dc2626', padding: 3, borderRadius: 2, alignItems: 'center' }}>
+                <Text style={{ fontSize: 4.8, fontWeight: 700, color: '#991b1b' }}>EXCESOS VELOCIDAD</Text>
+                <Text style={{ fontSize: 10, fontWeight: 700, color: '#dc2626', marginTop: 1 }}>{n(metricasGlobales.totalExcesos)}</Text>
+              </View>
+              <View style={{ flex: 1, backgroundColor: '#fef3c7', borderLeftWidth: 2, borderLeftColor: '#d97706', padding: 3, borderRadius: 2, alignItems: 'center' }}>
+                <Text style={{ fontSize: 4.8, fontWeight: 700, color: '#92400e' }}>FRENADAS BRUSCAS</Text>
+                <Text style={{ fontSize: 10, fontWeight: 700, color: '#d97706', marginTop: 1 }}>{n(metricasGlobales.totalFrenadas)}</Text>
+              </View>
+              <View style={{ flex: 1, backgroundColor: '#dbeafe', borderLeftWidth: 2, borderLeftColor: '#1e40af', padding: 3, borderRadius: 2, alignItems: 'center' }}>
+                <Text style={{ fontSize: 4.8, fontWeight: 700, color: '#1e3a8a' }}>SOBREACELERACIONES</Text>
+                <Text style={{ fontSize: 10, fontWeight: 700, color: '#1e40af', marginTop: 1 }}>{n(metricasGlobales.totalAceleraciones)}</Text>
+              </View>
+            </View>
+          </View>
+        </View>
+
+        {/* Participación en Conducción y Desviaciones con Barras de Progreso horizontales a nivel Global */}
+        <Band dark>2. PARTICIPACIÓN EN CONDUCCIÓN Y DESVIACIONES OPERACIONALES GLOBAL (PAÍS)</Band>
+        <View style={{ flexDirection: 'row', gap: 12, padding: 8, borderWidth: 0.4, borderColor: COLORS.sombra, borderRadius: 6, marginBottom: 8 }}>
+          
+          {/* Conductores */}
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 7, fontWeight: 700, color: COLORS.gris, borderBottomWidth: 0.5, borderBottomColor: COLORS.sombra, paddingBottom: 3, marginBottom: 5 }}>
+              ANÁLISIS DE CONDUCTORES GLOBAL (Total Roster: {metricasGlobales.totalConductores})
+            </Text>
+            <View style={{ gap: 4 }}>
+              <PDFProgressBar
+                percent={metricasGlobales.totalConductores > 0 ? (metricasGlobales.condConKm / metricasGlobales.totalConductores) * 100 : 0}
+                color="#10b981"
+                label="Generaron Recorridos (KMs > 0)"
+                valueLabel={`${metricasGlobales.condConKm} / ${metricasGlobales.totalConductores}`}
+              />
+              <PDFProgressBar
+                percent={metricasGlobales.totalConductores > 0 ? (metricasGlobales.condConExcess / metricasGlobales.totalConductores) * 100 : 0}
+                color="#ef4444"
+                label="Presentaron Excesos de Velocidad"
+                valueLabel={`${metricasGlobales.condConExcess} / ${metricasGlobales.totalConductores}`}
+              />
+              <PDFProgressBar
+                percent={metricasGlobales.totalConductores > 0 ? (metricasGlobales.condConFrenadas / metricasGlobales.totalConductores) * 100 : 0}
+                color="#f97316"
+                label="Presentaron Frenadas Bruscas"
+                valueLabel={`${metricasGlobales.condConFrenadas} / ${metricasGlobales.totalConductores}`}
+              />
+              <PDFProgressBar
+                percent={metricasGlobales.totalConductores > 0 ? (metricasGlobales.condConAceleraciones / metricasGlobales.totalConductores) * 100 : 0}
+                color="#3b82f6"
+                label="Presentaron Sobreaceleraciones"
+                valueLabel={`${metricasGlobales.condConAceleraciones} / ${metricasGlobales.totalConductores}`}
+              />
+            </View>
+          </View>
+
+          {/* Vehículos */}
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 7, fontWeight: 700, color: COLORS.gris, borderBottomWidth: 0.5, borderBottomColor: COLORS.sombra, paddingBottom: 3, marginBottom: 5 }}>
+              ANÁLISIS DE VEHÍCULOS GLOBAL (Flota Roster: {metricasGlobales.totalFlotaActiva})
+            </Text>
+            <View style={{ gap: 4 }}>
+              <PDFProgressBar
+                percent={metricasGlobales.pctVehConKm}
+                color="#10b981"
+                label="Generaron Recorridos (KMs > 0)"
+                valueLabel={`${metricasGlobales.vehsConKm} / ${metricasGlobales.totalFlotaActiva}`}
+              />
+              <PDFProgressBar
+                percent={metricasGlobales.pctVehConExcess}
+                color="#ef4444"
+                label="Presentaron Excesos de Velocidad"
+                valueLabel={`${metricasGlobales.vehsConExcess} / ${metricasGlobales.totalFlotaActiva}`}
+              />
+              <PDFProgressBar
+                percent={metricasGlobales.totalFlotaActiva > 0 ? (metricasGlobales.vehsConFrenadas / metricasGlobales.totalFlotaActiva) * 100 : 0}
+                color="#f97316"
+                label="Presentaron Frenadas Bruscas"
+                valueLabel={`${metricasGlobales.vehsConFrenadas} / ${metricasGlobales.totalFlotaActiva}`}
+              />
+              <PDFProgressBar
+                percent={metricasGlobales.totalFlotaActiva > 0 ? (metricasGlobales.vehsConAceleraciones / metricasGlobales.totalFlotaActiva) * 100 : 0}
+                color="#3b82f6"
+                label="Presentaron Sobreaceleraciones"
+                valueLabel={`${metricasGlobales.vehsConAceleraciones} / ${metricasGlobales.totalFlotaActiva}`}
+              />
+              <PDFProgressBar
+                percent={metricasGlobales.pctVehConRalenti}
+                color="#eab308"
+                label="Presentaron Ralentí Excesivo"
+                valueLabel={`${metricasGlobales.vehsConRalenti} / ${metricasGlobales.totalFlotaActiva}`}
+              />
+            </View>
+          </View>
+        </View>
+
+        <Band dark>3. COMPARATIVA CORPORATIVA DE DESEMPEÑO POR CONTRATO</Band>
+        <View style={[base.tableHeader, { marginTop: 4 }]}>
+          <Text style={[base.tableHeaderCell, { flex: 1.6, textAlign: 'left' }]}>Contrato</Text>
+          <Text style={[base.tableHeaderCell, { flex: 1.2 }]}>Cliente</Text>
+          <Text style={[base.tableHeaderCell, { flex: 0.5 }]}>Cond.</Text>
+          <Text style={[base.tableHeaderCell, { flex: 0.5 }]}>Veh.</Text>
+          <Text style={[base.tableHeaderCell, { flex: 0.5 }]}>Motos</Text>
+          <Text style={[base.tableHeaderCell, { flex: 0.9 }]}>Km Totales</Text>
+          <Text style={[base.tableHeaderCell, { flex: 0.7 }]}>Exc &gt;= 80</Text>
+          <Text style={[base.tableHeaderCell, { flex: 0.7 }]}>Exc &lt; 80</Text>
+          <Text style={[base.tableHeaderCell, { flex: 0.7 }]}>Frenadas</Text>
+          <Text style={[base.tableHeaderCell, { flex: 0.7 }]}>Ralentí</Text>
+          <Text style={[base.tableHeaderCell, { flex: 0.7 }]}>Cal. Prom</Text>
+        </View>
+        {consolidadoGlobal.map((c, idx) => {
+          return (
+            <View key={c.id || idx} style={[base.tableRow, idx % 2 ? base.tableRowAlt : {}]} wrap={false}>
+              <Text style={[base.tableCell, { flex: 1.6, fontWeight: 700, textAlign: 'left' }]}>{c.nombre}</Text>
+              <Text style={[base.tableCell, { flex: 1.2 }]}>{c.cliente}</Text>
+              <Text style={[base.tableCell, { flex: 0.5 }]}>{n(c.totalConductores)}</Text>
+              <Text style={[base.tableCell, { flex: 0.5 }]}>{n(c.totalVehiculos)}</Text>
+              <Text style={[base.tableCell, { flex: 0.5 }]}>{n(c.totalMotos)}</Text>
+              <Text style={[base.tableCell, { flex: 0.9 }]}>{n(c.kms, 0)} km</Text>
+              <Text style={[base.tableCell, { flex: 0.7, color: c.excesos80 > 0 ? COLORS.rojo : COLORS.negro, fontWeight: c.excesos80 > 0 ? 700 : 400 }]}>{n(c.excesos80)}</Text>
+              <Text style={[base.tableCell, { flex: 0.7, color: c.excesosBajo80 > 0 ? COLORS.rojo : COLORS.negro }]}>{n(c.excesosBajo80)}</Text>
+              <Text style={[base.tableCell, { flex: 0.7, color: c.frenadas > 0 ? COLORS.amarillo : COLORS.negro }]}>{n(c.frenadas)}</Text>
+              <Text style={[base.tableCell, { flex: 0.7, color: c.ralenti > 2 ? COLORS.amarillo : COLORS.negro }]}>{n(c.ralenti, 1)} h</Text>
+              <Text style={[base.tableCell, { flex: 0.7, fontWeight: 700, color: c.calificacionPromedio >= 90 ? COLORS.verde : c.calificacionPromedio >= 70 ? COLORS.amarillo : COLORS.rojo }]}>{n(c.calificacionPromedio, 1)}</Text>
+            </View>
+          );
+        })}
+      </Page>
+
+      {/* Página 2: Ghost Tracking (Diagnóstico de Entidades No Registradas en Sheets) */}
+      {(ghostEntities.conductores.length > 0 || ghostEntities.vehiculos.length > 0) && (
+        <Page size="LETTER" orientation="portrait" style={[base.page, { padding: 18, paddingBottom: 54 }]}>
+          <ReportHeader title="FORMATO LOCAL PARA INFORME GESTION MENSUAL COMPORTAMIENTO FLOTA VEHICULAR (GPS)" />
+          <ReportFooter />
+
+          <Band dark>4. DIAGNÓSTICO DE ENTIDADES ACTIVAS NO RELACIONADAS (GHOST TRACKING)</Band>
+          <View style={{ borderWidth: 0.4, borderColor: '#dc2626', padding: 5, marginBottom: 8, backgroundColor: '#fee2e2', borderRadius: 2 }}>
+            <Text style={{ fontSize: 5.6, fontWeight: 700, color: '#dc2626', marginBottom: 2 }}>ALERTA GERENCIAL DE EXCLUSIÓN:</Text>
+            <Text style={{ fontSize: 5.4, lineHeight: 1.3, color: '#991b1b' }}>
+              Las siguientes tablas enumeran los conductores y vehículos que registraron actividad satelital (KMs o alertas) durante el periodo de auditoría, pero no figuran en las bases de datos maestras de Google Sheets. Se solicita al área administrativa y líderes del contrato realizar de inmediato la sincronización y registro oficial de estas entidades.
+            </Text>
+          </View>
+
+          {ghostEntities.conductores.length > 0 && (
+            <View style={{ marginBottom: 12 }}>
+              <Band>4.1. CONDUCTORES ACTIVOS PENDIENTES DE REGISTRAR EN GOOGLE SHEETS</Band>
+              <View style={[base.tableHeader, { marginTop: 3 }]}>
+                <Text style={[base.tableHeaderCell, { flex: 1.8, textAlign: 'left' }]}>Nombre Conductor</Text>
+                <Text style={[base.tableHeaderCell, { flex: 1.0 }]}>Cédula</Text>
+                <Text style={[base.tableHeaderCell, { flex: 1.0 }]}>iButton</Text>
+                <Text style={[base.tableHeaderCell, { flex: 1.0 }]}>Km Recorridos</Text>
+                <Text style={[base.tableHeaderCell, { flex: 0.8 }]}>Excesos</Text>
+                <Text style={[base.tableHeaderCell, { flex: 0.8 }]}>Frenadas</Text>
+                <Text style={[base.tableHeaderCell, { flex: 0.8 }]}>Cal.</Text>
+              </View>
+              {ghostEntities.conductores.map((gc, i) => (
+                <View key={gc.id || i} style={[base.tableRow, i % 2 ? base.tableRowAlt : {}]} wrap={false}>
+                  <Text style={[base.tableCell, { flex: 1.8, fontWeight: 700, textAlign: 'left' }]}>{mayuscula(gc.nombre)}</Text>
+                  <Text style={[base.tableCell, { flex: 1.0 }]}>{gc.cedula || '—'}</Text>
+                  <Text style={[base.tableCell, { flex: 1.0 }]}>{gc.ibutton || '—'}</Text>
+                  <Text style={[base.tableCell, { flex: 1.0 }]}>{n(gc.kms, 1)} km</Text>
+                  <Text style={[base.tableCell, { flex: 0.8, color: gc.excesos > 0 ? COLORS.rojo : COLORS.negro }]}>{gc.excesos}</Text>
+                  <Text style={[base.tableCell, { flex: 0.8, color: gc.frenadas > 0 ? COLORS.amarillo : COLORS.negro }]}>{gc.frenadas}</Text>
+                  <Text style={[base.tableCell, { flex: 0.8, fontWeight: 700, color: gc.calificacion >= 90 ? COLORS.verde : gc.calificacion >= 70 ? COLORS.amarillo : COLORS.rojo }]}>{gc.calificacion}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+
+          {ghostEntities.vehiculos.length > 0 && (
+            <View>
+              <Band>4.2. VEHÍCULOS ACTIVOS PENDIENTES DE REGISTRAR EN GOOGLE SHEETS</Band>
+              <View style={[base.tableHeader, { marginTop: 3 }]}>
+                <Text style={[base.tableHeaderCell, { flex: 1.2, textAlign: 'left' }]}>Placa</Text>
+                <Text style={[base.tableHeaderCell, { flex: 1.2 }]}>Km Recorridos</Text>
+                <Text style={[base.tableHeaderCell, { flex: 1.0 }]}>Excesos</Text>
+                <Text style={[base.tableHeaderCell, { flex: 1.0 }]}>Frenadas</Text>
+                <Text style={[base.tableHeaderCell, { flex: 1.0 }]}>Horas Ralentí</Text>
+                <Text style={[base.tableHeaderCell, { flex: 0.8 }]}>Cal.</Text>
+              </View>
+              {ghostEntities.vehiculos.map((gv, i) => (
+                <View key={gv.id || i} style={[base.tableRow, i % 2 ? base.tableRowAlt : {}]} wrap={false}>
+                  <Text style={[base.tableCell, { flex: 1.2, fontWeight: 700, textAlign: 'left' }]}>{gv.placa}</Text>
+                  <Text style={{ flex: 1.2, fontSize: 5.8, textAlign: 'center' }}>{n(gv.kms, 1)} km</Text>
+                  <Text style={[base.tableCell, { flex: 1.0, color: gv.excesos > 0 ? COLORS.rojo : COLORS.negro }]}>{gv.excesos}</Text>
+                  <Text style={[base.tableCell, { flex: 1.0, color: gv.frenadas > 0 ? COLORS.amarillo : COLORS.negro }]}>{gv.frenadas}</Text>
+                  <Text style={[base.tableCell, { flex: 1.0, color: gv.ralenti > 2 ? COLORS.amarillo : COLORS.negro }]}>{n(gv.ralenti, 1)} h</Text>
+                  <Text style={[base.tableCell, { flex: 0.8, fontWeight: 700, color: gv.calificacion >= 90 ? COLORS.verde : gv.calificacion >= 70 ? COLORS.amarillo : COLORS.rojo }]}>{gv.calificacion}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+          <Text style={{ textAlign: 'center', fontSize: 6, fontWeight: 700, marginTop: 15, color: '#64748b' }}>*** FIN DEL CONSOLIDADO GLOBAL CORPORATIVO ***</Text>
+        </Page>
+      )}
+    </Document>
+  );
+}
+
+// ── Helpers de Descarga ──────────────────────────────────────────────────────────
+
+export async function descargarPDFAnalisisContrato(
+  contratosSeleccionados: ContratoOption[],
+  filtro: { fechaInicio: string; fechaFin: string },
+  metricas: any,
+  vehiculosDetalle: any[]
+): Promise<void> {
+  const blob = await pdf(
+    <InformeAnalisisContratoPDF
+      contratosSeleccionados={contratosSeleccionados}
+      filtro={filtro}
+      metricas={metricas}
+      vehiculosDetalle={vehiculosDetalle}
+    />
+  ).toBlob();
+  const cName = contratosSeleccionados.length === 1 
+    ? safeFileName(contratosSeleccionados[0].nombre) 
+    : `multicontrato_${contratosSeleccionados.length}`;
+  downloadBlob(blob, `Analisis_Gerencial_Contrato_${cName}_${filtro.fechaInicio}.pdf`);
+}
+
+export async function descargarPDFConsolidadoGlobal(
+  consolidadoGlobal: any[],
+  metricasGlobales: any,
+  ghostEntities: { conductores: any[]; vehiculos: any[] },
+  filtro: { fechaInicio: string; fechaFin: string }
+): Promise<void> {
+  const blob = await pdf(
+    <InformeConsolidadoGlobalPDF
+      consolidadoGlobal={consolidadoGlobal}
+      metricasGlobales={metricasGlobales}
+      ghostEntities={ghostEntities}
+      filtro={filtro}
+    />
+  ).toBlob();
+  downloadBlob(blob, `Consolidado_Global_Corporativo_${filtro.fechaInicio}.pdf`);
+}
+

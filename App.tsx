@@ -30,6 +30,7 @@ import { FleetManagement } from './components/FleetManagement';
 import { AlertSeverityConfig } from './components/AlertSeverityConfig';
 import { DailyReports } from './components/reports/DailyReports';
 import { MonthlyReports } from './components/reports/MonthlyReports';
+import { ContractAnalysis } from './components/reports/ContractAnalysis';
 import { TelemetryProcessor } from './components/reports/TelemetryProcessor';
 import { fetchFleetData, FleetResponse } from './services/fleetService';
 import { detectAlerts, saveAlertsToStorage, getAlertsFromStorage, getUnsavedAlerts, markAlertAsSent, markAlertAsSaved, cleanOldAlerts, processVehiclesForIdleDetection } from './services/alertService';
@@ -79,7 +80,7 @@ export default function App() {
   const [showApiDetails, setShowApiDetails] = useState(false);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const isReportsTab = activeTab === 'daily-reports' || activeTab === 'monthly-reports' || activeTab === 'telemetry-processor';
+  const isReportsTab = activeTab === 'daily-reports' || activeTab === 'monthly-reports' || activeTab === 'contract-analysis' || activeTab === 'telemetry-processor';
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -411,6 +412,7 @@ export default function App() {
                                               activeTab === 'alert-config' ? 'Configuración de Alertas' :
                                               activeTab === 'daily-reports' ? 'Informes Diarios' :
                                               activeTab === 'monthly-reports' ? 'Informes Mensuales' :
+                                              activeTab === 'contract-analysis' ? 'Análisis por Contrato' :
                                               activeTab === 'telemetry-processor' ? 'Procesador Satelital Directo' : 'Magnex'}
                 </h2>
                 <div className="ml-4 opacity-80 scale-90 origin-left">
@@ -622,6 +624,7 @@ export default function App() {
               {activeTab === 'alert-config' && <AlertSeverityConfig />}
               {activeTab === 'daily-reports' && <DailyReports />}
               {activeTab === 'monthly-reports' && <MonthlyReports />}
+              {activeTab === 'contract-analysis' && <ContractAnalysis />}
               {activeTab === 'telemetry-processor' && <TelemetryProcessor />}
             </div>
           </div>

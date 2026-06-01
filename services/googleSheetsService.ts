@@ -14,6 +14,24 @@
 
 import { supabase } from './supabaseClient';
 
+const PAGE_SIZE = 1000;
+
+async function fetchAllRows<T = Record<string, unknown>>(query: any): Promise<T[]> {
+  const allRows: T[] = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await query.range(from, from + PAGE_SIZE - 1);
+    if (error) throw new Error(error.message);
+    const rows = (data ?? []) as T[];
+    allRows.push(...rows);
+    if (rows.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+
+  return allRows;
+}
+
 // ── Tipos ────────────────────────────────────────────────────────────────────
 
 export interface VehiculoSheet {
@@ -257,10 +275,12 @@ async function syncVehiculos(
   // Soft-delete: marcar INACTIVO los que ya no están en el Sheet
   let inactivados = 0;
   try {
-    const { data: existentes } = await supabase
-      .from('vehiculos')
-      .select('placa')
-      .neq('estado', 'INACTIVO');
+    const existentes = await fetchAllRows(
+      supabase
+        .from('vehiculos')
+        .select('placa')
+        .neq('estado', 'INACTIVO')
+    );
 
     const placasInactivar = (existentes ?? [])
       .map((e: { placa: string }) => e.placa)
@@ -342,10 +362,12 @@ async function syncConductores(
   // Soft-delete: marcar INACTIVO los que ya no están en el Sheet
   let inactivados = 0;
   try {
-    const { data: existentes } = await supabase
-      .from('conductores')
-      .select('cedula')
-      .neq('estado', 'INACTIVO');
+    const existentes = await fetchAllRows(
+      supabase
+        .from('conductores')
+        .select('cedula')
+        .neq('estado', 'INACTIVO')
+    );
 
     const cedulasInactivar = (existentes ?? [])
       .map((e: { cedula: string }) => e.cedula)

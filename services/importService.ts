@@ -61,6 +61,24 @@ const CABECERAS: Record<string, string[]> = {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+const PAGE_SIZE = 1000;
+
+async function fetchAllRows<T = any>(query: any): Promise<T[]> {
+  const allRows: T[] = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await query.range(from, from + PAGE_SIZE - 1);
+    if (error) throw new Error(error.message);
+    const rows = (data ?? []) as T[];
+    allRows.push(...rows);
+    if (rows.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+
+  return allRows;
+}
+
 function excelDateToISO(value: unknown): string | null {
   if (!value) return null;
   if (value instanceof Date && !isNaN(value.getTime())) return value.toISOString().slice(0, 10);
@@ -168,6 +186,16 @@ function validateHeaders(sheetHeaders: string[], expected: string[]): Validation
 }
 
 function num(v: unknown): number {
+  if (typeof v === 'string') {
+    let clean = v.trim();
+    if (clean.includes(',') && !clean.includes('.')) {
+      clean = clean.replace(',', '.');
+    } else if (clean.includes(',') && clean.includes('.')) {
+      clean = clean.replace(/,/g, '');
+    }
+    const n = Number(clean);
+    return isNaN(n) || !isFinite(n) ? 0 : n;
+  }
   const n = Number(v);
   return isNaN(n) || !isFinite(n) ? 0 : n;
 }
@@ -352,8 +380,8 @@ export function parseOperacionConductor(wb: XLSX.WorkBook): ParseResult<Record<s
   const firstNorm: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(firstRow)) firstNorm[normalizeHeader(k)] = v;
 
-  if (!('CEDULA' in firstNorm || 'C_DULA' in firstNorm)) {
-    errores.push({ fila: 1, columna: 'Cédula', mensaje: 'No se encontró la columna Cédula en la hoja de conductores' });
+  if (!('CEDULA' in firstNorm || 'C_DULA' in firstNorm || 'CONDUCTOR' in firstNorm)) {
+    errores.push({ fila: 1, columna: 'Conductor / Cédula', mensaje: 'No se encontró la columna Conductor o Cédula en la hoja de conductores' });
     return { datos: [], errores, valido: false };
   }
 
@@ -362,8 +390,9 @@ export function parseOperacionConductor(wb: XLSX.WorkBook): ParseResult<Record<s
     const n: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(row)) n[normalizeHeader(k)] = v;
 
+    const condName = String(get(n, 'Conductor', 'CONDUCTOR', 'NOMBRES', 'NOMBRE') ?? '').trim();
     const cedula = String(get(n, 'Cédula', 'CEDULA', 'cedula') ?? '').trim();
-    if (!cedula) errores.push({ fila, columna: 'Cédula', mensaje: 'Fila sin cédula — se omitirá' });
+    if (!cedula && !condName) errores.push({ fila, columna: 'Conductor', mensaje: 'Fila sin conductor ni cédula — se omitirá' });
     const periodo = String(get(n, 'Periodo', 'PERIODO', 'periodo') ?? '').trim();
     const fecha = excelDateToISO(get(n, 'FECHA', 'Fecha', 'fecha')) || periodoTextToRange(periodo)?.inicio || new Date().toISOString().slice(0, 10);
 
@@ -446,8 +475,8 @@ export function parseOperacionConductor(wb: XLSX.WorkBook): ParseResult<Record<s
     };
   });
 
-  // Filtrar filas sin cédula
-  const datosFiltrados = datos.filter(d => d._cedula);
+  // Filtrar filas sin cédula ni nombre
+  const datosFiltrados = datos.filter(d => d._cedula || d._nombre_conductor);
   return { datos: datosFiltrados, errores, valido: errores.length === 0 };
 }
 
@@ -762,36 +791,99 @@ async function upsertReporteVehiculo(
   if (error) throw new Error(`reporte vehiculo: ${error.message}`);
 }
 
-async function insertOperacionConductor(datos: Record<string, unknown>[], tipo: 'daily' | 'monthly'): Promise<WriteResult> {
+async function insertOperacionConductor(
+  datos: Record<string, unknown>[],
+  tipo: 'daily' | 'monthly',
+  referenciaConductores?: Map<string, { cedula: string; ibutton?: string }> | string
+): Promise<WriteResult> {
   const omitidos: ValidationError[] = [];
   let insertados = 0;
 
+  const refMap = referenciaConductores instanceof Map ? referenciaConductores : undefined;
+
+  // Cargar conductores activos de la BD para búsqueda rápida en memoria
+  const dbConductores = await fetchAllRows(
+    supabase
+      .from('conductores')
+      .select('id, nombres, cedula, ibutton, proyecto, estado')
+  );
+
+  const conductPorCedula = new Map();
+  const conductPorNombreNorm = new Map();
+  
+  const normName = (name: string) =>
+    normalizeText(name)
+      .replace(/[^A-Z0-9\s]/g, '')
+      .trim()
+      .replace(/\s+/g, ' ');
+
+  (dbConductores ?? []).forEach(c => {
+    if (c.cedula) conductPorCedula.set(normCedula(c.cedula), c);
+    conductPorNombreNorm.set(normName(c.nombres), c);
+  });
+
   for (const d of datos) {
     const { _cedula, _nombre_conductor, _fila, ...rest } = d;
-    void _nombre_conductor;
 
-    const { data: cond } = await supabase
-      .from('conductores')
-      .select('id, proyecto, ibutton, estado')
-      .eq('cedula', String(_cedula))
-      .maybeSingle();
+    let cond = null;
+    const cedNorm = normCedula(_cedula);
+    if (cedNorm) {
+      cond = conductPorCedula.get(cedNorm);
+    }
+    if (!cond && _nombre_conductor) {
+      const nameNorm = normName(String(_nombre_conductor));
+      cond = conductPorNombreNorm.get(nameNorm);
+    }
+
+    // Si no está en BD, buscar en los archivos de referencia cargados
+    if (!cond && _nombre_conductor && refMap) {
+      const nameNorm = normName(String(_nombre_conductor));
+      const ref = refMap.get(nameNorm);
+      if (ref) {
+        console.log(`[Resolución Referencia] Conductor "${_nombre_conductor}" resuelto vía archivos de referencia (Cédula: ${ref.cedula}).`);
+        cond = await asegurarConductorEnMaestro(
+          String(_nombre_conductor),
+          ref.cedula,
+          ref.ibutton,
+          conductPorNombreNorm,
+          conductPorCedula,
+          normName
+        );
+      }
+    }
+
+    // Auto-crear como pendiente extremo si aún no existe
+    if (!cond && _nombre_conductor) {
+      cond = await asegurarConductorEnMaestro(
+        String(_nombre_conductor),
+        _cedula ? String(_cedula) : undefined,
+        undefined,
+        conductPorNombreNorm,
+        conductPorCedula,
+        normName
+      );
+    }
 
     if (!cond) {
       omitidos.push({
         fila: Number(_fila ?? 0),
-        columna: 'Cedula',
-        mensaje: `Conductor con cedula ${_cedula} no encontrado en la base de conductores. Fila omitida.`,
+        columna: 'Conductor',
+        mensaje: `No se pudo encontrar ni auto-crear al conductor "${_nombre_conductor || _cedula}". Fila omitida.`,
       });
       continue;
     }
 
-    const { error } = await supabase
-      .from('coltrack_datos_conductor')
-      .upsert(
-        { conductor_id: cond.id, ...rest },
-        { onConflict: 'conductor_id,fecha', ignoreDuplicates: false }
-      );
-    if (error) throw new Error(`coltrack conductor ${_cedula}: ${error.message}`);
+    // Insertar daily si fecha está definida
+    const fecha = String(rest.fecha ?? '');
+    if (fecha) {
+      const { error } = await supabase
+        .from('coltrack_datos_conductor')
+        .upsert(
+          { conductor_id: cond.id, ...rest },
+          { onConflict: 'conductor_id,fecha', ignoreDuplicates: false }
+        );
+      if (error) throw new Error(`coltrack conductor ${cond.cedula}: ${error.message}`);
+    }
 
     await upsertReporteConductor(cond as { id: string; proyecto?: string | null; ibutton?: string | null; estado?: string | null }, rest, tipo);
     insertados++;
@@ -804,6 +896,23 @@ async function insertOperacionVehiculo(datos: Record<string, unknown>[], tipo: '
   const omitidos: ValidationError[] = [];
   let insertados = 0;
 
+  // Cargar todos los vehículos de la BD para búsqueda rápida en memoria
+  const dbVehiculos = await fetchAllRows(
+    supabase
+      .from('vehiculos')
+      .select('id, placa, cliente, contrato_id, tipo_activo, lugar')
+  );
+
+  const vehicPorPlaca = new Map();
+  const normPlate = (plate: string) =>
+    normalizeText(plate)
+      .replace(/[^A-Z0-9]/g, '')
+      .trim();
+
+  (dbVehiculos ?? []).forEach(v => {
+    vehicPorPlaca.set(normPlate(v.placa), v);
+  });
+
   // Campos que pertenecen a ralentis (no a coltrack_datos_vehiculo)
   const RALENTIS_FIELDS = new Set([
     'kms_recorridos', 'encendidos_apagados', 'ralentis_excesivos',
@@ -813,22 +922,24 @@ async function insertOperacionVehiculo(datos: Record<string, unknown>[], tipo: '
   for (const d of datos) {
     const { _placa, _fila, ...allRest } = d;
 
-    const { data: veh } = await supabase
-      .from('vehiculos')
-      .select('id, contrato_id, cliente, lugar')
-      .eq('placa', String(_placa))
-      .maybeSingle();
+    const placaNorm = normPlate(String(_placa));
+    let veh = vehicPorPlaca.get(placaNorm);
+
+    // Auto-crear si no existe en la base maestra
+    if (!veh && _placa) {
+      veh = await asegurarVehiculoEnMaestro(String(_placa), vehicPorPlaca, normPlate);
+    }
 
     if (!veh) {
       omitidos.push({
         fila: Number(_fila ?? 0),
         columna: 'Vehiculo',
-        mensaje: `Vehiculo con placa ${_placa} no encontrado en la base de vehiculos. Fila omitida.`,
+        mensaje: `No se pudo encontrar ni auto-crear el vehículo "${_placa}". Fila omitida.`,
       });
       continue;
     }
 
-    const vehiculoId = (veh as { id: string }).id;
+    const vehiculoId = veh.id;
 
     // Separar datos coltrack de datos ralentis
     const coltrackRest: Record<string, unknown> = {};
@@ -839,26 +950,28 @@ async function insertOperacionVehiculo(datos: Record<string, unknown>[], tipo: '
       else coltrackRest[k] = v;
     }
 
-    // Insertar coltrack
+    // Insertar daily coltrack si fecha está definida
     const fecha = String(coltrackRest.fecha ?? '');
-    const { error: eC } = await supabase
-      .from('coltrack_datos_vehiculo')
-      .upsert(
-        { vehiculo_id: vehiculoId, ...coltrackRest },
-        { onConflict: 'vehiculo_id,fecha', ignoreDuplicates: false }
-      );
-    if (eC) throw new Error(`coltrack vehículo ${_placa}: ${eC.message}`);
-
-    // Insertar ralentis solo si hay algún valor > 0
-    const tieneRalentis = Object.values(ralentisRest).some(v => Number(v) > 0);
-    if (tieneRalentis) {
-      const { error: eR } = await supabase
-        .from('ralentis')
+    if (fecha) {
+      const { error: eC } = await supabase
+        .from('coltrack_datos_vehiculo')
         .upsert(
-          { vehiculo_id: vehiculoId, fecha, ...ralentisRest },
+          { vehiculo_id: vehiculoId, ...coltrackRest },
           { onConflict: 'vehiculo_id,fecha', ignoreDuplicates: false }
         );
-      if (eR) throw new Error(`ralentis ${_placa}: ${eR.message}`);
+      if (eC) throw new Error(`coltrack vehículo ${_placa}: ${eC.message}`);
+
+      // Insertar ralentis diario solo si hay algún valor > 0
+      const tieneRalentis = Object.values(ralentisRest).some(v => Number(v) > 0);
+      if (tieneRalentis) {
+        const { error: eR } = await supabase
+          .from('ralentis')
+          .upsert(
+            { vehiculo_id: vehiculoId, fecha, ...ralentisRest },
+            { onConflict: 'vehiculo_id,fecha', ignoreDuplicates: false }
+          );
+        if (eR) throw new Error(`ralentis ${_placa}: ${eR.message}`);
+      }
     }
 
     await upsertReporteVehiculo(
@@ -867,6 +980,28 @@ async function insertOperacionVehiculo(datos: Record<string, unknown>[], tipo: '
       ralentisRest,
       tipo,
     );
+
+    // Si es importación mensual, también registrar ralentis en ralentis_periodos
+    if (tipo === 'monthly') {
+      const periodo = periodoFromRow(coltrackRest, tipo);
+      const ralentiPeriodoPayload = {
+        vehiculo_id: vehiculoId,
+        periodo_inicio: periodo.inicio,
+        periodo_fin: periodo.fin,
+        ralentis_excesivos: num(ralentisRest.ralentis_excesivos),
+        horas_motor_encendido: num(ralentisRest.horas_motor_encendido),
+        horas_motor_ralenti: num(ralentisRest.horas_motor_ralenti),
+        kms_recorridos: num(ralentisRest.kms_recorridos || coltrackRest.kms),
+        consumo_combustible: num(ralentisRest.consumo_combustible),
+        encendidos_apagados: num(ralentisRest.encendidos_apagados),
+      };
+
+      const { error: eRP } = await supabase
+        .from('ralentis_periodos')
+        .upsert(ralentiPeriodoPayload, { onConflict: 'vehiculo_id,periodo_inicio,periodo_fin' });
+      if (eRP) console.error(`Error guardando en ralentis_periodos para ${_placa}:`, eRP.message);
+    }
+
     insertados++;
   }
 
@@ -878,12 +1013,14 @@ async function insertAlertasDiarias(datos: Record<string, unknown>[], _tipo: 'da
   let insertados = 0;
   let pendientes = 0;
 
-  const { data: conductoresRaw } = await supabase
-    .from('conductores')
-    .select('id, nombres, estado');
+  const conductoresRaw = await fetchAllRows(
+    supabase
+      .from('conductores')
+      .select('id, nombres, estado')
+      .eq('estado', 'ACTIVO')
+  );
   const conductores = new Map(
     (conductoresRaw ?? [])
-      .filter((c: Record<string, unknown>) => normalizeText(c.estado) === 'ACTIVO')
       .map((c: Record<string, unknown>) => [normalizeText(c.nombres), String(c.id)])
   );
 
@@ -1570,76 +1707,71 @@ async function asegurarVehiculoEnMaestro(
 }
 
 
+// ── Ralentís por período ────────────────────────────────────────────────────
+// Tabla dedicada con clave única vehiculo_id+periodo_inicio+periodo_fin.
+// Garantiza idempotencia: reimportar siempre REEMPLAZA el registro, sin acumular.
+async function upsertRalentisPeriodos(
+  records: any[],
+  periodoInicio: string,
+  periodoFin: string
+): Promise<void> {
+  const ralentisData = records
+    .filter(r =>
+      r.vehiculo_id &&
+      (Number(r.horas_motor_ralenti) > 0 ||
+       Number(r.ralentis_excesivos) > 0 ||
+       Number(r.horas_motor_encendido) > 0)
+    )
+    .map(r => ({
+      vehiculo_id:           r.vehiculo_id,
+      periodo_inicio:        periodoInicio,
+      periodo_fin:           periodoFin,
+      ralentis_excesivos:    Number(r.ralentis_excesivos ?? 0),
+      horas_motor_encendido: Number(r.horas_motor_encendido ?? 0),
+      horas_motor_ralenti:   Number(r.horas_motor_ralenti ?? 0),
+      kms_recorridos:        Number(r.km_recorridos_ralenti ?? r.kms_recorridos ?? 0),
+      consumo_combustible:   Number(r.consumo_combustible ?? 0),
+      encendidos_apagados:   Number(r.encendidos_apagados ?? 0),
+    }));
+
+  if (ralentisData.length === 0) return;
+
+  const { error } = await supabase
+    .from('ralentis_periodos')
+    .upsert(ralentisData, { onConflict: 'vehiculo_id,periodo_inicio,periodo_fin' });
+
+  if (error) throw new Error(`Error en ralentis_periodos: ${error.message}`);
+}
+
 async function consolidarConBaseDeDatosVehiculos(
   nuevosRecords: any[],
   periodoInicio: string,
   periodoFin: string
 ): Promise<any[]> {
+  // Solo obtenemos los IDs existentes para reutilizarlos en el upsert (UPDATE en lugar de INSERT).
+  // NO acumulamos sobre los valores de la BD — los datos del nuevo import REEMPLAZAN los anteriores.
+  // La acumulación previa causaba doble conteo al reimportar los mismos archivos.
   const { data: dbRecords, error } = await supabase
     .from('reportes_vehiculos')
-    .select('*')
+    .select('id, vehiculo_id')
     .eq('periodo_inicio', periodoInicio)
     .eq('periodo_fin', periodoFin);
 
   if (error) {
-    console.error('Error cargando vehículos de la BD para consolidar:', error);
-    return nuevosRecords.map(n => { corregirMetricasVehiculo(n); return n; });
+    console.error('Error cargando IDs de vehículos de la BD:', error);
   }
 
-  const dbMap = new Map<string, any>();
+  const dbIdMap = new Map<string, string>();
   for (const r of (dbRecords ?? [])) {
-    dbMap.set(r.vehiculo_id, r);
+    dbIdMap.set(r.vehiculo_id, r.id);
   }
 
-  const result: any[] = [];
-
-  for (const nuevo of nuevosRecords) {
-    const existing = dbMap.get(nuevo.vehiculo_id);
-    if (existing) {
-      const prevKms = existing.kms;
-      existing.kms += nuevo.kms;
-      existing.horas_conduccion += nuevo.horas_conduccion;
-      existing.excesos_10_kph += nuevo.excesos_10_kph;
-      existing.excesos_20_kph += nuevo.excesos_20_kph;
-      existing.excesos_30_kph += nuevo.excesos_30_kph;
-      existing.excesos_40_kph += nuevo.excesos_40_kph;
-      existing.excesos_50_kph += nuevo.excesos_50_kph;
-      existing.excesos_60_kph += nuevo.excesos_60_kph;
-      existing.excesos_80_kph += nuevo.excesos_80_kph;
-      existing.aceleraciones_bruscas += nuevo.aceleraciones_bruscas;
-      existing.frenadas_bruscas += nuevo.frenadas_bruscas;
-
-      existing.km_recorridos_ralenti += nuevo.km_recorridos_ralenti;
-      existing.horas_motor_encendido += nuevo.horas_motor_encendido;
-      existing.horas_motor_ralenti += nuevo.horas_motor_ralenti;
-      existing.consumo_combustible += nuevo.consumo_combustible;
-      existing.ralentis_excesivos += nuevo.ralentis_excesivos;
-
-      const totalKms = prevKms + nuevo.kms;
-      if (totalKms > 0) {
-        existing.calificacion = Math.round(
-          ((existing.calificacion * prevKms) + (nuevo.calificacion * nuevo.kms)) / totalKms
-        );
-      } else {
-        existing.calificacion = Math.round((existing.calificacion + nuevo.calificacion) / 2);
-      }
-      
-      corregirMetricasVehiculo(existing);
-      result.push(existing);
-    } else {
-      corregirMetricasVehiculo(nuevo);
-      result.push(nuevo);
-    }
-  }
-
-  // Si id es nulo, indefinido o vacío, generar un UUID en el cliente
-  for (const r of result) {
-    if (!r.id) {
-      r.id = generarUUID();
-    }
-  }
-
-  return result;
+  return nuevosRecords.map(nuevo => {
+    corregirMetricasVehiculo(nuevo);
+    // Preservar el ID existente para que el upsert haga UPDATE, no INSERT duplicado
+    const existingId = dbIdMap.get(nuevo.vehiculo_id);
+    return { ...nuevo, id: existingId ?? nuevo.id ?? generarUUID() };
+  });
 }
 
 async function consolidarConBaseDeDatosConductores(
@@ -1647,65 +1779,28 @@ async function consolidarConBaseDeDatosConductores(
   periodoInicio: string,
   periodoFin: string
 ): Promise<any[]> {
+  // Solo obtenemos los IDs existentes para reutilizarlos en el upsert (UPDATE en lugar de INSERT).
+  // NO acumulamos sobre los valores de la BD — los datos del nuevo import REEMPLAZAN los anteriores.
   const { data: dbRecords, error } = await supabase
     .from('reportes_conductores')
-    .select('*')
+    .select('id, conductor_id')
     .eq('periodo_inicio', periodoInicio)
     .eq('periodo_fin', periodoFin);
 
   if (error) {
-    console.error('Error cargando conductores de la BD para consolidar:', error);
-    return nuevosRecords.map(n => { corregirMetricasConductor(n); return n; });
+    console.error('Error cargando IDs de conductores de la BD:', error);
   }
 
-  const dbMap = new Map<string, any>();
+  const dbIdMap = new Map<string, string>();
   for (const r of (dbRecords ?? [])) {
-    dbMap.set(r.conductor_id, r);
+    dbIdMap.set(r.conductor_id, r.id);
   }
 
-  const result: any[] = [];
-
-  for (const nuevo of nuevosRecords) {
-    const existing = dbMap.get(nuevo.conductor_id);
-    if (existing) {
-      const prevKms = existing.kms;
-      existing.kms += nuevo.kms;
-      existing.horas_conduccion += nuevo.horas_conduccion;
-      existing.excesos_10_kph += nuevo.excesos_10_kph;
-      existing.excesos_20_kph += nuevo.excesos_20_kph;
-      existing.excesos_30_kph += nuevo.excesos_30_kph;
-      existing.excesos_40_kph += nuevo.excesos_40_kph;
-      existing.excesos_50_kph += nuevo.excesos_50_kph;
-      existing.excesos_60_kph += nuevo.excesos_60_kph;
-      existing.excesos_80_kph += nuevo.excesos_80_kph;
-      existing.aceleraciones_bruscas += nuevo.aceleraciones_bruscas;
-      existing.frenadas_bruscas += nuevo.frenadas_bruscas;
-
-      const totalKms = prevKms + nuevo.kms;
-      if (totalKms > 0) {
-        existing.calificacion = Math.round(
-          ((existing.calificacion * prevKms) + (nuevo.calificacion * nuevo.kms)) / totalKms
-        );
-      } else {
-        existing.calificacion = Math.round((existing.calificacion + nuevo.calificacion) / 2);
-      }
-
-      corregirMetricasConductor(existing);
-      result.push(existing);
-    } else {
-      corregirMetricasConductor(nuevo);
-      result.push(nuevo);
-    }
-  }
-
-  // Si id es nulo, indefinido o vacío, generar un UUID en el cliente
-  for (const r of result) {
-    if (!r.id) {
-      r.id = generarUUID();
-    }
-  }
-
-  return result;
+  return nuevosRecords.map(nuevo => {
+    corregirMetricasConductor(nuevo);
+    const existingId = dbIdMap.get(nuevo.conductor_id);
+    return { ...nuevo, id: existingId ?? nuevo.id ?? generarUUID() };
+  });
 }
 
 export async function importarDatosPlanosColtrack(
@@ -1728,6 +1823,20 @@ export async function importarDatosPlanosColtrack(
     normalizeText(plate)
       .replace(/[^A-Z0-9]/g, '')
       .trim();
+
+  const detectSeparator = (headerLine: string): string => {
+    const separators = ['|', ';', ','];
+    let bestSep = '|';
+    let maxCount = -1;
+    for (const sep of separators) {
+      const count = headerLine.split(sep).length - 1;
+      if (count > maxCount) {
+        maxCount = count;
+        bestSep = sep;
+      }
+    }
+    return bestSep;
+  };
 
   // 1. Identificar archivos
   let fileConductores: File | null = null;
@@ -1772,13 +1881,16 @@ export async function importarDatosPlanosColtrack(
 
   try {
     // Cargar maestros
-    const { data: dbConductores } = await supabase
-      .from('conductores')
-      .select('id, nombres, cedula, ibutton, proyecto, estado');
-    const { data: dbVehiculos } = await supabase
-      .from('vehiculos')
-      .select('id, placa, cliente, contrato_id, tipo_activo')
-      .returns<{ id: string; placa: string; cliente: string | null; contrato_id: string | null; tipo_activo: string | null }[]>();
+    const dbConductores = await fetchAllRows(
+      supabase
+        .from('conductores')
+        .select('id, nombres, cedula, ibutton, proyecto, estado')
+    );
+    const dbVehiculos = await fetchAllRows(
+      supabase
+        .from('vehiculos')
+        .select('id, placa, cliente, contrato_id, tipo_activo')
+    );
 
     // Indexar maestros
     const conductPorCedula = new Map();
@@ -1799,8 +1911,9 @@ export async function importarDatosPlanosColtrack(
       if (fileConductores) {
         const driversContent = await fileConductores.text();
         const dLines = driversContent.split('\n').filter(l => l.trim().length > 0);
+        const dSep = detectSeparator(dLines[0] ?? '');
         for (let i = 1; i < dLines.length; i++) {
-          const cols = dLines[i].split('|');
+          const cols = dLines[i].split(dSep);
           if (cols.length >= 5) {
             const nombre = cols[0] ?? '';
             const apellido = cols[1] ?? '';
@@ -1814,11 +1927,12 @@ export async function importarDatosPlanosColtrack(
 
       const condContent = await fileFaltasCond.text();
       const cLines = condContent.split('\n').filter(l => l.trim().length > 0);
-      const cHeaders = cLines[0].split('|').map(h => h.trim());
+      const cSep = detectSeparator(cLines[0] ?? '');
+      const cHeaders = cLines[0].split(cSep).map(h => h.trim());
       const reportesConductores = [];
 
       for (let i = 1; i < cLines.length; i++) {
-        const cols = cLines[i].split('|');
+        const cols = cLines[i].split(cSep);
         if (cols.length >= 5) {
           const row: any = {};
           cHeaders.forEach((h, idx) => {
@@ -1885,9 +1999,10 @@ export async function importarDatosPlanosColtrack(
       if (fileRalenti) {
         const ralContent = await fileRalenti.text();
         const rLines = ralContent.split('\n').filter(l => l.trim().length > 0);
-        const rHeaders = rLines[0].split('|').map(h => h.trim());
+        const rSep = detectSeparator(rLines[0] ?? '');
+        const rHeaders = rLines[0].split(rSep).map(h => h.trim());
         for (let i = 1; i < rLines.length; i++) {
-          const cols = rLines[i].split('|');
+          const cols = rLines[i].split(rSep);
           if (cols.length >= 5) {
             const row: any = {};
             
@@ -1921,11 +2036,12 @@ export async function importarDatosPlanosColtrack(
 
       const vehContent = await fileFaltasVeh.text();
       const vLines = vehContent.split('\n').filter(l => l.trim().length > 0);
-      const vHeaders = vLines[0].split('|').map(h => h.trim());
+      const vSep = detectSeparator(vLines[0] ?? '');
+      const vHeaders = vLines[0].split(vSep).map(h => h.trim());
       const reportesVehiculos = [];
 
       for (let i = 1; i < vLines.length; i++) {
-        const cols = vLines[i].split('|');
+        const cols = vLines[i].split(vSep);
         if (cols.length >= 5) {
           const row: any = {};
           vHeaders.forEach((h, idx) => {
@@ -1986,6 +2102,8 @@ export async function importarDatosPlanosColtrack(
           .from('reportes_vehiculos')
           .upsert(consolizadosFinal, { onConflict: 'vehiculo_id,periodo_inicio,periodo_fin' });
         if (error) throw new Error(`Error insertando vehículos Coltrack: ${error.message}`);
+        // Guardar ralentís en tabla dedicada (idempotente por periodo)
+        await upsertRalentisPeriodos(consolizadosFinal, periodoInicio, periodoFin);
         registrosInsertados += consolizados.length;
       }
     }
@@ -2135,8 +2253,8 @@ export async function importarDatosPlanosFagor(
   }
 
 
-  if (!fileKmCond && !fileKmVeh) {
-    throw new Error('Faltan los archivos de consolidado de trayectos de Fagor (Km_Conductor o Km_Vehículos).');
+  if (!fileKmCond && !fileKmVeh && filesRalenti.length === 0 && filesExcesos.length === 0 && filesFrenadas.length === 0 && filesAceleraciones.length === 0) {
+    throw new Error('No se detectó ningún archivo válido para procesar en Fagor (Km consolidado, Ralentí o archivos de Alertas).');
   }
 
   const nombreCarga = `Fagor planos: ${files.map(f => f.name).join(', ')}`;
@@ -2158,13 +2276,16 @@ export async function importarDatosPlanosFagor(
 
   try {
     // Cargar maestros
-    const { data: dbConductores } = await supabase
-      .from('conductores')
-      .select('id, nombres, cedula, ibutton, proyecto, estado');
-    const { data: dbVehiculos } = await supabase
-      .from('vehiculos')
-      .select('id, placa, cliente, contrato_id, tipo_activo')
-      .returns<{ id: string; placa: string; cliente: string | null; contrato_id: string | null; tipo_activo: string | null }[]>();
+    const dbConductores = await fetchAllRows(
+      supabase
+        .from('conductores')
+        .select('id, nombres, cedula, ibutton, proyecto, estado')
+    );
+    const dbVehiculos = await fetchAllRows(
+      supabase
+        .from('vehiculos')
+        .select('id, placa, cliente, contrato_id, tipo_activo')
+    );
 
     // Indexar maestros
     const conductPorCedula = new Map();
@@ -2282,6 +2403,9 @@ export async function importarDatosPlanosFagor(
     }
 
     // 2. Procesar Conductores Fagor
+    const reportesConductores = [];
+    const driverAlarmsAsignadas = new Set<string>();
+
     if (fileKmCond) {
       const driverMap = new Map();
       if (fileConductores) {
@@ -2317,7 +2441,6 @@ export async function importarDatosPlanosFagor(
       }
 
       const headersKmCond = (rawRowsKmCond[headerRowIdx] || []).map(h => String(h ?? '').trim());
-      const reportesConductores = [];
 
       for (let i = headerRowIdx + 1; i < rawRowsKmCond.length; i++) {
         const rowData = rawRowsKmCond[i];
@@ -2342,6 +2465,8 @@ export async function importarDatosPlanosFagor(
 
             if (foundCond) {
               const alarms = driverAlarms.get(foundCond.id);
+              const yaAsignadas = driverAlarmsAsignadas.has(foundCond.id);
+              
               reportesConductores.push({
                 conductor_id: foundCond.id,
                 periodo_inicio: periodoInicio,
@@ -2349,57 +2474,102 @@ export async function importarDatosPlanosFagor(
                 calificacion: 100, // Defecto Fagor
                 kms: num(row['Km. Recorridos']),
                 horas_conduccion: num(parseTimeStringToHours(row['Horas Conducción'])),
-                excesos_10_kph: alarms?.excesos_10_kph ?? 0,
-                excesos_20_kph: alarms?.excesos_20_kph ?? 0,
-                excesos_30_kph: alarms?.excesos_30_kph ?? 0,
-                excesos_40_kph: alarms?.excesos_40_kph ?? 0,
-                excesos_50_kph: alarms?.excesos_50_kph ?? 0,
-                excesos_60_kph: alarms?.excesos_60_kph ?? 0,
-                excesos_80_kph: alarms?.excesos_80_kph ?? 0,
-                aceleraciones_bruscas: alarms?.aceleraciones_bruscas ?? 0,
-                frenadas_bruscas: alarms?.frenadas_bruscas ?? num(row['Uso de Freno nº veces']),
+                excesos_10_kph: !yaAsignadas && alarms ? alarms.excesos_10_kph : 0,
+                excesos_20_kph: !yaAsignadas && alarms ? alarms.excesos_20_kph : 0,
+                excesos_30_kph: !yaAsignadas && alarms ? alarms.excesos_30_kph : 0,
+                excesos_40_kph: !yaAsignadas && alarms ? alarms.excesos_40_kph : 0,
+                excesos_50_kph: !yaAsignadas && alarms ? alarms.excesos_50_kph : 0,
+                excesos_60_kph: !yaAsignadas && alarms ? alarms.excesos_60_kph : 0,
+                excesos_80_kph: !yaAsignadas && alarms ? alarms.excesos_80_kph : 0,
+                aceleraciones_bruscas: !yaAsignadas && alarms ? alarms.aceleraciones_bruscas : 0,
+                frenadas_bruscas: !yaAsignadas && alarms ? alarms.frenadas_bruscas : 0,
                 ibutton: String(mapped?.ibutton ?? foundCond.ibutton ?? ''),
                 estado_conductor: String(foundCond.estado ?? 'ACTIVO'),
                 proyecto: String(foundCond.proyecto ?? ''),
                 mes,
                 fecha_reporte: new Date().toISOString().slice(0, 10),
               });
+              
+              if (alarms) {
+                driverAlarmsAsignadas.add(foundCond.id);
+              }
             }
           }
         }
       }
-
-      if (reportesConductores.length > 0) {
-        const consolizados = consolidarReportesConductores(reportesConductores);
-        const consolidadosFinal = await consolidarConBaseDeDatosConductores(
-          consolizados,
-          periodoInicio,
-          periodoFin
-        );
-        const { error } = await supabase
-          .from('reportes_conductores')
-          .upsert(consolidadosFinal, { onConflict: 'conductor_id,periodo_inicio,periodo_fin' });
-        if (error) throw new Error(`Error insertando conductores Fagor: ${error.message}`);
-        registrosInsertados += consolizados.length;
+    } else if (driverAlarms.size > 0) {
+      // Si no hay archivo Km_Conductor, creamos los reportes a partir de las alarmas
+      for (const [conductorId, alarms] of driverAlarms.entries()) {
+        const foundCond = (dbConductores ?? []).find(c => c.id === conductorId);
+        if (foundCond) {
+          reportesConductores.push({
+            conductor_id: foundCond.id,
+            periodo_inicio: periodoInicio,
+            periodo_fin: periodoFin,
+            calificacion: 100,
+            kms: 0,
+            horas_conduccion: 0,
+            excesos_10_kph: alarms.excesos_10_kph,
+            excesos_20_kph: alarms.excesos_20_kph,
+            excesos_30_kph: alarms.excesos_30_kph,
+            excesos_40_kph: alarms.excesos_40_kph,
+            excesos_50_kph: alarms.excesos_50_kph,
+            excesos_60_kph: alarms.excesos_60_kph,
+            excesos_80_kph: alarms.excesos_80_kph,
+            aceleraciones_bruscas: alarms.aceleraciones_bruscas,
+            frenadas_bruscas: alarms.frenadas_bruscas,
+            ibutton: String(foundCond.ibutton ?? ''),
+            estado_conductor: String(foundCond.estado ?? 'ACTIVO'),
+            proyecto: String(foundCond.proyecto ?? ''),
+            mes,
+            fecha_reporte: new Date().toISOString().slice(0, 10),
+          });
+        }
       }
     }
 
+    if (reportesConductores.length > 0) {
+      const consolizados = consolidarReportesConductores(reportesConductores);
+      const consolidadosFinal = await consolidarConBaseDeDatosConductores(
+        consolizados,
+        periodoInicio,
+        periodoFin
+      );
+      const { error } = await supabase
+        .from('reportes_conductores')
+        .upsert(consolidadosFinal, { onConflict: 'conductor_id,periodo_inicio,periodo_fin' });
+      if (error) throw new Error(`Error insertando conductores Fagor: ${error.message}`);
+      registrosInsertados += consolizados.length;
+    }
+
     // 3. Procesar Vehículos Fagor
+
+    // Pre-procesar Ralentí fuera del bloque KmVeh para soportar uploads de solo-Ralentí
+    interface RalentiStats { count: number; horas: number; combustible: number; placaOriginal: string; }
+    const ralentiStatsMap = new Map<string, RalentiStats>();
+    for (const file of filesRalenti) {
+      const arrayBuffer = await file.arrayBuffer();
+      const wbRal = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
+      const sheetRal = wbRal.Sheets[wbRal.SheetNames[0]];
+      const rowsRal = XLSX.utils.sheet_to_json(sheetRal) as any[];
+      rowsRal.forEach(row => {
+        const placaOrig = String(row['Matrícula'] ?? '').trim();
+        const placa = normPlate(placaOrig);
+        if (placa) {
+          const current = ralentiStatsMap.get(placa) ?? { count: 0, horas: 0, combustible: 0, placaOriginal: placaOrig };
+          current.count++;
+          current.horas += parseTimeStringToHours(row['T. Ralentí']);
+          current.combustible += num(row['Gal. Consumidos']);
+          ralentiStatsMap.set(placa, current);
+        }
+      });
+    }
+
+    const reportesVehiculos = [];
+    const vehicAlarmsAsignadas = new Set<string>();
+    const ralentiStatsAsignadas = new Set<string>();
+
     if (fileKmVeh) {
-      const ralentiAlarmsMap = new Map();
-      for (const file of filesRalenti) {
-        const arrayBuffer = await file.arrayBuffer();
-        const wbRal = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
-        const sheetRal = wbRal.Sheets[wbRal.SheetNames[0]];
-        const rowsRal = XLSX.utils.sheet_to_json(sheetRal) as any[];
-        rowsRal.forEach(row => {
-          const placa = normPlate(row['Matrícula'] ?? '');
-          if (placa) {
-            const currentCount = ralentiAlarmsMap.get(placa) ?? 0;
-            ralentiAlarmsMap.set(placa, currentCount + 1);
-          }
-        });
-      }
 
       const arrayBuffer = await fileKmVeh.arrayBuffer();
       const wb = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
@@ -2418,7 +2588,6 @@ export async function importarDatosPlanosFagor(
       }
 
       const headersKmVeh = (rawRowsKmVeh[headerRowIdx] || []).map(h => String(h ?? '').trim());
-      const reportesVehiculos = [];
 
       for (let i = headerRowIdx + 1; i < rawRowsKmVeh.length; i++) {
         const rowData = rawRowsKmVeh[i];
@@ -2437,8 +2606,11 @@ export async function importarDatosPlanosFagor(
           );
 
           if (foundVeh) {
-            const alarmCount = ralentiAlarmsMap.get(placaNorm) ?? 0;
+            const ralentiStats = ralentiStatsMap.get(placaNorm);
+            const yaRalentiAsignado = ralentiStatsAsignadas.has(placaNorm);
             const alarms = vehicAlarms.get(foundVeh.id);
+            const yaAlarmsAsignadas = vehicAlarmsAsignadas.has(foundVeh.id);
+
             reportesVehiculos.push({
               _placaOriginal: placaNorm, // campo interno para tracking (se elimina antes del upsert)
               vehiculo_id: foundVeh.id,
@@ -2448,27 +2620,40 @@ export async function importarDatosPlanosFagor(
               calificacion: 100, // Defecto Fagor
               kms: num(row['Km. Recorridos']),
               horas_conduccion: num(parseTimeStringToHours(row['Horas Conducción'])),
-              excesos_10_kph: alarms?.excesos_10_kph ?? 0,
-              excesos_20_kph: alarms?.excesos_20_kph ?? 0,
-              excesos_30_kph: alarms?.excesos_30_kph ?? 0,
-              excesos_40_kph: alarms?.excesos_40_kph ?? 0,
-              excesos_50_kph: alarms?.excesos_50_kph ?? 0,
-              excesos_60_kph: alarms?.excesos_60_kph ?? 0,
-              excesos_80_kph: alarms?.excesos_80_kph ?? 0,
-              aceleraciones_bruscas: alarms?.aceleraciones_bruscas ?? 0,
-              frenadas_bruscas: alarms?.frenadas_bruscas ?? num(row['Uso de Freno nº veces']),
+              excesos_10_kph: !yaAlarmsAsignadas && alarms ? alarms.excesos_10_kph : 0,
+              excesos_20_kph: !yaAlarmsAsignadas && alarms ? alarms.excesos_20_kph : 0,
+              excesos_30_kph: !yaAlarmsAsignadas && alarms ? alarms.excesos_30_kph : 0,
+              excesos_40_kph: !yaAlarmsAsignadas && alarms ? alarms.excesos_40_kph : 0,
+              excesos_50_kph: !yaAlarmsAsignadas && alarms ? alarms.excesos_50_kph : 0,
+              excesos_60_kph: !yaAlarmsAsignadas && alarms ? alarms.excesos_60_kph : 0,
+              excesos_80_kph: !yaAlarmsAsignadas && alarms ? alarms.excesos_80_kph : 0,
+              aceleraciones_bruscas: !yaAlarmsAsignadas && alarms ? alarms.aceleraciones_bruscas : 0,
+              frenadas_bruscas: !yaAlarmsAsignadas && alarms ? alarms.frenadas_bruscas : 0,
               dispositivo_gps: String('FAGOR'),
               base: '',
               estado_gps: 'ACTIVO',
               km_recorridos_ralenti: num(row['Km. Recorridos']),
               horas_motor_encendido: num(parseTimeStringToHours(row['Horas Motor'])),
-              horas_motor_ralenti: num(parseTimeStringToHours(row['Ralentí Tiempo Total'])),
-              consumo_combustible: num(row['Galones consumidos']),
-              ralentis_excesivos: alarmCount,
+              horas_motor_ralenti: ralentiStats && ralentiStatsMap.size > 0
+                ? (!yaRalentiAsignado ? ralentiStats.horas : 0)
+                : num(parseTimeStringToHours(row['Ralentí Tiempo Total'])),
+              consumo_combustible: ralentiStats && ralentiStatsMap.size > 0
+                ? (!yaRalentiAsignado ? ralentiStats.combustible : 0)
+                : num(row['Galones consumidos']),
+              ralentis_excesivos: ralentiStats && ralentiStatsMap.size > 0
+                ? (!yaRalentiAsignado ? ralentiStats.count : 0)
+                : 0,
               proyecto: String(foundVeh.cliente ?? ''),
               mes,
               fecha_reporte: new Date().toISOString().slice(0, 10),
             });
+
+            if (alarms) {
+              vehicAlarmsAsignadas.add(foundVeh.id);
+            }
+            if (ralentiStats) {
+              ralentiStatsAsignadas.add(placaNorm);
+            }
           }
         }
       }
@@ -2517,7 +2702,7 @@ export async function importarDatosPlanosFagor(
             );
 
             if (foundVeh) {
-              const alarmCount = ralentiAlarmsMap.get(placaNorm) ?? 0;
+              const ralentiStats = ralentiStatsMap.get(placaNorm) ?? { count: 0, horas: 0, combustible: 0 };
               reportesVehiculos.push({
                 vehiculo_id: foundVeh.id,
                 contrato_id: foundVeh.contrato_id ?? null,
@@ -2536,9 +2721,9 @@ export async function importarDatosPlanosFagor(
                 estado_gps: 'ACTIVO',
                 km_recorridos_ralenti: 0,
                 horas_motor_encendido: 0,
-                horas_motor_ralenti: 0,
-                consumo_combustible: 0,
-                ralentis_excesivos: alarmCount,
+                horas_motor_ralenti: ralentiStats.horas,
+                consumo_combustible: ralentiStats.combustible,
+                ralentis_excesivos: ralentiStats.count,
                 proyecto: String(foundVeh.cliente ?? ''),
                 mes,
                 fecha_reporte: new Date().toISOString().slice(0, 10),
@@ -2548,23 +2733,89 @@ export async function importarDatosPlanosFagor(
           }
         }
       }
-
-      if (reportesVehiculos.length > 0) {
-        // Limpiar campo interno antes de upsert
-        const consolizados = consolidarReportesVehiculos(
-          reportesVehiculos.map(r => { const { _placaOriginal, ...rest } = r; return rest; })
-        );
-        const consolizadosFinal = await consolidarConBaseDeDatosVehiculos(
-          consolizados,
-          periodoInicio,
-          periodoFin
-        );
-        const { error } = await supabase
-          .from('reportes_vehiculos')
-          .upsert(consolizadosFinal, { onConflict: 'vehiculo_id,periodo_inicio,periodo_fin' });
-        if (error) throw new Error(`Error insertando vehículos Fagor: ${error.message}`);
-        registrosInsertados += consolizados.length;
+    } else if (vehicAlarms.size > 0) {
+      // Si no hay archivo Km_Vehículos, creamos los reportes a partir de las alarmas
+      for (const [vehiculoId, alarms] of vehicAlarms.entries()) {
+        const foundVeh = (dbVehiculos ?? []).find(v => v.id === vehiculoId);
+        if (foundVeh) {
+          reportesVehiculos.push({
+            vehiculo_id: foundVeh.id,
+            contrato_id: foundVeh.contrato_id ?? null,
+            periodo_inicio: periodoInicio,
+            periodo_fin: periodoFin,
+            calificacion: 100,
+            kms: 0,
+            horas_conduccion: 0,
+            excesos_10_kph: alarms.excesos_10_kph,
+            excesos_20_kph: alarms.excesos_20_kph,
+            excesos_30_kph: alarms.excesos_30_kph,
+            excesos_40_kph: alarms.excesos_40_kph,
+            excesos_50_kph: alarms.excesos_50_kph,
+            excesos_60_kph: alarms.excesos_60_kph,
+            excesos_80_kph: alarms.excesos_80_kph,
+            aceleraciones_bruscas: alarms.aceleraciones_bruscas,
+            frenadas_bruscas: alarms.frenadas_bruscas,
+            dispositivo_gps: String('FAGOR'),
+            base: '',
+            estado_gps: 'ACTIVO',
+            km_recorridos_ralenti: 0,
+            horas_motor_encendido: 0,
+            horas_motor_ralenti: 0,
+            consumo_combustible: 0,
+            ralentis_excesivos: 0,
+            proyecto: String(foundVeh.cliente ?? ''),
+            mes,
+            fecha_reporte: new Date().toISOString().slice(0, 10),
+          });
+        }
       }
+    } else if (ralentiStatsMap.size > 0) {
+      // Solo archivos de Ralentí: escribir ÚNICAMENTE en ralentis_periodos.
+      // No crear filas en reportes_vehiculos con kms=0 porque taparían registros
+      // de Km existentes y bloquearían el fallback a Coltrack en los informes.
+      const ralentisDirectos: any[] = [];
+      for (const [, stats] of ralentiStatsMap.entries()) {
+        const foundVeh = await asegurarVehiculoEnMaestro(stats.placaOriginal, vehicPorPlaca, normPlate);
+        if (foundVeh) {
+          ralentisDirectos.push({
+            vehiculo_id:           foundVeh.id,
+            periodo_inicio:        periodoInicio,
+            periodo_fin:           periodoFin,
+            ralentis_excesivos:    stats.count,
+            horas_motor_encendido: 0,
+            horas_motor_ralenti:   stats.horas,
+            kms_recorridos:        0,
+            consumo_combustible:   stats.combustible,
+            encendidos_apagados:   0,
+          });
+        }
+      }
+      if (ralentisDirectos.length > 0) {
+        const { error } = await supabase
+          .from('ralentis_periodos')
+          .upsert(ralentisDirectos, { onConflict: 'vehiculo_id,periodo_inicio,periodo_fin' });
+        if (error) throw new Error(`Error en ralentis_periodos: ${error.message}`);
+        registrosInsertados += ralentisDirectos.length;
+      }
+    }
+
+    if (reportesVehiculos.length > 0) {
+      // Limpiar campo interno antes de upsert si existiera
+      const consolizados = consolidarReportesVehiculos(
+        reportesVehiculos.map(r => { const { _placaOriginal, ...rest } = r as any; return rest; })
+      );
+      const consolizadosFinal = await consolidarConBaseDeDatosVehiculos(
+        consolizados,
+        periodoInicio,
+        periodoFin
+      );
+      const { error } = await supabase
+        .from('reportes_vehiculos')
+        .upsert(consolizadosFinal, { onConflict: 'vehiculo_id,periodo_inicio,periodo_fin' });
+      if (error) throw new Error(`Error insertando vehículos Fagor: ${error.message}`);
+      // Guardar ralentís en tabla dedicada (idempotente por periodo)
+      await upsertRalentisPeriodos(consolizadosFinal, periodoInicio, periodoFin);
+      registrosInsertados += consolizados.length;
     }
 
     return { cargaId, exito: true, registrosInsertados, errores: erroresGlobales };
@@ -2574,3 +2825,251 @@ export async function importarDatosPlanosFagor(
     throw err;
   }
 }
+
+// ── Ingestor de Plantilla Consolidada con Cruce de Referencias Multi-Plataforma ─
+// Procesa un archivo Excel consolidado y usa archivos adicionales como fuentes de
+// referencia (Coltrack drivers, Fagor drivers, Roster de Colaboradores) para resolver
+// de forma transparente las identificaciones y iButtons de los conductores.
+
+export async function importarExcelConsolidado(
+  files: File[],
+  periodoInicio: string,
+  periodoFin: string,
+  usuarioId?: string
+): Promise<ImportResult> {
+  const erroresGlobales: ValidationError[] = [];
+  const warnings: ValidationError[] = [];
+  let registrosInsertados = 0;
+
+  const normName = (name: string) =>
+    normalizeText(name)
+      .replace(/[^A-Z0-9\s]/g, '')
+      .trim()
+      .replace(/\s+/g, ' ');
+
+  // 1. Clasificar archivos
+  let fileConsolidado: File | null = null;
+  let fileRefFagor: File | null = null;
+  let fileRefColtrack: File | null = null;
+  let fileRefColaboradores: File | null = null;
+
+  for (const file of files) {
+    const isXlsx = file.name.match(/\.(xlsx|xls)$/i);
+    if (isXlsx) {
+      const arrayBuffer = await file.arrayBuffer();
+      const wb = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
+      
+      // A. ¿Es el consolidado? (Tiene hojas operacionales de conductores/vehículos)
+      const tieneConductor = wb.SheetNames.some(n => /operaci[oó]n?[\s_]*conductor|^conductor/i.test(n));
+      const tieneVehiculo  = wb.SheetNames.some(n => /operaci[oó]n?[\s_]*veh|coltrack_?veh|^veh[ií]culos/i.test(n));
+      if (tieneConductor || tieneVehiculo) {
+        fileConsolidado = file;
+        continue;
+      }
+
+      // B. Leer primera hoja para ver cabeceras y clasificar
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
+      if (rawRows.length > 0) {
+        const firstRow = rawRows[0].map(c => String(c ?? '').trim());
+        
+        // ¿Es Base de Colaboradores de la compañía?
+        const isRoster = firstRow.includes('ID de usuario/empleado') || 
+                         (firstRow.includes('Primer Nombre') && firstRow.includes('Apellidos completos'));
+        
+        // ¿Es Conductores Fagor?
+        const isFagorRef = firstRow.includes('Código iButton') && firstRow.includes('DNI');
+
+        if (isRoster) {
+          fileRefColaboradores = file;
+        } else if (isFagorRef) {
+          fileRefFagor = file;
+        }
+      }
+    } else {
+      // C. ¿Es CSV de Conductores Coltrack?
+      const text = await file.text();
+      const headerLine = text.split('\n')[0] ?? '';
+      if (headerLine.includes('No. Identificaci') || (headerLine.includes('iButton') && headerLine.includes('Rh'))) {
+        fileRefColtrack = file;
+      }
+    }
+  }
+
+  // Fallback si no se detectó por nombres de hojas: tomar el primer XLSX
+  if (!fileConsolidado) {
+    const firstXlsx = files.find(f => f.name.match(/\.(xlsx|xls)$/i));
+    if (firstXlsx) {
+      fileConsolidado = firstXlsx;
+    }
+  }
+
+  if (!fileConsolidado) {
+    throw new Error('No se detectó ningún archivo Excel de plantilla consolidada (debe contener hojas con métricas de vehículos o conductores).');
+  }
+
+  // Registrar carga
+  const nombreCarga = `Plantilla Consolidada: ${files.map(f => f.name).join(', ')}`;
+  const { data: carga, error: errorCarga } = await supabase
+    .from('cargas_excel')
+    .insert({
+      usuario_id: isUuid(usuarioId) ? usuarioId : null,
+      tipo: 'monthly',
+      nombre_archivo: nombreCarga,
+      estado_validacion: 'procesado',
+    })
+    .select('id')
+    .single();
+
+  if (errorCarga) throw new Error(`No se pudo registrar la carga: ${errorCarga.message}`);
+  const cargaId = carga.id as string;
+
+  try {
+    // 2. Construir mapa en memoria de conductores de referencia
+    const referenciaConductores = new Map<string, { cedula: string; ibutton?: string }>();
+
+    // A. Procesar Base General de Colaboradores (Imagen adjunta)
+    if (fileRefColaboradores) {
+      console.log(`[Carga Referencia] Procesando Base General de Colaboradores: ${fileRefColaboradores.name}`);
+      const arrayBuffer = await fileRefColaboradores.arrayBuffer();
+      const wb = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet) as any[];
+      if (rows.length > 0) {
+        const keys = Object.keys(rows[0]);
+        const keyId = keys.find(k => /id.*usuario|id.*empleado|documento|cedula|identificaci/i.test(k));
+        const keyPrimerNombre = keys.find(k => /primer.*nombre/i.test(k));
+        const keySegundoNombre = keys.find(k => /segundo.*nombre/i.test(k));
+        const keyApellidos = keys.find(k => /apellido/i.test(k));
+
+        if (keyPrimerNombre && keyApellidos) {
+          for (const row of rows) {
+            const idVal = keyId ? String(row[keyId] ?? '').replace(/[^0-9]/g, '').trim() : '';
+            const primerNombre = String(row[keyPrimerNombre] ?? '').trim();
+            const segundoNombre = keySegundoNombre ? String(row[keySegundoNombre] ?? '').trim() : '';
+            const apellidos = String(row[keyApellidos] ?? '').trim();
+
+            if (!primerNombre || !apellidos || !idVal) continue;
+
+            const fullName = [primerNombre, segundoNombre, apellidos].filter(Boolean).join(' ');
+            const nameNorm = normName(fullName);
+            referenciaConductores.set(nameNorm, { cedula: idVal });
+          }
+        }
+      }
+    }
+
+    // B. Procesar Conductores Fagor
+    if (fileRefFagor) {
+      console.log(`[Carga Referencia] Procesando Conductores Fagor: ${fileRefFagor.name}`);
+      const arrayBuffer = await fileRefFagor.arrayBuffer();
+      const wb = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rowsCond = XLSX.utils.sheet_to_json(sheet) as any[];
+      rowsCond.forEach(row => {
+        const nombre = row['Nombre'] ?? '';
+        const primerAp = row['Primer Apellido'] ?? '';
+        const segundoAp = row['Segundo Apellido'] ?? '';
+        const fullNameNorm = normName(`${nombre} ${primerAp} ${segundoAp}`);
+        const ibutton = String(row['Código iButton'] ?? '').trim();
+        const cedula = String(row['DNI'] ?? '').replace(/[^0-9]/g, '').trim();
+        if (fullNameNorm && cedula) {
+          referenciaConductores.set(fullNameNorm, { cedula, ibutton });
+        }
+      });
+    }
+
+    // C. Procesar Conductores Coltrack
+    if (fileRefColtrack) {
+      console.log(`[Carga Referencia] Procesando Conductores Coltrack: ${fileRefColtrack.name}`);
+      const driversContent = await fileRefColtrack.text();
+      const dLines = driversContent.split('\n').filter(l => l.trim().length > 0);
+      for (let i = 1; i < dLines.length; i++) {
+        const cols = dLines[i].split('|');
+        if (cols.length >= 5) {
+          const nombre = cols[0] ?? '';
+          const apellido = cols[1] ?? '';
+          const ibutton = cols[2] ?? '';
+          const cedula = String(cols[4] ?? '').replace(/[^0-9]/g, '').trim();
+          const fullNameNorm = normName(`${nombre} ${apellido}`);
+          if (fullNameNorm && cedula) {
+            referenciaConductores.set(fullNameNorm, { cedula, ibutton });
+          }
+        }
+      }
+    }
+
+    // 3. Procesar archivo Excel consolidado
+    const arrayBuffer = await fileConsolidado.arrayBuffer();
+    const wbConsolidado = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
+
+    const tieneConductor = wbConsolidado.SheetNames.some(n => /operaci[oó]n?[\s_]*conductor|^conductor/i.test(n));
+    const tieneVehiculo  = wbConsolidado.SheetNames.some(n => /operaci[oó]n?[\s_]*veh|coltrack_?veh|^veh[ií]culos/i.test(n));
+
+    if (!tieneConductor && !tieneVehiculo) {
+      erroresGlobales.push({
+        fila: 0, columna: '',
+        mensaje: 'La plantilla Excel no contiene hojas de conductores o vehículos válidas.',
+      });
+      await supabase.from('cargas_excel').update({ estado_validacion: 'invalido', errores_json: erroresGlobales }).eq('id', cargaId);
+      return { cargaId, exito: false, registrosInsertados: 0, errores: erroresGlobales };
+    }
+
+    // A. Importar Conductores
+    if (tieneConductor) {
+      const rc = parseOperacionConductor(wbConsolidado);
+      for (const e of rc.errores) {
+        (e.fila <= 1 ? erroresGlobales : warnings).push(e);
+      }
+
+      if (erroresGlobales.length === 0 && rc.datos.length > 0) {
+        // Inyectar el mapa de referencias en la inserción
+        const write = await insertOperacionConductor(rc.datos, 'monthly', referenciaConductores);
+        warnings.push(...write.omitidos);
+        registrosInsertados += write.insertados;
+      }
+    }
+
+    // B. Importar Vehículos
+    if (tieneVehiculo) {
+      const rv = parseOperacionVehiculo(wbConsolidado);
+      for (const e of rv.errores) {
+        (e.fila <= 1 ? erroresGlobales : warnings).push(e);
+      }
+
+      if (erroresGlobales.length === 0 && rv.datos.length > 0) {
+        const write = await insertOperacionVehiculo(rv.datos, 'monthly');
+        warnings.push(...write.omitidos);
+        registrosInsertados += write.insertados;
+      }
+    }
+
+    const exito = erroresGlobales.length === 0;
+    const estado = exito ? 'procesado' : 'invalido';
+    
+    await supabase
+      .from('cargas_excel')
+      .update({
+        estado_validacion: estado,
+        errores_json: [...erroresGlobales, ...warnings],
+      })
+      .eq('id', cargaId);
+
+    return {
+      cargaId,
+      exito,
+      registrosInsertados,
+      errores: [...erroresGlobales, ...warnings],
+    };
+
+  } catch (err: any) {
+    const msg = err instanceof Error ? err.message : String(err);
+    erroresGlobales.push({ fila: 0, columna: '', mensaje: msg });
+    await supabase
+      .from('cargas_excel')
+      .update({ estado_validacion: 'invalido', errores_json: erroresGlobales })
+      .eq('id', cargaId);
+    return { cargaId, exito: false, registrosInsertados: 0, errores: erroresGlobales };
+  }
+}
+

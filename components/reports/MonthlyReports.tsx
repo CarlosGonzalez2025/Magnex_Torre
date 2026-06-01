@@ -1,9 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { BarChart3, Upload, FileText, RefreshCw, Download } from 'lucide-react';
+import { BarChart3, FileText, RefreshCw, Download } from 'lucide-react';
 import { ReportFilters, FiltroState } from './ReportFilters';
-import { ExcelDropzone } from './ExcelDropzone';
-import { ReportsTable, SemaforoBadge, ErroresTable } from './ReportsTable';
-import { importarExcel, ImportResult } from '../../services/importService';
+import { ReportsTable, SemaforoBadge } from './ReportsTable';
 import { SheetsSyncPanel } from './SheetsSyncPanel';
 import {
   getConductores, getVehiculos, getProyectos, getContratos,
@@ -18,8 +16,6 @@ import {
   descargarConsolidadoVehiculosContrato,
 } from '../../services/pdfTemplates';
 import type { ConductorOption, ContratoOption, ReporteConductorData, ReporteVehiculoData, VehiculoOption } from '../../services/reportService';
-
-type Vista = 'historial' | 'subir';
 
 const primerDiaMes = () => {
   const d = new Date();
@@ -42,26 +38,30 @@ const defaultFiltro: FiltroState = {
 };
 
 function obtenerPeriodoAnterior(fechaInicioStr: string, fechaFinStr: string): { fechaInicio: string; fechaFin: string } {
-  const inicio = new Date(fechaInicioStr + 'T00:00:00');
-  
+  // Usar mediodía para evitar problemas de redondeo con DST y diferencias de zona horaria
+  const inicio = new Date(fechaInicioStr + 'T12:00:00');
+
   if (inicio.getDate() === 1) {
-    const prevMesInicio = new Date(inicio.getFullYear(), inicio.getMonth() - 1, 1);
-    const prevMesFin = new Date(inicio.getFullYear(), inicio.getMonth(), 0);
+    // Mes completo: el período anterior es el mes calendario previo
+    const prevMesInicio = new Date(Date.UTC(inicio.getFullYear(), inicio.getMonth() - 1, 1));
+    const prevMesFin = new Date(Date.UTC(inicio.getFullYear(), inicio.getMonth(), 0));
     return {
       fechaInicio: prevMesInicio.toISOString().slice(0, 10),
       fechaFin: prevMesFin.toISOString().slice(0, 10),
     };
   } else {
-    const fin = new Date(fechaFinStr + 'T23:59:59');
-    const diffMs = fin.getTime() - inicio.getTime();
-    const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
-    
-    const prevInicio = new Date(inicio.getTime());
-    prevInicio.setDate(prevInicio.getDate() - diffDays - 1);
-    
-    const prevFin = new Date(fin.getTime());
-    prevFin.setDate(prevFin.getDate() - diffDays - 1);
-    
+    const fin = new Date(fechaFinStr + 'T12:00:00');
+    // diffDays = diferencia exacta en días entre inicio y fin (ej: 29 para 29/04–28/05)
+    const diffDays = Math.round((fin.getTime() - inicio.getTime()) / (1000 * 60 * 60 * 24));
+
+    // prevFin = día anterior al inicio del período actual (ej: 28/04)
+    const prevFin = new Date(fechaInicioStr + 'T12:00:00');
+    prevFin.setDate(prevFin.getDate() - 1);
+
+    // prevInicio = prevFin retrocedido diffDays días (ej: 28/04 - 29 = 30/03)
+    const prevInicio = new Date(prevFin.getTime());
+    prevInicio.setDate(prevInicio.getDate() - diffDays);
+
     return {
       fechaInicio: prevInicio.toISOString().slice(0, 10),
       fechaFin: prevFin.toISOString().slice(0, 10),
@@ -103,7 +103,6 @@ function StatGroup({ title, children }: { title: string; children: React.ReactNo
 }
 
 export const MonthlyReports: React.FC = () => {
-  const [vista, setVista] = useState<Vista>('historial');
   const [filtro, setFiltro] = useState<FiltroState>(defaultFiltro);
 
   const [conductores, setConductores] = useState<ConductorOption[]>([]);
@@ -118,11 +117,13 @@ export const MonthlyReports: React.FC = () => {
   const [cargandoHistorial, setCargandoHistorial] = useState(false);
   const [seleccionados, setSeleccionados] = useState<Set<string>>(new Set());
 
-  const [uploadResult, setUploadResult] = useState<ImportResult | null>(null);
-  const [uploadLoading, setUploadLoading] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
 
-
+  const obtenerClaveReporte = useCallback((row: Record<string, unknown>, tipo: 'conductor' | 'vehiculo'): string => {
+    const entityId = String(row[tipo === 'conductor' ? 'conductor_id' : 'vehiculo_id'] ?? '');
+    const pInicio = String(row.periodo_inicio ?? '');
+    const pFin = String(row.periodo_fin ?? '');
+    return `${entityId}_${pInicio}_${pFin}`;
+  }, []);
 
   useEffect(() => {
     Promise.all([getConductores(), getVehiculos(), getProyectos(), getContratos()]).then(([c, v, p, ct]) => {
@@ -201,21 +202,29 @@ export const MonthlyReports: React.FC = () => {
     if (seleccionados.size === 0) return;
     setGenerandoLote(true);
     try {
-      const ids = Array.from(seleccionados);
+      const keys = Array.from(seleccionados);
       if (filtro.tipo === 'conductor') {
-        const promises = ids.map(id => getReporteConductor({
-          conductorId: id,
-          fechaInicio: filtro.fechaInicio,
-          fechaFin: filtro.fechaFin,
-        }));
+        const promises = keys.map(key => {
+          const row = historial.find(r => obtenerClaveReporte(r, 'conductor') === key);
+          return getReporteConductor({
+            conductorId: String(row?.conductor_id ?? ''),
+            fechaInicio: String(row?.periodo_inicio ?? filtro.fechaInicio),
+            fechaFin: String(row?.periodo_fin ?? filtro.fechaFin),
+            reporteId: String(row?.id ?? ''),
+          });
+        });
         const datos = (await Promise.all(promises)).filter(Boolean) as ReporteConductorData[];
         await descargarLotePDFs(datos, 'conductor');
       } else {
-        const promises = ids.map(id => getReporteVehiculo({
-          vehiculoId: id,
-          fechaInicio: filtro.fechaInicio,
-          fechaFin: filtro.fechaFin,
-        }));
+        const promises = keys.map(key => {
+          const row = historial.find(r => obtenerClaveReporte(r, 'vehiculo') === key);
+          return getReporteVehiculo({
+            vehiculoId: String(row?.vehiculo_id ?? ''),
+            fechaInicio: String(row?.periodo_inicio ?? filtro.fechaInicio),
+            fechaFin: String(row?.periodo_fin ?? filtro.fechaFin),
+            reporteId: String(row?.id ?? ''),
+          });
+        });
         const datos = (await Promise.all(promises)).filter(Boolean) as ReporteVehiculoData[];
         await descargarLotePDFs(datos, 'vehiculo');
       }
@@ -319,21 +328,6 @@ export const MonthlyReports: React.FC = () => {
     }
   };
 
-  const handleFile = async (file: File) => {
-    setUploadLoading(true);
-    setUploadError(null);
-    setUploadResult(null);
-    try {
-      const result = await importarExcel(file, 'monthly');
-      setUploadResult(result);
-      if (result.exito) cargarHistorial();
-    } catch (err: unknown) {
-      setUploadError(err instanceof Error ? err.message : 'Error al procesar el archivo');
-    } finally {
-      setUploadLoading(false);
-    }
-  };
-
   const toggleSeleccion = (id: string) => {
     setSeleccionados(prev => {
       const next = new Set(prev);
@@ -346,7 +340,7 @@ export const MonthlyReports: React.FC = () => {
     if (seleccionados.size === historial.length) {
       setSeleccionados(new Set());
     } else {
-      setSeleccionados(new Set(historial.map(r => String(r[filtro.tipo === 'conductor' ? 'conductor_id' : 'vehiculo_id'] ?? ''))));
+      setSeleccionados(new Set(historial.map(r => obtenerClaveReporte(r, filtro.tipo))));
     }
   };
 
@@ -355,14 +349,17 @@ export const MonthlyReports: React.FC = () => {
     {
       key: 'conductor_id',
       header: '',
-      render: (_: unknown, row: Record<string, unknown>) => (
-        <input
-          type="checkbox"
-          checked={seleccionados.has(String(row.conductor_id ?? ''))}
-          onChange={() => toggleSeleccion(String(row.conductor_id ?? ''))}
-          className="accent-blue-600 w-3.5 h-3.5"
-        />
-      ),
+      render: (_: unknown, row: Record<string, unknown>) => {
+        const key = obtenerClaveReporte(row, 'conductor');
+        return (
+          <input
+            type="checkbox"
+            checked={seleccionados.has(key)}
+            onChange={() => toggleSeleccion(key)}
+            className="accent-blue-600 w-3.5 h-3.5"
+          />
+        );
+      },
       width: 'w-8',
     },
     { key: 'mes', header: 'Mes' },
@@ -384,14 +381,17 @@ export const MonthlyReports: React.FC = () => {
     {
       key: 'vehiculo_id',
       header: '',
-      render: (_: unknown, row: Record<string, unknown>) => (
-        <input
-          type="checkbox"
-          checked={seleccionados.has(String(row.vehiculo_id ?? ''))}
-          onChange={() => toggleSeleccion(String(row.vehiculo_id ?? ''))}
-          className="accent-blue-600 w-3.5 h-3.5"
-        />
-      ),
+      render: (_: unknown, row: Record<string, unknown>) => {
+        const key = obtenerClaveReporte(row, 'vehiculo');
+        return (
+          <input
+            type="checkbox"
+            checked={seleccionados.has(key)}
+            onChange={() => toggleSeleccion(key)}
+            className="accent-blue-600 w-3.5 h-3.5"
+          />
+        );
+      },
       width: 'w-8',
     },
     { key: 'mes', header: 'Mes' },
@@ -436,52 +436,13 @@ export const MonthlyReports: React.FC = () => {
               Descargar {seleccionados.size} PDF{seleccionados.size !== 1 ? 's' : ''}
             </button>
           )}
-          <button
-            onClick={() => setVista(v => v === 'historial' ? 'subir' : 'historial')}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-sm font-medium text-slate-700 dark:text-slate-300 transition-colors"
-          >
-            <Upload className="w-4 h-4" />
-            {vista === 'historial' ? 'Subir datos Excel' : 'Ver historial'}
-          </button>
         </div>
       </div>
 
       {/* Panel de sincronización Google Sheets (siempre visible) */}
       <SheetsSyncPanel />
 
-      {vista === 'subir' ? (
-        <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6 space-y-6">
-          <div className="flex flex-col gap-2">
-            <h2 className="font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-2 text-lg">
-              <Upload className="w-5 h-5 text-blue-600 dark:text-blue-400" /> Centro de Importación Mensual
-            </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Sube el archivo consolidado tradicional que unifica los kilometrajes, ralentís y calificaciones en un solo libro de Excel. Asegúrate de que las hojas del archivo tengan los nombres correctos: <code>Conductor</code>, <code>Coltrack_Vehiculos</code> o <code>Ralentis</code>.
-            </p>
-          </div>
-
-          <ExcelDropzone
-            onFile={handleFile}
-            loading={uploadLoading}
-            exito={uploadResult?.exito ?? false}
-            error={uploadError}
-          />
-
-          {uploadResult && (
-            <div className={`rounded-xl p-4 text-xs border ${uploadResult.exito ? 'bg-green-50 dark:bg-green-950/20 text-green-700 dark:text-green-400 border-green-200/50 dark:border-green-900/50' : 'bg-amber-50 dark:bg-amber-950/20 text-amber-700 dark:text-amber-400 border-amber-200/50 dark:border-amber-900/50'}`}>
-              <strong className="font-bold block mb-1">
-                {uploadResult.exito ? '✓ Importación exitosa' : '⚠ Advertencia en la importación'}
-              </strong>
-              {uploadResult.exito
-                ? `Se han procesado e ingresado ${uploadResult.registrosInsertados} registros del informe consolidado tradicional.`
-                : `Se presentaron observaciones en la carga. Registros insertados: ${uploadResult.registrosInsertados}.`
-              }
-            </div>
-          )}
-          {uploadResult && uploadResult.errores.length > 0 && <ErroresTable errores={uploadResult.errores} />}
-        </div>
-      ) : (
-        <div className="space-y-4">
+      <div className="space-y-4">
           <ReportFilters
             filtro={filtro}
             onChange={(f) => { setFiltro(f); setSeleccionados(new Set()); }}
@@ -587,13 +548,12 @@ export const MonthlyReports: React.FC = () => {
               <ReportsTable
                 columns={filtro.tipo === 'conductor' ? colsConductor : colsVehiculo}
                 data={historial}
-                emptyMessage="No hay informes mensuales guardados. Sube datos desde Excel o genera un PDF."
+                emptyMessage="No hay informes para el período seleccionado. Carga los datos desde el Procesador Satelital."
                 exportFileName={`informes_mensuales_${filtro.tipo}_${filtro.fechaInicio}_${filtro.fechaFin}`}
               />
             )}
           </div>
-        </div>
-      )}
+      </div>
     </div>
   );
 };

@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { Upload, BarChart3, RefreshCw, FileText, Calendar, CheckCircle2, AlertTriangle, Info, ShieldAlert } from 'lucide-react';
-import { importarDatosPlanosColtrack, importarDatosPlanosFagor, ImportResult } from '../../services/importService';
+import { Upload, BarChart3, RefreshCw, FileText, Calendar, CheckCircle2, AlertTriangle, Info, ShieldAlert, FileSpreadsheet } from 'lucide-react';
+import { importarDatosPlanosColtrack, importarDatosPlanosFagor, importarExcelConsolidado, descargarPlantilla, ImportResult } from '../../services/importService';
 
 export const TelemetryProcessor: React.FC = () => {
-  const [plataforma, setPlataforma] = useState<'coltrack' | 'fagor'>('coltrack');
+  const [plataforma, setPlataforma] = useState<'coltrack' | 'fagor' | 'plantilla'>('coltrack');
   const [files, setFiles] = useState<File[]>([]);
   const [uploadRange, setUploadRange] = useState({
     inicio: (() => {
@@ -62,8 +62,10 @@ export const TelemetryProcessor: React.FC = () => {
       let importResult: ImportResult;
       if (plataforma === 'coltrack') {
         importResult = await importarDatosPlanosColtrack(files, uploadRange.inicio, uploadRange.fin);
-      } else {
+      } else if (plataforma === 'fagor') {
         importResult = await importarDatosPlanosFagor(files, uploadRange.inicio, uploadRange.fin);
+      } else {
+        importResult = await importarExcelConsolidado(files, uploadRange.inicio, uploadRange.fin);
       }
 
       setResult(importResult);
@@ -108,25 +110,31 @@ export const TelemetryProcessor: React.FC = () => {
 
         {/* Selector de Plataforma */}
         <div className="space-y-2">
-          <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">1. Selecciona la Plataforma Satelital</label>
-          <div className="flex bg-slate-100 dark:bg-slate-900 p-1.5 rounded-xl gap-1.5 max-w-md border border-slate-200/50 dark:border-slate-800">
+          <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">1. Selecciona la Plataforma Satelital o Plantilla</label>
+          <div className="flex bg-slate-100 dark:bg-slate-900 p-1.5 rounded-xl gap-1.5 max-w-lg border border-slate-200/50 dark:border-slate-800">
             <button
               onClick={() => { setPlataforma('coltrack'); clearAllFiles(); }}
               className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-all ${plataforma === 'coltrack' ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-sm border border-slate-200/30 dark:border-slate-700' : 'text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'}`}
             >
-              Coltrack (CSV Pipes)
+              Coltrack (CSV)
             </button>
             <button
               onClick={() => { setPlataforma('fagor'); clearAllFiles(); }}
               className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-all ${plataforma === 'fagor' ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-sm border border-slate-200/30 dark:border-slate-700' : 'text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'}`}
             >
-              Fagor / FlotasNet (XLSX)
+              Fagor (XLSX)
+            </button>
+            <button
+              onClick={() => { setPlataforma('plantilla'); clearAllFiles(); }}
+              className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-all ${plataforma === 'plantilla' ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-sm border border-slate-200/30 dark:border-slate-700' : 'text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'}`}
+            >
+              Plantilla Consolidada (Excel)
             </button>
           </div>
         </div>
 
         {/* Instructivos de Archivos */}
-        {plataforma === 'coltrack' ? (
+        {plataforma === 'coltrack' && (
           <div className="bg-slate-50 dark:bg-slate-900/50 p-4 rounded-xl border border-slate-200 dark:border-slate-700/50 text-xs space-y-2">
             <strong className="text-indigo-700 dark:text-indigo-400 text-xs uppercase font-bold tracking-wide flex items-center gap-1.5">
               📁 Archivos Planos Solicitados para Coltrack:
@@ -138,7 +146,9 @@ export const TelemetryProcessor: React.FC = () => {
               <li><strong>Ralenti_Coltrack.csv</strong> (Tiempos de ralentí y consumo de combustible - Opcional)</li>
             </ul>
           </div>
-        ) : (
+        )}
+
+        {plataforma === 'fagor' && (
           <div className="bg-slate-50 dark:bg-slate-900/50 p-4 rounded-xl border border-slate-200 dark:border-slate-700/50 text-xs space-y-2">
             <strong className="text-emerald-700 dark:text-emerald-400 text-xs uppercase font-bold tracking-wide flex items-center gap-1.5">
               📁 Archivos Planos Solicitados para Fagor / FlotasNet:
@@ -153,6 +163,39 @@ export const TelemetryProcessor: React.FC = () => {
               </li>
             </ul>
             <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1 italic">Nota: Los km de un vehículo presente en varios grupos se suman automáticamente. El archivo de respaldo solo aplica para vehículos ausentes en el archivo principal.</p>
+          </div>
+        )}
+
+        {plataforma === 'plantilla' && (
+          <div className="bg-slate-50 dark:bg-slate-900/50 p-5 rounded-xl border border-slate-200 dark:border-slate-700/50 text-xs space-y-3">
+            <strong className="text-indigo-700 dark:text-indigo-400 text-xs uppercase font-bold tracking-wide flex items-center gap-1.5">
+              📁 Modo Plantilla Consolidada Unificada:
+            </strong>
+            <p className="text-slate-600 dark:text-slate-300 leading-relaxed text-xs">
+              Sube tu **plantilla de operación unificada** en formato Excel (.xlsx). El procesador importará directamente tus cifras consolidadas de Conducción y Kilómetros para asegurar una coincidencia exacta de los reportes mensuales.
+            </p>
+            <div className="p-3 bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 space-y-1.5 text-xs text-slate-600 dark:text-slate-400 shadow-sm leading-relaxed">
+              <strong>💡 Opciones de Resolución de Cédulas Avanzadas:</strong>
+              <p>Puedes arrastrar junto con tu plantilla consolidada archivos de mapeo como <strong>Conductores_Coltrack.csv</strong>, <strong>Conductores_Fagor.xlsx</strong>, o la <strong>Base General de Colaboradores (Roster)</strong>. El procesador usará estas referencias en paralelo para deducir automáticamente las cédulas y iButtons reales de tus conductores mediante cruce de nombres completos.</p>
+            </div>
+            
+            <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-200/50 dark:border-slate-700/50">
+              <span className="text-xs text-slate-500 font-semibold">Descargar plantillas vacías:</span>
+              <button
+                onClick={() => descargarPlantilla('conductor')}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors shadow-sm bg-white dark:bg-slate-900"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5 text-green-600 animate-pulse" />
+                Plantilla Conductores
+              </button>
+              <button
+                onClick={() => descargarPlantilla('vehiculo')}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 transition-colors shadow-sm bg-white dark:bg-slate-900"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
+                Plantilla Vehículos (e Idling)
+              </button>
+            </div>
           </div>
         )}
 
