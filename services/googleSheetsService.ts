@@ -287,10 +287,17 @@ async function syncVehiculos(
       .filter((p: string) => !placasActivas.has(p.trim().toUpperCase()));
 
     if (placasInactivar.length > 0) {
-      await supabase
-        .from('vehiculos')
-        .update({ estado: 'INACTIVO', updated_at: new Date().toISOString() })
-        .in('placa', placasInactivar);
+      const CHUNK_SIZE = 100;
+      for (let i = 0; i < placasInactivar.length; i += CHUNK_SIZE) {
+        const chunk = placasInactivar.slice(i, i + CHUNK_SIZE);
+        const { error: errUpdate } = await supabase
+          .from('vehiculos')
+          .update({ estado: 'INACTIVO', updated_at: new Date().toISOString() })
+          .in('placa', chunk);
+        if (errUpdate) {
+          errores.push(`Inactivación vehículos chunk ${i}-${i + chunk.length}: ${errUpdate.message}`);
+        }
+      }
       inactivados = placasInactivar.length;
     }
   } catch (e: unknown) {
@@ -374,10 +381,17 @@ async function syncConductores(
       .filter((c: string) => !cedulasActivas.has(c.trim()));
 
     if (cedulasInactivar.length > 0) {
-      await supabase
-        .from('conductores')
-        .update({ estado: 'INACTIVO', updated_at: new Date().toISOString() })
-        .in('cedula', cedulasInactivar);
+      const CHUNK_SIZE = 100;
+      for (let i = 0; i < cedulasInactivar.length; i += CHUNK_SIZE) {
+        const chunk = cedulasInactivar.slice(i, i + CHUNK_SIZE);
+        const { error: errUpdate } = await supabase
+          .from('conductores')
+          .update({ estado: 'INACTIVO', updated_at: new Date().toISOString() })
+          .in('cedula', chunk);
+        if (errUpdate) {
+          errores.push(`Inactivación conductores chunk ${i}-${i + chunk.length}: ${errUpdate.message}`);
+        }
+      }
       inactivados = cedulasInactivar.length;
     }
   } catch (e: unknown) {

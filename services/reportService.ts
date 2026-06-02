@@ -699,9 +699,10 @@ async function listarReportesConductoresDesdeColtrack(filtro: Partial<FiltroRepo
 }
 
 export async function listarReportesConductores(filtro: Partial<FiltroReporte> & { mes?: string }) {
+  // Incluir 'estado' en el select para poder filtrar inactivos del lado del cliente también
   const select = filtro.contratoId
-    ? '*, conductores!inner(nombres, cedula, contrato_id)'
-    : '*, conductores(nombres, cedula, contrato_id)';
+    ? '*, conductores!inner(nombres, cedula, contrato_id, estado)'
+    : '*, conductores(nombres, cedula, contrato_id, estado)';
   let q = supabase
     .from('reportes_conductores')
     .select(select)
@@ -710,6 +711,8 @@ export async function listarReportesConductores(filtro: Partial<FiltroReporte> &
   if (filtro.conductorId) q = q.eq('conductor_id', filtro.conductorId);
   if (filtro.proyecto) q = q.eq('proyecto', filtro.proyecto);
   if (filtro.contratoId) q = q.eq('conductores.contrato_id', filtro.contratoId);
+  // Excluir conductores inactivos: no deben aparecer en informes mensuales
+  q = q.eq('conductores.estado', 'ACTIVO');
   if (filtro.fechaInicio && filtro.fechaFin) {
     // Contención estricta: solo registros cuyo período cae COMPLETAMENTE dentro del rango.
     // El overlap traía registros de meses calendario (Abr 1-30, May 1-31) que parcialmente
@@ -720,7 +723,13 @@ export async function listarReportesConductores(filtro: Partial<FiltroReporte> &
   }
 
   const data = await fetchAllRows<Record<string, unknown>>(q);
-  if (data.length > 0) return data;
+  // Doble verificación cliente: descartar cualquier fila cuyo conductor no sea ACTIVO
+  const activos = data.filter(row => {
+    const cond = row.conductores as Record<string, unknown> | null;
+    if (!cond) return false;
+    return normalizeText(String(cond.estado ?? '')).toUpperCase() === 'ACTIVO';
+  });
+  if (activos.length > 0) return activos;
   return listarReportesConductoresDesdeColtrack(filtro);
 }
 
@@ -848,14 +857,17 @@ async function listarReportesVehiculosDesdeColtrack(filtro: Partial<FiltroReport
 }
 
 export async function listarReportesVehiculos(filtro: Partial<FiltroReporte> & { mes?: string }) {
+  // Incluir 'estado' en el select para poder filtrar inactivos del lado del cliente también
   let q = supabase
     .from('reportes_vehiculos')
-    .select('*, vehiculos(placa, marca, tipo_activo), contratos(nombre)')
+    .select('*, vehiculos(placa, marca, tipo_activo, estado), contratos(nombre)')
     .order('fecha_reporte', { ascending: false });
 
   if (filtro.vehiculoId) q = q.eq('vehiculo_id', filtro.vehiculoId);
   if (filtro.proyecto) q = q.eq('proyecto', filtro.proyecto);
   if (filtro.contratoId) q = q.eq('contrato_id', filtro.contratoId);
+  // Excluir vehículos inactivos: no deben aparecer en informes mensuales
+  q = q.eq('vehiculos.estado', 'ACTIVO');
   if (filtro.fechaInicio && filtro.fechaFin) {
     // Contención estricta: solo registros cuyo período cae COMPLETAMENTE dentro del rango.
     // El overlap traía registros de meses calendario (Abr 1-30, May 1-31) que parcialmente
@@ -866,7 +878,13 @@ export async function listarReportesVehiculos(filtro: Partial<FiltroReporte> & {
   }
 
   const data = await fetchAllRows<Record<string, unknown>>(q);
-  if (data.length > 0) return data;
+  // Doble verificación cliente: descartar cualquier fila cuyo vehículo no sea ACTIVO
+  const activos = data.filter(row => {
+    const veh = row.vehiculos as Record<string, unknown> | null;
+    if (!veh) return false;
+    return normalizeText(String(veh.estado ?? '')).toUpperCase() === 'ACTIVO';
+  });
+  if (activos.length > 0) return activos;
   return listarReportesVehiculosDesdeColtrack(filtro);
 }
 
