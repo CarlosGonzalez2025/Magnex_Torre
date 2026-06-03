@@ -13,7 +13,10 @@ export const TelemetryProcessor: React.FC = () => {
     fin: (() => {
       const d = new Date();
       const last = new Date(d.getFullYear(), d.getMonth() + 1, 0);
-      return last.toISOString().slice(0, 10);
+      const year = last.getFullYear();
+      const month = String(last.getMonth() + 1).padStart(2, '0');
+      const day = String(last.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
     })()
   });
 

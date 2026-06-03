@@ -110,6 +110,18 @@ function parseTimestampToISO(timestamp: unknown): string {
     }
   }
 
+  // Intentar parsear formato YYYY-MM-DD HH:MM:SS o YYYY/MM/DD HH:MM:SS (COLTRACK / otros)
+  const yyyymmddPattern = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[\sT](\d{1,2}):(\d{2})(?::(\d{2}))?)?/;
+  const matchYMD = timestampStr.match(yyyymmddPattern);
+  if (matchYMD) {
+    const [, year, month, day, hours = '00', minutes = '00', seconds = '00'] = matchYMD;
+    const isoDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}T${hours.padStart(2, '0')}:${minutes.padStart(2, '0')}:${seconds.padStart(2, '0')}.000Z`;
+    const dateObj = new Date(isoDate);
+    if (!isNaN(dateObj.getTime())) {
+      return dateObj.toISOString();
+    }
+  }
+
   // Intentar parsear como fecha ISO directa
   try {
     const dateObj = new Date(timestampStr);
