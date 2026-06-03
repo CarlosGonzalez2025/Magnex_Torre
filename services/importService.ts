@@ -1,5 +1,7 @@
 import * as XLSX from 'xlsx';
 import { supabase } from './supabaseClient';
+import { processFile, BatchAlert } from './fileProcessingService';
+
 
 // ── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -3072,4 +3074,146 @@ export async function importarExcelConsolidado(
     return { cargaId, exito: false, registrosInsertados: 0, errores: erroresGlobales };
   }
 }
+
+/**
+ * Procesa e importa un archivo de alertas en bruto (raw) desde COLTRACK, FAGOR o GEOTAB,
+ * y lo inserta en las tablas oficiales de informes diarios (alertas_diarias_gps / pendientes).
+ */
+export async function importarAlertasRaw(
+  file: File,
+  source: 'COLTRACK' | 'FAGOR' | 'GEOTAB',
+  usuarioId?: string
+): Promise<ImportResult> {
+  const erroresGlobales: ValidationError[] = [];
+
+  // 1. Subir archivo a Storage
+  const nombreArchivo = `${Date.now()}_${file.name}`;
+  const { data: upload, error: uploadError } = await supabase.storage
+    .from('reportes')
+    .upload(`excel/${nombreArchivo}`, file);
+  if (uploadError) throw new Error(`No se pudo subir el archivo al bucket reportes: ${uploadError.message}`);
+  const archivo_url = upload?.path ?? null;
+
+  // 2. Registrar carga
+  const { data: carga, error: errorCarga } = await supabase
+    .from('cargas_excel')
+    .insert({
+      usuario_id: isUuid(usuarioId) ? usuarioId : null,
+      tipo: 'daily',
+      archivo_url,
+      nombre_archivo: file.name,
+      estado_validacion: 'pendiente',
+    })
+    .select('id')
+    .single();
+
+  if (errorCarga) {
+    throw new Error(`No se pudo registrar la carga: ${errorCarga.message}`);
+  }
+  if (!carga) throw new Error('No se pudo registrar la carga: Supabase no retornó el ID de la carga');
+  const cargaId = carga.id as string;
+
+  try {
+    // 3. Procesar archivo con el parser raw
+    const parseResult = await processFile(file, source);
+    if (!parseResult.success || !parseResult.data) {
+      const errorMsg = parseResult.error || 'Error desconocido al parsear el archivo raw';
+      erroresGlobales.push({ fila: 0, columna: '', mensaje: errorMsg });
+      await supabase
+        .from('cargas_excel')
+        .update({ estado_validacion: 'invalido', errores_json: erroresGlobales })
+        .eq('id', cargaId);
+      return { cargaId, exito: false, registrosInsertados: 0, errores: erroresGlobales };
+    }
+
+    // 4. Mapear de BatchAlert a los campos esperados por insertAlertasDiarias
+    const datosMapeados = parseResult.data.map((alert: BatchAlert, index: number) => {
+      const typeLower = (alert.alert_type || '').toLowerCase();
+      let infraccion_80_kmh = 0;
+      let excesos_50_80_kmh = 0;
+      let excesos_varios_parametros = 0;
+      let frenadas_bruscas = 0;
+
+      // Clasificación de infracción de velocidad o frenada brusca
+      if (typeLower.includes('frenad') || typeLower.includes('brake') || typeLower.includes('desaceleracion') || typeLower.includes('desaceleración') || typeLower.includes('harsh brake') || alert.alert_type === 'HARSH_BRAKE') {
+        frenadas_bruscas = 1;
+      } else if (alert.is_grave) {
+        infraccion_80_kmh = 1;
+      } else if (typeLower.includes('exceso') || typeLower.includes('velocidad') || typeLower.includes('limite') || typeLower.includes('speed') || typeLower.includes('alrm')) {
+        const s = alert.speed ?? 0;
+        if (s >= 80 || typeLower.includes('80')) {
+          infraccion_80_kmh = 1;
+        } else if (s >= 50 && s < 80) {
+          excesos_50_80_kmh = 1;
+        } else if (s > 0 && s < 50) {
+          excesos_varios_parametros = 1;
+        } else {
+          if (typeLower.includes('50') || typeLower.includes('70')) {
+            excesos_50_80_kmh = 1;
+          } else {
+            excesos_varios_parametros = 1;
+          }
+        }
+      } else {
+        excesos_varios_parametros = 1;
+      }
+
+      return {
+        _fila: index + 2,
+        _placa: alert.plate.trim().toUpperCase(),
+        conductor: alert.driver || 'No registra',
+        lugar: alert.location || '',
+        latitud: alert.latitude ?? null,
+        longitud: alert.longitude ?? null,
+        fecha: alert.timestamp,
+        fecha_dia: alert.timestamp ? alert.timestamp.slice(0, 10) : '',
+        velocidad: alert.speed ?? 0,
+        estado: alert.alert_type,
+        infraccion_80_kmh,
+        excesos_varios_parametros,
+        excesos_50_80_kmh,
+        frenadas_bruscas,
+        contrato_nombre: source,
+        gps: source,
+        raw_data: alert
+      };
+    });
+
+    // 5. Insertar registros usando el método existente insertAlertasDiarias
+    const insertResult = await insertAlertasDiarias(datosMapeados, 'daily', cargaId);
+    
+    // Actualizar estado de la carga
+    const exito = insertResult.omitidos.length === 0;
+    await supabase
+      .from('cargas_excel')
+      .update({
+        estado_validacion: exito ? 'valido' : 'parcial',
+        errores_json: insertResult.omitidos
+      })
+      .eq('id', cargaId);
+
+    return {
+      cargaId,
+      exito: true,
+      registrosInsertados: insertResult.insertados,
+      errores: insertResult.omitidos,
+      novedades: { pendientes: insertResult.pendientes }
+    };
+
+  } catch (error: any) {
+    console.error('❌ Error en importarAlertasRaw:', error);
+    const errObj = { fila: 0, columna: '', mensaje: error.message || 'Error desconocido' };
+    await supabase
+      .from('cargas_excel')
+      .update({ estado_validacion: 'invalido', errores_json: [errObj] })
+      .eq('id', cargaId);
+    return {
+      cargaId,
+      exito: false,
+      registrosInsertados: 0,
+      errores: [errObj]
+    };
+  }
+}
+
 

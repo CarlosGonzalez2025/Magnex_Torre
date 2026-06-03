@@ -9,20 +9,23 @@ interface ExcelDropzoneProps {
   exito?: boolean;
   plantillas?: Array<['conductor' | 'vehiculo' | 'alertas', string]>;
   nota?: React.ReactNode;
+  accept?: string;
 }
 
-export const ExcelDropzone: React.FC<ExcelDropzoneProps> = ({ onFile, loading, error, exito, plantillas, nota }) => {
+export const ExcelDropzone: React.FC<ExcelDropzoneProps> = ({ onFile, loading, error, exito, plantillas, nota, accept }) => {
   const [dragging, setDragging] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
 
   const handleFile = useCallback((file: File) => {
-    if (!file.name.match(/\.(xlsx|xls)$/i)) {
-      alert('Solo se admiten archivos Excel (.xlsx / .xls)');
+    const isCsvAllowed = accept?.toLowerCase().includes('.csv');
+    const regex = isCsvAllowed ? /\.(xlsx|xls|csv)$/i : /\.(xlsx|xls)$/i;
+    if (!file.name.match(regex)) {
+      alert(isCsvAllowed ? 'Solo se admiten archivos Excel (.xlsx / .xls) o CSV (.csv)' : 'Solo se admiten archivos Excel (.xlsx / .xls)');
       return;
     }
     setFileName(file.name);
     onFile(file);
-  }, [onFile]);
+  }, [onFile, accept]);
 
   const onDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -51,7 +54,7 @@ export const ExcelDropzone: React.FC<ExcelDropzoneProps> = ({ onFile, loading, e
       >
         <input
           type="file"
-          accept=".xlsx,.xls"
+          accept={accept || ".xlsx,.xls"}
           onChange={onInputChange}
           className="absolute inset-0 opacity-0 cursor-pointer"
           disabled={loading}
@@ -82,9 +85,9 @@ export const ExcelDropzone: React.FC<ExcelDropzoneProps> = ({ onFile, loading, e
             }
             <div>
               <p className="font-medium text-slate-700 dark:text-slate-300">
-                {fileName ?? 'Arrastra tu archivo Excel aquí'}
+                {fileName ?? (accept?.toLowerCase().includes('.csv') ? 'Arrastra tu archivo Excel o CSV aquí' : 'Arrastra tu archivo Excel aquí')}
               </p>
-              <p className="text-slate-400 text-sm mt-1">o haz clic para seleccionar (.xlsx / .xls)</p>
+              <p className="text-slate-400 text-sm mt-1">o haz clic para seleccionar ({accept ? accept.split(',').join(' / ') : '.xlsx / .xls'})</p>
             </div>
           </div>
         )}
