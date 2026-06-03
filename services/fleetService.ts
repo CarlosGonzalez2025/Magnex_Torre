@@ -343,10 +343,14 @@ const fetchFagorViaAPI = async (): Promise<Vehicle[]> => {
 
 export const fetchFleetData = async (): Promise<FleetResponse> => {
   // Initialize status tracking
-  const apiStatus = {
-    coltrack: 'not_tested' as const,
-    fagor: 'not_tested' as const,
-    backend: 'not_tested' as const
+  const apiStatus: {
+    coltrack: 'connected' | 'failed' | 'not_tested';
+    fagor: 'connected' | 'failed' | 'not_tested';
+    backend: 'connected' | 'failed' | 'not_tested';
+  } = {
+    coltrack: 'not_tested',
+    fagor: 'not_tested',
+    backend: 'not_tested'
   };
 
   // 1. First, try the Python Backend

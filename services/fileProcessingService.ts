@@ -355,7 +355,6 @@ function processFagorFile(workbook: XLSX.WorkBook): ProcessingResult {
     };
   }
 }
-
 // ==================== COLTRACK PROCESSOR ====================
 
 /**
@@ -478,16 +477,191 @@ function processColtrackFile(workbook: XLSX.WorkBook): ProcessingResult {
   }
 }
 
+// ==================== GEOTAB PROCESSOR ====================
+
+/**
+ * Procesa archivos de GEOTAB (Excel con hoja "Data")
+ */
+function processGeotabFile(workbook: XLSX.WorkBook): ProcessingResult {
+  try {
+    const sheetName = 'Data';
+    if (!workbook.SheetNames.includes(sheetName)) {
+      return {
+        success: false,
+        error: 'No se encontró la pestaña "Data" requerida para el reporte de Geotab',
+        totalRows: 0,
+        gravesDetected: 0
+      };
+    }
+    const sheet = workbook.Sheets[sheetName];
+    // Convertir a array de arrays
+    const rawData: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+    if (rawData.length === 0) {
+      return { success: false, error: 'Archivo vacío', totalRows: 0, gravesDetected: 0 };
+    }
+
+    // La fila de encabezados es la fila 11 (índice 10)
+    // Buscaremos la fila que contiene ".Device.DeviceName" o similar.
+    let headerRowIndex = -1;
+    for (let i = 0; i < Math.min(rawData.length, 30); i++) {
+      const row = rawData[i];
+      if (row && row.some((cell: any) =>
+        normalizeText(cell).includes('.device.devicename') || normalizeText(cell) === 'devicename'
+      )) {
+        headerRowIndex = i;
+        break;
+      }
+    }
+
+    // Fallback si no lo encuentra: asumir fila 11 (índice 10)
+    if (headerRowIndex === -1) {
+      headerRowIndex = 10;
+    }
+
+    const headers = rawData[headerRowIndex].map(normalizeHeader);
+    console.log('📊 GEOTAB - Fila de headers encontrada:', headerRowIndex);
+
+    const plateIndex = headers.findIndex(h => h.includes('devicedevicename') || h === 'devicename' || h.includes('devicename'));
+    const firstNameIndex = headers.findIndex(h => h.includes('driveruserfirstname') || h === 'userfirstname');
+    const lastNameIndex = headers.findIndex(h => h.includes('driveruserlastname') || h === 'userlastname');
+    const exceptionRuleIndex = headers.findIndex(h => h.includes('exceptionruleexceptionrulename') || h === 'exceptionrulename' || h.includes('rulename'));
+    const longitudeIndex = headers.findIndex(h => h.includes('exceptiondetaillongitude') || h === 'longitude' || h === 'longitud');
+    const latitudeIndex = headers.findIndex(h => h.includes('exceptiondetaillatitude') || h === 'latitude' || h === 'latitud');
+    const locationIndex = headers.findIndex(h => h.includes('exceptiondetaillocation') || h === 'location' || h === 'ubicacion');
+    const timestampIndex = headers.findIndex(h => h.includes('exceptiondetailstarttime') || h === 'starttime' || h === 'fechahora');
+    const detailsIndex = headers.findIndex(h => h.includes('exceptiondetaildetails') || h === 'details' || h === 'detalles');
+    const extraInfoIndex = headers.findIndex(h => h.includes('exceptiondetailextrainfo') || h === 'extrainfo' || h.includes('extrainfo'));
+
+    console.log('📊 GEOTAB - Índices de columnas:', {
+      plate: plateIndex,
+      firstName: firstNameIndex,
+      lastName: lastNameIndex,
+      exceptionRule: exceptionRuleIndex,
+      longitude: longitudeIndex,
+      latitude: latitudeIndex,
+      location: locationIndex,
+      timestamp: timestampIndex,
+      details: detailsIndex,
+      extraInfo: extraInfoIndex
+    });
+
+    if (plateIndex === -1 || exceptionRuleIndex === -1 || timestampIndex === -1) {
+      return {
+        success: false,
+        error: 'No se encontraron las columnas requeridas (Dispositivo, Excepción, Hora)',
+        totalRows: 0,
+        gravesDetected: 0
+      };
+    }
+
+    const alerts: BatchAlert[] = [];
+    let gravesCount = 0;
+
+    for (let i = headerRowIndex + 1; i < rawData.length; i++) {
+      const row = rawData[i];
+
+      // Saltar filas vacías
+      if (!row || row.length === 0 || !row[plateIndex]) {
+        continue;
+      }
+
+      const plateRaw = row[plateIndex]?.toString().trim();
+      if (!plateRaw) continue;
+
+      // Normalizar placa: mayúsculas y sin espacios
+      const plate = plateRaw.toUpperCase().replace(/\s+/g, '');
+
+      // Conductor (combinar primer nombre + apellido)
+      const firstName = firstNameIndex >= 0 ? (row[firstNameIndex]?.toString().trim() || '') : '';
+      const lastName = lastNameIndex >= 0 ? (row[lastNameIndex]?.toString().trim() || '') : '';
+      const driver = `${firstName} ${lastName}`.trim() || undefined;
+
+      // Alerta y detalles
+      const alertType = row[exceptionRuleIndex]?.toString().trim() || 'Excepción telemática';
+      const details = detailsIndex >= 0 ? row[detailsIndex]?.toString().trim() : '';
+      const extraInfo = extraInfoIndex >= 0 ? row[extraInfoIndex]?.toString().trim() : '';
+
+      // Coordenadas
+      const latitudeRaw = latitudeIndex >= 0 ? row[latitudeIndex] : null;
+      const longitudeRaw = longitudeIndex >= 0 ? row[longitudeIndex] : null;
+      const latitude = latitudeRaw ? parseFloat(latitudeRaw.toString()) : undefined;
+      const longitude = longitudeRaw ? parseFloat(longitudeRaw.toString()) : undefined;
+
+      // Ubicación
+      const location = locationIndex >= 0 ? row[locationIndex]?.toString().trim() : undefined;
+
+      // Timestamp
+      const timestampRaw = row[timestampIndex];
+      const timestamp = parseTimestampToISO(timestampRaw);
+
+      // Extraer velocidad de details o extraInfo usando regex: /velocidad\s+m[aá]xima:\s*(\d+)/i
+      let speed: number | null = null;
+      const combinedText = `${extraInfo} ${details}`;
+      const speedMatch = combinedText.match(/velocidad\s+m[aá]xima:\s*(\d+)/i);
+      if (speedMatch) {
+        speed = parseInt(speedMatch[1], 10);
+      }
+
+      // Detectar falta grave:
+      // - Si el tipo contiene "exceso" y "velocidad", y la velocidad es >= 80
+      // - O si el tipo contiene "80" o los detalles contienen "exceso velocidad 80"
+      const alertTypeLower = alertType.toLowerCase();
+      const detailsLower = details ? details.toLowerCase() : '';
+      const isSpeedingAlert = alertTypeLower.includes('exceso') && (alertTypeLower.includes('velocidad') || alertTypeLower.includes('limite'));
+      
+      const isGrave = (isSpeedingAlert && speed !== null && speed >= 80) ||
+                      alertTypeLower.includes('exceso velocidad 80') ||
+                      detailsLower.includes('exceso velocidad 80') ||
+                      (isSpeedingAlert && alertTypeLower.includes('80'));
+
+      if (isGrave) {
+        gravesCount++;
+      }
+
+      alerts.push({
+        plate,
+        alert_type: alertType,
+        speed,
+        timestamp,
+        driver,
+        severity: isGrave ? 'critical' : speed && speed > 100 ? 'high' : 'medium',
+        is_grave: isGrave,
+        location,
+        latitude,
+        longitude
+      });
+    }
+
+    console.log(`✅ GEOTAB procesado: ${alerts.length} alertas, ${gravesCount} graves`);
+    return {
+      success: true,
+      data: alerts,
+      totalRows: alerts.length,
+      gravesDetected: gravesCount
+    };
+
+  } catch (error: any) {
+    console.error('❌ Error procesando GEOTAB:', error);
+    return {
+      success: false,
+      error: error.message || 'Error desconocido procesando archivo GEOTAB',
+      totalRows: 0,
+      gravesDetected: 0
+    };
+  }
+}
+
 // ==================== MAIN PROCESSOR ====================
 
 /**
  * Procesa un archivo según el proveedor seleccionado
  * @param file - Archivo cargado (.xlsx o .csv)
- * @param source - Proveedor ('FAGOR' o 'COLTRACK')
+ * @param source - Proveedor ('FAGOR', 'COLTRACK' o 'GEOTAB')
  */
 export async function processFile(
   file: File,
-  source: 'FAGOR' | 'COLTRACK'
+  source: 'FAGOR' | 'COLTRACK' | 'GEOTAB'
 ): Promise<ProcessingResult> {
   try {
     console.log(`🚀 Procesando archivo: ${file.name} (${source})`);
@@ -517,6 +691,8 @@ export async function processFile(
     // Procesar según proveedor
     if (source === 'FAGOR') {
       return processFagorFile(workbook);
+    } else if (source === 'GEOTAB') {
+      return processGeotabFile(workbook);
     } else {
       return processColtrackFile(workbook);
     }
@@ -535,7 +711,7 @@ export async function processFile(
 /**
  * Valida el formato del archivo antes de procesarlo
  */
-export function validateFile(file: File, source: 'FAGOR' | 'COLTRACK'): { valid: boolean; error?: string } {
+export function validateFile(file: File, source: 'FAGOR' | 'COLTRACK' | 'GEOTAB'): { valid: boolean; error?: string } {
   const maxSize = 10 * 1024 * 1024; // 10 MB
 
   if (file.size > maxSize) {
@@ -553,6 +729,10 @@ export function validateFile(file: File, source: 'FAGOR' | 'COLTRACK'): { valid:
   // Validaciones específicas por proveedor
   if (source === 'COLTRACK' && !fileName.endsWith('.csv')) {
     console.warn('⚠️ COLTRACK: Se recomienda usar archivos .csv');
+  }
+
+  if (source === 'GEOTAB' && fileName.endsWith('.csv')) {
+    console.warn('⚠️ GEOTAB: Se recomienda usar archivos Excel (.xlsx)');
   }
 
   return { valid: true };

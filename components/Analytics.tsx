@@ -218,18 +218,11 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
   // Update 'current idle' periodically (supports async)
   useEffect(() => {
     let mounted = true;
-    const update = async () => {
+    const update = () => {
       try {
-        const res = await getCurrentIdleStats();
+        const res = getCurrentIdleStats();
         if (!mounted) return;
-        // If res is an object or array, normalize to expected shape
-        if (Array.isArray(res)) {
-          setCurrentIdleVehicles(res);
-        } else if (res?.data) {
-          setCurrentIdleVehicles(res.data);
-        } else {
-          setCurrentIdleVehicles([]);
-        }
+        setCurrentIdleVehicles(res || []);
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn('getCurrentIdleStats failed', err);
@@ -367,9 +360,8 @@ export const Analytics: React.FC<AnalyticsProps> = ({ vehicles, alerts: realtime
       }
     });
 
-    // Populate idleRecords (convert minutes to hours for chart display)
     idleRecords.forEach(record => {
-      const rDate = new Date(record.timestamp || record.created_at || record.start_time || '');
+      const rDate = new Date(record.start_datetime || record.created_at || '');
       if (isNaN(rDate.getTime())) return;
 
       let point: Point | undefined;

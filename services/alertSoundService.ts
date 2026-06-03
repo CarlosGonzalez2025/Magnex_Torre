@@ -36,7 +36,7 @@ const CONFIG_STORAGE_KEY = 'alert-sound-config';
  * Patrones de sonido por severidad
  * Cada patrón es un array de [frecuencia, duración]
  */
-const SOUND_PATTERNS = {
+const SOUND_PATTERNS: Record<string, [number, number][]> = {
   critical: [
     // Patrón urgente: 3 beeps rápidos + pausa + repetir
     [1000, 150], [0, 50], [1000, 150], [0, 50], [1000, 150], [0, 300],

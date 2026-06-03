@@ -1,5 +1,5 @@
 import React from 'react';
-import { Vehicle } from '../types';
+import { Vehicle, VehicleStatus } from '../types';
 import { X, MapPin, Battery, Signal, Clock, Gauge, User, Briefcase, Radio } from 'lucide-react';
 
 interface VehicleDetailModalProps {
@@ -39,8 +39,8 @@ export const VehicleDetailModal: React.FC<VehicleDetailModalProps> = ({ vehicle,
                 <h3 className="font-semibold text-slate-900">Estado</h3>
               </div>
               <span className={`inline-flex items-center px-3 py-1.5 rounded-full text-sm font-semibold ${
-                vehicle.status === 'MOVING' ? 'bg-green-100 text-green-800' :
-                vehicle.status === 'IDLE' ? 'bg-orange-100 text-orange-800' :
+                vehicle.status === VehicleStatus.MOVING ? 'bg-green-100 text-green-800' :
+                vehicle.status === VehicleStatus.IDLE ? 'bg-orange-100 text-orange-800' :
                 'bg-red-100 text-red-800'
               }`}>
                 <span className="w-2 h-2 rounded-full bg-current mr-2 animate-pulse"></span>

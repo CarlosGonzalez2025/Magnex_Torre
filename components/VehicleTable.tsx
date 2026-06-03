@@ -92,9 +92,16 @@ export const VehicleTable: React.FC<VehicleTableProps> = ({ vehicles }) => {
   };
 
   const getSourceBadge = (source: ApiSource) => {
-    return source === ApiSource.FAGOR
-      ? 'bg-blue-100 text-blue-800 border-blue-200'
-      : 'bg-green-100 text-green-800 border-green-200';
+    switch (source) {
+      case ApiSource.FAGOR:
+        return 'bg-blue-100 text-blue-800 border-blue-200';
+      case ApiSource.COLTRACK:
+        return 'bg-green-100 text-green-800 border-green-200';
+      case ApiSource.GEOTAB:
+        return 'bg-orange-100 text-orange-800 border-orange-200';
+      default:
+        return 'bg-slate-100 text-slate-800 border-slate-200';
+    }
   };
 
   return (
@@ -139,7 +146,8 @@ export const VehicleTable: React.FC<VehicleTableProps> = ({ vehicles }) => {
           >
             <option value="ALL">Todas</option>
             <option value={ApiSource.FAGOR}>Fagor</option>
-            <option value={ApiSource.SASCAR}>Sascar</option>
+            <option value={ApiSource.COLTRACK}>Coltrack</option>
+            <option value={ApiSource.GEOTAB}>Geotab</option>
           </select>
         </div>
 

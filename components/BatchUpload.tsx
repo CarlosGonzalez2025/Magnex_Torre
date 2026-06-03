@@ -21,7 +21,7 @@ import {
 } from '../services/auditService';
 import { saveAlertToDatabase } from '../services/databaseService';
 import { supabase } from '../services/supabaseClient';
-import { Alert } from '../types';
+import { Alert, AlertType, ApiSource, AlertSeverity } from '../types';
 import { useExportToExcel } from '../hooks/useExportToExcel';
 
 const normalizeText = (value: unknown) =>
@@ -35,7 +35,7 @@ export const BatchUpload: React.FC = () => {
   // ==================== STATE ====================
 
   // Upload Section
-  const [selectedSource, setSelectedSource] = useState<'FAGOR' | 'COLTRACK'>('FAGOR');
+  const [selectedSource, setSelectedSource] = useState<'FAGOR' | 'COLTRACK' | 'GEOTAB'>('FAGOR');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -70,7 +70,7 @@ export const BatchUpload: React.FC = () => {
   const [availableContracts, setAvailableContracts] = useState<string[]>([]);
   const [selectedContracts, setSelectedContracts] = useState<string[]>([]);
   const [showContractDropdown, setShowContractDropdown] = useState(false);
-  const [sourceFilter, setSourceFilter] = useState<'ALL' | 'FAGOR' | 'COLTRACK'>('ALL');
+  const [sourceFilter, setSourceFilter] = useState<'ALL' | 'FAGOR' | 'COLTRACK' | 'GEOTAB'>('ALL');
   const [graveFilter, setGraveFilter] = useState<'ALL' | 'true' | 'false'>('ALL');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -378,7 +378,7 @@ export const BatchUpload: React.FC = () => {
     if (plateSearch.trim()) newFilters.plate = plateSearch.trim();
     if (alertTypeSearch.trim()) newFilters.alertType = alertTypeSearch.trim();
     if (selectedAlertTypes.length > 0) newFilters.alertTypes = selectedAlertTypes;
-    if (sourceFilter !== 'ALL') newFilters.source = sourceFilter as 'FAGOR' | 'COLTRACK';
+    if (sourceFilter !== 'ALL') newFilters.source = sourceFilter as 'FAGOR' | 'COLTRACK' | 'GEOTAB';
     if (graveFilter !== 'ALL') newFilters.isGrave = graveFilter === 'true';
     if (startDate) newFilters.startDate = new Date(startDate).toISOString();
     if (endDate) newFilters.endDate = new Date(endDate).toISOString();
@@ -527,7 +527,7 @@ export const BatchUpload: React.FC = () => {
     const alert: Alert = {
       id: `batch-${batchAlert.id}`,
       vehicleId: vehicleId,
-      type: batchAlert.alert_type,
+      type: batchAlert.alert_type as AlertType,
       plate: batchAlert.plate,
       driver: batchAlert.driver || 'Sin asignar',
       timestamp: batchAlert.timestamp,
@@ -537,8 +537,8 @@ export const BatchUpload: React.FC = () => {
       location: batchAlert.location || 'Ver en historial de auditoría',
       details: `Alerta importada desde ${(batchAlert as any).file_uploads?.source || 'BATCH'}`,
       contract: contract,
-      source: (batchAlert as any).file_uploads?.source || 'BATCH',
-      severity: batchAlert.severity
+      source: ((batchAlert as any).file_uploads?.source || 'FAGOR') as ApiSource,
+      severity: batchAlert.severity as AlertSeverity
     };
 
     try {
@@ -654,7 +654,7 @@ export const BatchUpload: React.FC = () => {
           <Database className="w-8 h-8" />
           Auditoría de Flota
         </h1>
-        <p className="text-purple-100 mt-2">Carga masiva de reportes GPS (FAGOR y COLTRACK)</p>
+        <p className="text-purple-100 mt-2">Carga masiva de reportes GPS (FAGOR, COLTRACK y GEOTAB)</p>
       </div>
 
       {/* 🆕 PANEL DE ANÁLISIS DETALLADO */}
@@ -830,6 +830,16 @@ export const BatchUpload: React.FC = () => {
               >
                 📄 COLTRACK (.csv)
               </button>
+              <button
+                onClick={() => setSelectedSource('GEOTAB')}
+                className={`flex-1 py-2 px-4 rounded-lg font-medium transition-colors ${
+                  selectedSource === 'GEOTAB'
+                    ? 'bg-purple-600 text-white'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                📈 GEOTAB (.xlsx)
+              </button>
             </div>
 
             {/* Drag & Drop Area */}
@@ -849,14 +859,14 @@ export const BatchUpload: React.FC = () => {
                 {selectedFile ? selectedFile.name : 'Arrastra y suelta el archivo'}
               </p>
               <p className="text-sm text-slate-500">
-                o haz clic para seleccionar ({selectedSource === 'FAGOR' ? '.xlsx, .xls' : '.csv'} - máximo 10 MB)
+                o haz clic para seleccionar ({(selectedSource === 'FAGOR' || selectedSource === 'GEOTAB') ? '.xlsx, .xls' : '.csv'} - máximo 10 MB)
               </p>
             </div>
 
             <input
               ref={fileInputRef}
               type="file"
-              accept={selectedSource === 'FAGOR' ? '.xlsx,.xls' : '.csv'}
+              accept={(selectedSource === 'FAGOR' || selectedSource === 'GEOTAB') ? '.xlsx,.xls' : '.csv'}
               onChange={handleFileInputChange}
               className="hidden"
             />
@@ -1027,6 +1037,7 @@ export const BatchUpload: React.FC = () => {
               <option value="ALL">Todas</option>
               <option value="FAGOR">FAGOR</option>
               <option value="COLTRACK">COLTRACK</option>
+              <option value="GEOTAB">GEOTAB</option>
             </select>
           </div>
 
@@ -1196,7 +1207,7 @@ export const BatchUpload: React.FC = () => {
                         <td className="px-4 py-3 text-sm">
                           {(() => {
                             const source = (alert as any).file_uploads?.source || 'N/A';
-                            const bgColor = source === 'COLTRACK' ? 'bg-blue-100 text-blue-700' : source === 'FAGOR' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-600';
+                            const bgColor = source === 'COLTRACK' ? 'bg-blue-100 text-blue-700' : source === 'FAGOR' ? 'bg-green-100 text-green-700' : source === 'GEOTAB' ? 'bg-orange-100 text-orange-700' : 'bg-slate-100 text-slate-600';
                             return (
                               <span className={`px-2 py-1 ${bgColor} rounded-full text-xs font-medium`}>
                                 {source}

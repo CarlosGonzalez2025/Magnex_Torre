@@ -13,6 +13,7 @@
  * - Configuración persistente (localStorage)
  */
 
+import React from 'react';
 import { Alert, AlertType } from '../types';
 
 // ==================== CONFIGURATION ====================
@@ -461,5 +462,3 @@ export function useTTS() {
 
 export default ttsEngine;
 
-// Helper para importar React
-import React from 'react';

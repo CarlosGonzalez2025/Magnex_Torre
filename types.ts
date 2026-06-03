@@ -1,6 +1,7 @@
 export enum ApiSource {
   FAGOR = 'FAGOR',
   COLTRACK = 'COLTRACK',
+  GEOTAB = 'GEOTAB',
 }
 
 export enum VehicleStatus {
@@ -14,13 +15,20 @@ export enum AlertType {
   SPEED_VIOLATION = 'Exceso de Velocidad',
   PANIC_BUTTON = 'Botón de Pánico',
   HARSH_BRAKING = 'Frenada Brusca',
+  HARSH_BRAKE = 'Frenada Brusca',
   HARSH_ACCELERATION = 'Aceleración Brusca',
   GEOFENCE_EXIT = 'Salida de Geocerca',
   GEOFENCE_ENTRY = 'Entrada a Geocerca',
   ENGINE_OFF = 'Motor Apagado',
   BATTERY_DISCONNECT = 'Batería Desconectada',
   IDLE_EXCESSIVE = 'Ralentí Excesivo',
-  GENERAL_ALERT = 'Alerta General'
+  GENERAL_ALERT = 'Alerta General',
+  COLLISION = 'Colisión',
+  UNAUTHORIZED_STOP = 'Parada No Autorizada',
+  ROUTE_DEVIATION = 'Desvío de Ruta',
+  IDLE_TIME_EXCEEDED = 'Ralentí Excedido',
+  LOW_FUEL = 'Bajo Nivel de Combustible',
+  MAINTENANCE_DUE = 'Mantenimiento Vencido'
 }
 
 export enum AlertSeverity {

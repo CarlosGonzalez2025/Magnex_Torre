@@ -6,7 +6,7 @@ import { BatchAlert } from './fileProcessingService';
 export interface FileUploadRecord {
   id: string;
   filename: string;
-  source: 'FAGOR' | 'COLTRACK';
+  source: 'FAGOR' | 'COLTRACK' | 'GEOTAB';
   upload_date: string;
   processed_rows: number;
   created_at: string;
@@ -16,6 +16,7 @@ export interface BatchAlertRecord extends BatchAlert {
   id: string;
   upload_id: string;
   created_at: string;
+  file_uploads?: FileUploadRecord | null;
 }
 
 export interface AuditSummary {
@@ -34,7 +35,7 @@ export interface DetailedAuditAnalysis {
     total_graves: number;
     grave_percentage: number;
     avg_alerts_per_upload: number;
-    most_active_source: 'FAGOR' | 'COLTRACK' | null;
+    most_active_source: 'FAGOR' | 'COLTRACK' | 'GEOTAB' | null;
   };
   
   temporal: {
@@ -150,7 +151,7 @@ async function fetchAllRecords<T>(
 
 export async function createFileUploadRecord(
   filename: string,
-  source: 'FAGOR' | 'COLTRACK',
+  source: 'FAGOR' | 'COLTRACK' | 'GEOTAB',
   processedRows: number
 ): Promise<{ success: boolean; uploadId?: string; error?: string }> {
   try {
@@ -530,7 +531,7 @@ export interface AlertFilters {
   plate?: string;
   alertType?: string;
   alertTypes?: string[];
-  source?: 'FAGOR' | 'COLTRACK';
+  source?: 'FAGOR' | 'COLTRACK' | 'GEOTAB';
   isGrave?: boolean;
   uploadId?: string;
 }
@@ -673,11 +674,14 @@ export async function getDetailedAuditAnalysis(
       return acc;
     }, {} as Record<string, number>);
     
-    const mostActiveSource = sourceCount['FAGOR'] > (sourceCount['COLTRACK'] || 0) 
-      ? 'FAGOR' as const
-      : sourceCount['COLTRACK'] > 0 
-        ? 'COLTRACK' as const 
-        : null;
+    let mostActiveSource: 'FAGOR' | 'COLTRACK' | 'GEOTAB' | null = null;
+    let maxCount = 0;
+    Object.entries(sourceCount).forEach(([src, count]) => {
+      if (count > maxCount && (src === 'FAGOR' || src === 'COLTRACK' || src === 'GEOTAB')) {
+        maxCount = count;
+        mostActiveSource = src as any;
+      }
+    });
 
     // 2. ANÁLISIS TEMPORAL
     const alertsByHour = Array.from({ length: 24 }, (_, i) => ({ hour: i, count: 0 }));

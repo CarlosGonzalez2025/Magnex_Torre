@@ -19,7 +19,7 @@
 
 import { supabase } from '../services/supabaseClient';
 import { autoSaveAlert, saveAlertToDatabase, addActionPlan } from '../services/databaseService';
-import { Alert } from '../types';
+import { Alert, AlertType, AlertSeverity, ApiSource } from '../types';
 
 export interface ValidationResult {
   success: boolean;
@@ -38,15 +38,15 @@ function createTestAlert(suffix: string = ''): Alert {
     id: `TEST-ALERT-${Date.now()}${suffix}`,
     vehicleId: 'TEST-VEH-001',
     plate: `TEST${suffix}`,
-    type: 'Exceso de Velocidad',
-    severity: 'critical',
+    type: AlertType.SPEED_VIOLATION,
+    severity: AlertSeverity.CRITICAL,
     timestamp,
     location: 'Bogotá, Colombia (Prueba)',
     latitude: 4.6097,
     longitude: -74.0817,
     speed: 95,
     driver: 'Test Driver',
-    source: 'FAGOR',
+    source: ApiSource.FAGOR,
     contract: 'Test Contract',
     details: `Alerta de prueba - Velocidad: 95 km/h${suffix}`,
     sent: false

@@ -615,7 +615,7 @@ export default function App() {
               )}
               {activeTab === 'analytics' && <Analytics vehicles={vehicles} alerts={alerts} />}
               {activeTab === 'inspections' && <Inspections />}
-              {activeTab === 'schedules' && <RouteSchedules vehicles={vehicles} />}
+              {activeTab === 'schedules' && <RouteSchedules />}
               {activeTab === 'drivers' && <DriverManagement />}
               {activeTab === 'geofences' && <GeofenceEditor />}
               {activeTab === 'users' && <UserManagement />}
