@@ -712,10 +712,10 @@ export async function processFile(
  * Valida el formato del archivo antes de procesarlo
  */
 export function validateFile(file: File, source: 'FAGOR' | 'COLTRACK' | 'GEOTAB'): { valid: boolean; error?: string } {
-  const maxSize = 10 * 1024 * 1024; // 10 MB
+  const maxSize = 50 * 1024 * 1024; // 50 MB
 
   if (file.size > maxSize) {
-    return { valid: false, error: 'El archivo es demasiado grande (máximo 10 MB)' };
+    return { valid: false, error: 'El archivo es demasiado grande (máximo 50 MB)' };
   }
 
   const validExtensions = ['.xlsx', '.xls', '.csv'];

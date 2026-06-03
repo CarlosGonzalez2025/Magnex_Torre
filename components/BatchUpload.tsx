@@ -859,7 +859,7 @@ export const BatchUpload: React.FC = () => {
                 {selectedFile ? selectedFile.name : 'Arrastra y suelta el archivo'}
               </p>
               <p className="text-sm text-slate-500">
-                o haz clic para seleccionar ({(selectedSource === 'FAGOR' || selectedSource === 'GEOTAB') ? '.xlsx, .xls' : '.csv'} - máximo 10 MB)
+                o haz clic para seleccionar ({(selectedSource === 'FAGOR' || selectedSource === 'GEOTAB') ? '.xlsx, .xls' : '.csv'} - máximo 50 MB)
               </p>
             </div>
 
