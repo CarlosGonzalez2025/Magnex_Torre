@@ -1015,6 +1015,7 @@ async function insertAlertasDiarias(datos: Record<string, unknown>[], _tipo: 'da
   let insertados = 0;
   let pendientes = 0;
 
+  // 1. Cargar conductores activos
   const conductoresRaw = await fetchAllRows(
     supabase
       .from('conductores')
@@ -1026,101 +1027,138 @@ async function insertAlertasDiarias(datos: Record<string, unknown>[], _tipo: 'da
       .map((c: Record<string, unknown>) => [normalizeText(c.nombres), String(c.id)])
   );
 
+  // 2. Cargar vehículos
+  console.log('⚡ Cargando maestro de vehículos a memoria para optimizar el cruce...');
+  const vehiculosRaw = await fetchAllRows(
+    supabase
+      .from('vehiculos')
+      .select('id, placa, estado, contrato_id, cliente, tipo_activo, gps_compañia')
+  );
+  const vehiculosMap = new Map<string, Record<string, any>>();
+  for (const v of (vehiculosRaw ?? [])) {
+    vehiculosMap.set(String(v.placa).trim().toUpperCase(), v);
+  }
+
+  // 3. Cargar contratos
+  console.log('⚡ Cargando contratos a memoria para optimizar la resolución...');
+  const contratosRaw = await fetchAllRows(
+    supabase
+      .from('contratos')
+      .select('id, nombre')
+  );
+  const contratosMap = new Map<string, string>(); // nombre (lowercase) -> id
+  const contratosNombreMap = new Map<string, string>(); // nombre (lowercase) -> nombre oficial
+  for (const c of (contratosRaw ?? [])) {
+    contratosMap.set(c.nombre.toLowerCase().trim(), c.id);
+    contratosNombreMap.set(c.nombre.toLowerCase().trim(), c.nombre);
+  }
+
+  const gpsPayloads: any[] = [];
+  const pendientesPayloads: any[] = [];
+
   for (const d of datos) {
     const { _placa, _fila, ...rest } = d;
     void _fila;
     const conductorNombre = String(rest.conductor ?? '').trim();
+    const placaStr = String(_placa).trim().toUpperCase();
 
-    const { data: vehRaw } = await supabase
-      .from('vehiculos')
-      .select('id, placa, estado, contrato_id, cliente, tipo_activo, gps_compañia')
-      .eq('placa', String(_placa))
-      .maybeSingle();
-    // Intermediate cast evita el ParserError de Supabase con ñ en nombre de columna
-    const veh = vehRaw as unknown as Record<string, unknown> | null;
-
+    // Obtener vehículo de memoria
+    const veh = vehiculosMap.get(placaStr) || null;
     const vehiculoActivo = !!veh && normalizeText(veh.estado) === 'ACTIVO';
 
-    // Si la placa no esta en la base activa, queda solo como novedad pendiente.
-    // El trigger SQL la pasara a alertas_diarias_gps cuando el vehiculo exista y este activo.
+    // Si la placa no está activa, guardar como novedad pendiente
     if (!vehiculoActivo) {
-      const { error: pendienteError } = await supabase
-        .from('alertas_diarias_pendientes')
-        .upsert(
-          {
-            carga_id: cargaId ?? null,
-            placa: String(_placa),
-            conductor: conductorNombre,
-            conductor_identificado: !esConductorNoIdentificado(conductorNombre),
-            lugar: String(rest.lugar ?? '').trim(),
-            latitud: rest.latitud ?? null,
-            longitud: rest.longitud ?? null,
-            fecha: String(rest.fecha ?? ''),
-            fecha_dia: String(rest.fecha_dia ?? ''),
-            velocidad: rest.velocidad ?? 0,
-            estado: String(rest.estado ?? '').trim(),
-            infraccion_80_kmh: rest.infraccion_80_kmh ?? 0,
-            excesos_varios_parametros: rest.excesos_varios_parametros ?? 0,
-            excesos_50_80_kmh: rest.excesos_50_80_kmh ?? 0,
-            frenadas_bruscas: rest.frenadas_bruscas ?? 0,
-            contrato_nombre: String(rest.contrato_nombre ?? '').trim(),
-            gps: String(rest.gps ?? '').trim(),
-            raw_data: rest.raw_data ?? null,
-          },
-          {
-            onConflict: 'placa,fecha,conductor,lugar,velocidad,infraccion_80_kmh,excesos_varios_parametros,excesos_50_80_kmh,frenadas_bruscas',
-            ignoreDuplicates: true,
-          }
-        );
-      if (pendienteError) {
-        throw new Error(`alerta pendiente ${_placa}: ${pendienteError.message}`);
-      }
+      pendientesPayloads.push({
+        carga_id: cargaId ?? null,
+        placa: placaStr,
+        conductor: conductorNombre,
+        conductor_identificado: !esConductorNoIdentificado(conductorNombre),
+        lugar: String(rest.lugar ?? '').trim(),
+        latitud: rest.latitud ?? null,
+        longitud: rest.longitud ?? null,
+        fecha: String(rest.fecha ?? ''),
+        fecha_dia: String(rest.fecha_dia ?? ''),
+        velocidad: rest.velocidad ?? 0,
+        estado: String(rest.estado ?? '').trim(),
+        infraccion_80_kmh: rest.infraccion_80_kmh ?? 0,
+        excesos_varios_parametros: rest.excesos_varios_parametros ?? 0,
+        excesos_50_80_kmh: rest.excesos_50_80_kmh ?? 0,
+        frenadas_bruscas: rest.frenadas_bruscas ?? 0,
+        contrato_nombre: String(rest.contrato_nombre ?? '').trim(),
+        gps: String(rest.gps ?? '').trim(),
+        raw_data: rest.raw_data ?? null,
+      });
       pendientes++;
       continue;
     }
 
-    // Resolver contrato: primero desde el vehiculo, luego por nombre si no hay.
+    // Resolver contrato
     let contratoId = veh!.contrato_id as string | null;
     let contratoNombre = String(rest.contrato_nombre ?? '').trim();
     if (!contratoId && contratoNombre) {
-      const { data: contrato } = await supabase
-        .from('contratos')
-        .select('id, nombre')
-        .ilike('nombre', contratoNombre)
-        .maybeSingle();
-      contratoId = (contrato?.id as string | undefined) ?? null;
-      contratoNombre = String(contrato?.nombre ?? contratoNombre);
+      const key = contratoNombre.toLowerCase().trim();
+      contratoId = contratosMap.get(key) || null;
+      contratoNombre = contratosNombreMap.get(key) || contratoNombre;
     }
 
     const conductorId = esConductorNoIdentificado(conductorNombre)
       ? null
       : (conductores.get(normalizeText(conductorNombre)) ?? null);
 
-    // Solo las alertas cruzadas con vehiculo activo entran al informe diario.
-    const payload = {
+    // Solo las alertas cruzadas con vehículo activo entran al informe diario
+    gpsPayloads.push({
       ...rest,
       carga_id: cargaId ?? null,
       vehiculo_id: veh!.id,
       conductor_id: conductorId,
       contrato_id: contratoId,
       contrato_nombre: contratoNombre,
-      placa: String(_placa),
+      placa: placaStr,
       cliente: String(veh!.cliente ?? ''),
       tipo_activo: String(veh!.tipo_activo ?? ''),
       gps: String(rest.gps || veh!['gps_compañia'] || ''),
-    };
-
-    const { error } = await supabase
-      .from('alertas_diarias_gps')
-      .upsert(payload, {
-        onConflict: 'placa,fecha,conductor,lugar,velocidad,infraccion_80_kmh,excesos_varios_parametros,excesos_50_80_kmh,frenadas_bruscas',
-        ignoreDuplicates: false,
-      });
-
-    if (error) throw new Error(`alerta diaria ${_placa}: ${error.message}`);
+    });
     insertados++;
   }
 
+  // 4. Inserción en lotes para pendientes
+  const CHUNK_SIZE = 500;
+  if (pendientesPayloads.length > 0) {
+    console.log(`💾 Guardando en lotes ${pendientesPayloads.length} alertas pendientes...`);
+    for (let i = 0; i < pendientesPayloads.length; i += CHUNK_SIZE) {
+      const chunk = pendientesPayloads.slice(i, i + CHUNK_SIZE);
+      const { error } = await supabase
+        .from('alertas_diarias_pendientes')
+        .upsert(chunk, {
+          onConflict: 'placa,fecha,conductor,lugar,velocidad,infraccion_80_kmh,excesos_varios_parametros,excesos_50_80_kmh,frenadas_bruscas',
+          ignoreDuplicates: true,
+        });
+      if (error) {
+        console.error('❌ Error guardando lote de pendientes:', error);
+        throw new Error(`Error guardando lote de alertas pendientes: ${error.message}`);
+      }
+    }
+  }
+
+  // 5. Inserción en lotes para alertas oficiales
+  if (gpsPayloads.length > 0) {
+    console.log(`💾 Guardando en lotes ${gpsPayloads.length} alertas diarias oficiales...`);
+    for (let i = 0; i < gpsPayloads.length; i += CHUNK_SIZE) {
+      const chunk = gpsPayloads.slice(i, i + CHUNK_SIZE);
+      const { error } = await supabase
+        .from('alertas_diarias_gps')
+        .upsert(chunk, {
+          onConflict: 'placa,fecha,conductor,lugar,velocidad,infraccion_80_kmh,excesos_varios_parametros,excesos_50_80_kmh,frenadas_bruscas',
+          ignoreDuplicates: true,
+        });
+      if (error) {
+        console.error('❌ Error guardando lote de alertas diarias:', error);
+        throw new Error(`Error guardando lote de alertas diarias: ${error.message}`);
+      }
+    }
+  }
+
+  console.log(`✅ Inserción completada: ${insertados} oficiales, ${pendientes} pendientes.`);
   return { insertados, omitidos, pendientes };
 }
 
