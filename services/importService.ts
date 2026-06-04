@@ -1624,6 +1624,29 @@ function normCedula(cedula: any): string {
     .toUpperCase();
 }
 
+function namesAreFuzzyEqual(name1: string, name2: string): boolean {
+  const normalize = (name: string) =>
+    String(name ?? '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9\s]/g, '')
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, ' ');
+  const norm1 = normalize(name1);
+  const norm2 = normalize(name2);
+  if (norm1 === norm2) return true;
+
+  const noVowels = (s: string) => s.replace(/[AEIOU]/g, '');
+  const nv1 = noVowels(norm1);
+  const nv2 = noVowels(norm2);
+  
+  if (nv1 === nv2 && Math.abs(norm1.length - norm2.length) <= 3) {
+    return true;
+  }
+  return false;
+}
+
 async function asegurarConductorEnMaestro(
   nombreOriginal: string,
   cedulaOriginal: string | undefined,
@@ -1635,6 +1658,14 @@ async function asegurarConductorEnMaestro(
   const nombreNorm = normNameFn(nombreOriginal);
   let found = conductPorNombreNorm.get(nombreNorm);
   if (found) return found;
+
+  // Cruce por coincidencia aproximada (fuzzy match)
+  for (const [dbNormName, dbCond] of conductPorNombreNorm.entries()) {
+    if (namesAreFuzzyEqual(dbNormName, nombreNorm)) {
+      console.log(`[importService] Cruce Aproximado: "${nombreOriginal}" -> "${dbCond.nombres}"`);
+      return dbCond;
+    }
+  }
 
   if (cedulaOriginal) {
     const cedNorm = normCedula(cedulaOriginal);

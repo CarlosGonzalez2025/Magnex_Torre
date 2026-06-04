@@ -322,15 +322,83 @@ async function syncConductores(
     return { count: 0, errores: ['Sheet devolvió 0 conductores — sincronización cancelada'], inactivados: 0 };
   }
 
+  const normalizeName = (name: string) =>
+    String(name ?? '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-zA-Z0-9\s]/g, '')
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, ' ');
+
+  const namesAreFuzzyEqual = (name1: string, name2: string): boolean => {
+    const norm1 = normalizeName(name1);
+    const norm2 = normalizeName(name2);
+    if (norm1 === norm2) return true;
+    const noVowels = (s: string) => s.replace(/[AEIOU]/g, '');
+    const nv1 = noVowels(norm1);
+    const nv2 = noVowels(norm2);
+    return nv1 === nv2 && Math.abs(norm1.length - norm2.length) <= 3;
+  };
+
+  // Cargar todos los conductores existentes en Supabase antes de iniciar la sincronización
+  let existentes: any[] = [];
+  try {
+    existentes = await fetchAllRows<any>(
+      supabase
+        .from('conductores')
+        .select('id, nombres, cedula, estado, proyecto')
+    );
+  } catch (e: any) {
+    console.error('[Sync] Error cargando conductores existentes:', e.message);
+  }
+
+  // Filtrar los conductores temporales creados por el unificador satelital
+  const tempDrivers = existentes.filter(d => 
+    d.proyecto === 'PENDIENTE GOOGLE SHEETS' || d.estado === 'PENDIENTE GOOGLE SHEETS'
+  );
+
   const cedulasActivas = new Set(conductores.map(c => String(c.cedula ?? '').trim()).filter(Boolean));
 
   for (const c of conductores) {
     if (!c.cedula) continue;
 
+    const cedulaOficial = String(c.cedula).trim();
+    
+    // Buscar si el conductor entrante ya tiene un registro temporal por nombre (fuzzy match)
+    const matchingTemp = tempDrivers.find(td => 
+      namesAreFuzzyEqual(td.nombres, c.nombres)
+    );
+
+    if (matchingTemp) {
+      console.log(`[Sync] Fusionando conductor temporal "${matchingTemp.nombres}" (ID: ${matchingTemp.id}, Cédula actual: ${matchingTemp.cedula}) con datos oficiales (Cédula: ${cedulaOficial})`);
+      
+      // Actualizamos la cédula en Supabase del registro temporal existente antes de hacer el upsert
+      const { error: errUpdate } = await supabase
+        .from('conductores')
+        .update({ 
+          cedula: cedulaOficial,
+          nombres: String(c.nombres).trim(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', matchingTemp.id);
+        
+      if (errUpdate) {
+        errores.push(`Fusión temporal ${matchingTemp.nombres}: ${errUpdate.message}`);
+      } else {
+        // Actualizamos la referencia local en existentes para que el soft-delete posterior no intente inactivarlo
+        const existIdx = existentes.findIndex(e => e.id === matchingTemp.id);
+        if (existIdx !== -1) {
+          existentes[existIdx].cedula = cedulaOficial;
+          existentes[existIdx].nombres = String(c.nombres).trim();
+        }
+      }
+    }
+
     const proyectoNombre = String(c.proyecto ?? '').trim();
     const payload: Record<string, unknown> = {
       nombres:                    String(c.nombres ?? '').trim(),
-      cedula:                     String(c.cedula).trim(),
+      cedula:                     cedulaOficial,
       cargo:                      String(c.cargo ?? '').trim(),
       base:                       String(c.base ?? '').trim(),
       estado:                     String(c.estado ?? 'ACTIVO').trim().toUpperCase(),
@@ -366,17 +434,16 @@ async function syncConductores(
     else count++;
   }
 
-  // Soft-delete: marcar INACTIVO los que ya no están en el Sheet
+  // Soft-delete: marcar INACTIVO los que ya no están en el Sheet (excluyendo temporales de telemetría)
   let inactivados = 0;
   try {
-    const existentes = await fetchAllRows(
-      supabase
-        .from('conductores')
-        .select('cedula')
-        .neq('estado', 'INACTIVO')
+    const existentesFiltrados = existentes.filter(e => 
+      e.estado !== 'INACTIVO' && 
+      e.proyecto !== 'PENDIENTE GOOGLE SHEETS' && 
+      e.estado !== 'PENDIENTE GOOGLE SHEETS'
     );
 
-    const cedulasInactivar = (existentes ?? [])
+    const cedulasInactivar = existentesFiltrados
       .map((e: { cedula: string }) => e.cedula)
       .filter((c: string) => !cedulasActivas.has(c.trim()));
 
