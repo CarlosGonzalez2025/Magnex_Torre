@@ -116,47 +116,46 @@ export const RalentiReports: React.FC = () => {
         dateEnd = `${yearStr}-${monthStr}-${lastDay}`;
       }
 
-      // 1. Resolve vehicles under chosen contract
-      let vehQuery = supabase.from('vehiculos').select('id, placa, contrato_id');
+      // 1. Resolve vehicles under chosen contract if contract filter is active
+      let vehIds: string[] = [];
       if (contratoId) {
-        vehQuery = vehQuery.eq('contrato_id', contratoId);
-      }
-      const { data: dbVehs } = await vehQuery;
-      const matchedVehs = dbVehs ?? [];
-      const vehIds = matchedVehs.map(v => v.id);
+        const { data: dbVehs, error: vehErr } = await supabase
+          .from('vehiculos')
+          .select('id')
+          .eq('contrato_id', contratoId);
+        if (vehErr) throw vehErr;
+        vehIds = (dbVehs ?? []).map(v => v.id);
 
-      if (vehIds.length === 0) {
-        setSummaryMetrics({
-          totalHorasMotorEncendido: 0,
-          totalHorasMotorRalenti: 0,
-          totalGalonesConsumidos: 0,
-          totalRalentisExcesivos: 0,
-        });
-        setEvents([]);
-        setLoading(false);
-        return;
+        // If a contract is selected but has no vehicles, return empty state early
+        if (vehIds.length === 0) {
+          setSummaryMetrics({
+            totalHorasMotorEncendido: 0,
+            totalHorasMotorRalenti: 0,
+            totalGalonesConsumidos: 0,
+            totalRalentisExcesivos: 0,
+          });
+          setEvents([]);
+          setLoading(false);
+          return;
+        }
       }
 
       // 2. Fetch vehicle summary statistics for the period
       let repVehQuery = supabase.from('reportes_vehiculos')
         .select('vehiculo_id, horas_motor_encendido, horas_motor_ralenti, consumo_combustible, ralentis_excesivos')
-        .in('vehiculo_id', vehIds)
         .gte('periodo_inicio', dateStart)
         .lte('periodo_fin', dateEnd);
+
+      if (placa) {
+        repVehQuery = repVehQuery.eq('vehiculo_id', placa);
+      } else if (contratoId && vehIds.length > 0) {
+        repVehQuery = repVehQuery.in('vehiculo_id', vehIds);
+      }
 
       const { data: dbRepVehs, error: repErr } = await repVehQuery;
       if (repErr) throw repErr;
 
-      // Filter by vehicle plate in memory or in DB if needed (to leverage the lookup map)
       let filteredRepVehs = dbRepVehs ?? [];
-      if (placa) {
-        const selectedVeh = matchedVehs.find(v => v.id === placa);
-        if (selectedVeh) {
-          filteredRepVehs = filteredRepVehs.filter(r => r.vehiculo_id === selectedVeh.id);
-        } else {
-          filteredRepVehs = [];
-        }
-      }
 
       // Sum metrics
       const sumEncendido = filteredRepVehs.reduce((acc, r) => acc + (Number(r.horas_motor_encendido) || 0), 0);
@@ -174,17 +173,13 @@ export const RalentiReports: React.FC = () => {
       // 3. Fetch detailed ralentis_eventos
       let evQuery = supabase.from('ralentis_eventos')
         .select('*')
-        .in('vehiculo_id', vehIds)
         .gte('fecha_inicio', `${dateStart}T00:00:00Z`)
         .lte('fecha_inicio', `${dateEnd}T23:59:59Z`);
 
       if (placa) {
-        const selectedVeh = matchedVehs.find(v => v.id === placa);
-        if (selectedVeh) {
-          evQuery = evQuery.eq('vehiculo_id', selectedVeh.id);
-        } else {
-          evQuery = evQuery.eq('vehiculo_id', '00000000-0000-0000-0000-000000000000'); // dummy to return empty
-        }
+        evQuery = evQuery.eq('vehiculo_id', placa);
+      } else if (contratoId && vehIds.length > 0) {
+        evQuery = evQuery.in('vehiculo_id', vehIds);
       }
 
       const { data: dbEvents, error: evErr } = await evQuery;
