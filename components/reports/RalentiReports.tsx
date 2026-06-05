@@ -170,22 +170,53 @@ export const RalentiReports: React.FC = () => {
         totalRalentisExcesivos: sumExcesivos,
       });
 
-      // 3. Fetch detailed ralentis_eventos
-      let evQuery = supabase.from('ralentis_eventos')
-        .select('*')
+      // 3. Fetch detailed ralentis_eventos (paginated in parallel to bypass the default 1000 limit)
+      let countQuery = supabase.from('ralentis_eventos')
+        .select('*', { count: 'exact', head: true })
         .gte('fecha_inicio', `${dateStart}T00:00:00Z`)
         .lte('fecha_inicio', `${dateEnd}T23:59:59Z`);
 
       if (placa) {
-        evQuery = evQuery.eq('vehiculo_id', placa);
+        countQuery = countQuery.eq('vehiculo_id', placa);
       } else if (contratoId && vehIds.length > 0) {
-        evQuery = evQuery.in('vehiculo_id', vehIds);
+        countQuery = countQuery.in('vehiculo_id', vehIds);
       }
 
-      const { data: dbEvents, error: evErr } = await evQuery;
-      if (evErr) throw evErr;
+      const { count, error: countErr } = await countQuery;
+      if (countErr) throw countErr;
 
-      setEvents((dbEvents ?? []) as IdlingEvent[]);
+      const totalEvents = count ?? 0;
+      const pageSize = 1000;
+      const numPages = Math.ceil(totalEvents / pageSize);
+      const promises = [];
+
+      for (let page = 0; page < numPages; page++) {
+        const start = page * pageSize;
+        const end = start + pageSize - 1;
+        
+        let evQuery = supabase.from('ralentis_eventos')
+          .select('id, placa, conductor_nombre, fecha_inicio, fecha_fin, duracion_segundos, galones_consumidos, ubicacion, proveedor, vehiculo_id, conductor_id')
+          .gte('fecha_inicio', `${dateStart}T00:00:00Z`)
+          .lte('fecha_inicio', `${dateEnd}T23:59:59Z`)
+          .range(start, end);
+
+        if (placa) {
+          evQuery = evQuery.eq('vehiculo_id', placa);
+        } else if (contratoId && vehIds.length > 0) {
+          evQuery = evQuery.in('vehiculo_id', vehIds);
+        }
+
+        promises.push(evQuery);
+      }
+
+      const results = await Promise.all(promises);
+      let allEvents: IdlingEvent[] = [];
+      for (const res of results) {
+        if (res.error) throw res.error;
+        allEvents = allEvents.concat((res.data ?? []) as IdlingEvent[]);
+      }
+
+      setEvents(allEvents);
     } catch (err: any) {
       console.error(err);
       setError(err.message || 'Error al obtener datos de telemetría.');
