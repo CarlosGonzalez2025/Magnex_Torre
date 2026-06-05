@@ -1949,8 +1949,8 @@ export async function importarDatosPlanosColtrack(
     }
   }
 
-  if (!fileFaltasCond && !fileFaltasVeh) {
-    throw new Error('Faltan los archivos de consolidado de faltas de Coltrack (Conductores o Vehículos).');
+  if (!fileFaltasCond && !fileFaltasVeh && !fileRalenti && !fileRalentiDetalle) {
+    throw new Error('No se detectó ningún archivo válido para procesar en Coltrack (consolidado de faltas o ralentí).');
   }
 
   const nombreCarga = `Coltrack planos: ${files.map(f => f.name).join(', ')}`;
