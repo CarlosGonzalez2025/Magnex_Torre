@@ -1814,6 +1814,23 @@ async function upsertRalentisPeriodos(
   if (error) throw new Error(`Error en ralentis_periodos: ${error.message}`);
 }
 
+async function upsertRalentisEventos(
+  events: any[]
+): Promise<void> {
+  if (events.length === 0) return;
+  const chunkSize = 500;
+  for (let i = 0; i < events.length; i += chunkSize) {
+    const chunk = events.slice(i, i + chunkSize);
+    const { error } = await supabase
+      .from('ralentis_eventos')
+      .upsert(chunk, { onConflict: 'placa,fecha_inicio,proveedor', ignoreDuplicates: false });
+    if (error) {
+      console.error(`Error en ralentis_eventos: ${error.message}`);
+      throw new Error(`Error en ralentis_eventos: ${error.message}`);
+    }
+  }
+}
+
 async function consolidarConBaseDeDatosVehiculos(
   nuevosRecords: any[],
   periodoInicio: string,
@@ -1914,6 +1931,7 @@ export async function importarDatosPlanosColtrack(
   let fileFaltasCond: File | null = null;
   let fileFaltasVeh: File | null = null;
   let fileRalenti: File | null = null;
+  let fileRalentiDetalle: File | null = null;
 
   for (const file of files) {
     const text = await file.text();
@@ -1926,6 +1944,8 @@ export async function importarDatosPlanosColtrack(
       fileFaltasVeh = file;
     } else if (headerLine.includes('Unidad') && headerLine.includes('Ralentis excesivos')) {
       fileRalenti = file;
+    } else if (headerLine.includes('Nombre') && headerLine.includes('Metros') && headerLine.includes('Hora Reporte')) {
+      fileRalentiDetalle = file;
     }
   }
 
@@ -2176,6 +2196,91 @@ export async function importarDatosPlanosColtrack(
         // Guardar ralentís en tabla dedicada (idempotente por periodo)
         await upsertRalentisPeriodos(consolizadosFinal, periodoInicio, periodoFin);
         registrosInsertados += consolizados.length;
+      }
+    }
+
+    // 4. Procesar Eventos Detallados de Ralentí Coltrack (Ralenti 2)
+    if (fileRalentiDetalle) {
+      console.log('Procesando eventos detallados de ralentí Coltrack (Ralenti 2)...');
+      const detContent = await fileRalentiDetalle.text();
+      const detLines = detContent.split('\n').filter(l => l.trim().length > 0);
+      const detSep = detectSeparator(detLines[0] ?? '');
+      const detHeaders = detLines[0].split(detSep).map(h => h.trim());
+      
+      const detailedEvents: any[] = [];
+
+      for (let i = 1; i < detLines.length; i++) {
+        const cols = detLines[i].split(detSep);
+        if (cols.length >= 5) {
+          const row: any = {};
+          detHeaders.forEach((h, idx) => {
+            row[h] = cols[idx];
+          });
+
+          const placaRaw = row['Nombre'] ?? '';
+          const placaNorm = normPlate(placaRaw);
+          if (!placaNorm) continue;
+
+          const rawStart = row['Hora Reporte'];
+          const fechaInicioISO = excelDateTimeToISO(rawStart);
+          if (!fechaInicioISO) continue;
+
+          // Metros es la duración en segundos en reportes de ralentí
+          const duracionSegundos = Math.max(0, parseInt(row['Metros'], 10) || 0);
+
+          // Calcular fecha fin
+          let fechaFinISO: string | null = null;
+          try {
+            const startDate = new Date(fechaInicioISO);
+            if (!isNaN(startDate.getTime())) {
+              const endDate = new Date(startDate.getTime() + duracionSegundos * 1000);
+              fechaFinISO = endDate.toISOString();
+            }
+          } catch (e) {
+            // ignore
+          }
+
+          // Resolver vehículo
+          const foundVeh = await asegurarVehiculoEnMaestro(placaRaw, vehicPorPlaca, normPlate);
+          if (!foundVeh) continue;
+
+          // Resolver conductor
+          const conductorNombre = String(row['Conductor'] ?? '').trim();
+          let conductorId = null;
+          if (!esConductorNoIdentificado(conductorNombre)) {
+            const foundCond = await asegurarConductorEnMaestro(
+              conductorNombre,
+              undefined,
+              undefined,
+              conductPorNombreNorm,
+              conductPorCedula,
+              normName
+            );
+            conductorId = foundCond?.id ?? null;
+          }
+
+          detailedEvents.push({
+            vehiculo_id: foundVeh.id,
+            conductor_id: conductorId,
+            placa: placaNorm,
+            conductor_nombre: conductorNombre || 'NO REGISTRA',
+            fecha_inicio: fechaInicioISO,
+            fecha_fin: fechaFinISO,
+            duracion_segundos: duracionSegundos,
+            galones_consumidos: 0,
+            ubicacion: String(row['Ubicacion'] || row['Lugar'] || '').trim(),
+            latitud: safeCoord(row['Lat']),
+            longitud: safeCoord(row['Lon']),
+            proveedor: 'COLTRACK',
+            periodo_inicio: periodoInicio,
+            periodo_fin: periodoFin
+          });
+        }
+      }
+
+      if (detailedEvents.length > 0) {
+        await upsertRalentisEventos(detailedEvents);
+        registrosInsertados += detailedEvents.length;
       }
     }
 
@@ -2618,22 +2723,85 @@ export async function importarDatosPlanosFagor(
     // Pre-procesar Ralentí fuera del bloque KmVeh para soportar uploads de solo-Ralentí
     interface RalentiStats { count: number; horas: number; combustible: number; placaOriginal: string; }
     const ralentiStatsMap = new Map<string, RalentiStats>();
+    const detailedEventsFagor: any[] = [];
+    
     for (const file of filesRalenti) {
       const arrayBuffer = await file.arrayBuffer();
       const wbRal = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
       const sheetRal = wbRal.Sheets[wbRal.SheetNames[0]];
       const rowsRal = XLSX.utils.sheet_to_json(sheetRal) as any[];
-      rowsRal.forEach(row => {
+      
+      for (const row of rowsRal) {
         const placaOrig = String(row['Matrícula'] ?? '').trim();
         const placa = normPlate(placaOrig);
-        if (placa) {
-          const current = ralentiStatsMap.get(placa) ?? { count: 0, horas: 0, combustible: 0, placaOriginal: placaOrig };
-          current.count++;
-          current.horas += parseTimeStringToHours(row['T. Ralentí']);
-          current.combustible += num(row['Gal. Consumidos']);
-          ralentiStatsMap.set(placa, current);
+        if (!placa) continue;
+
+        // T. Ralentí en segundos: si es number es fracción de día, si es string/timeStr la convertimos
+        let duracionSegundos = 0;
+        const tRalenti = row['T. Ralentí'];
+        if (typeof tRalenti === 'number') {
+          duracionSegundos = Math.round(tRalenti * 24 * 3600);
+        } else if (tRalenti) {
+          duracionSegundos = Math.round(parseTimeStringToHours(tRalenti) * 3600);
         }
-      });
+
+        const horasVal = duracionSegundos / 3600;
+        const combVal = num(row['Gal. Consumidos']);
+
+        const current = ralentiStatsMap.get(placa) ?? { count: 0, horas: 0, combustible: 0, placaOriginal: placaOrig };
+        current.count++;
+        current.horas += horasVal;
+        current.combustible += combVal;
+        ralentiStatsMap.set(placa, current);
+
+        const rawStart = row['Fecha Inicio'] ?? row['Fecha Alarma'];
+        const fechaInicioISO = excelDateTimeToISO(rawStart);
+        if (!fechaInicioISO) continue;
+
+        const rawFin = row['Fecha Fin'];
+        const fechaFinISO = excelDateTimeToISO(rawFin);
+
+        // Resolver vehículo
+        const foundVeh = await asegurarVehiculoEnMaestro(placaOrig, vehicPorPlaca, normPlate);
+        if (!foundVeh) continue;
+
+        // Resolver conductor
+        const conductorNombre = String(row['Operador'] ?? '').trim();
+        let conductorId = null;
+        if (!esConductorNoIdentificado(conductorNombre)) {
+          const foundCond = await asegurarConductorEnMaestro(
+            conductorNombre,
+            undefined,
+            undefined,
+            conductPorNombreNorm,
+            conductPorCedula,
+            normName
+          );
+          conductorId = foundCond?.id ?? null;
+        }
+
+        detailedEventsFagor.push({
+          vehiculo_id: foundVeh.id,
+          conductor_id: conductorId,
+          placa: placa,
+          conductor_nombre: conductorNombre || 'NO REGISTRA',
+          fecha_inicio: fechaInicioISO,
+          fecha_fin: fechaFinISO,
+          duracion_segundos: duracionSegundos,
+          galones_consumidos: combVal,
+          ubicacion: String(row['Localidad'] || '').trim(),
+          latitud: null,
+          longitud: null,
+          proveedor: 'FAGOR',
+          periodo_inicio: periodoInicio,
+          periodo_fin: periodoFin
+        });
+      }
+    }
+
+    if (detailedEventsFagor.length > 0) {
+      await upsertRalentisEventos(detailedEventsFagor);
+      registrosInsertados += detailedEventsFagor.length;
     }
 
     const reportesVehiculos = [];

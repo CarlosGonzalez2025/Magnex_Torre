@@ -32,6 +32,7 @@ import { DailyReports } from './components/reports/DailyReports';
 import { MonthlyReports } from './components/reports/MonthlyReports';
 import { ContractAnalysis } from './components/reports/ContractAnalysis';
 import { TelemetryProcessor } from './components/reports/TelemetryProcessor';
+import { RalentiReports } from './components/reports/RalentiReports';
 import { fetchFleetData, FleetResponse } from './services/fleetService';
 import { detectAlerts, saveAlertsToStorage, getAlertsFromStorage, getUnsavedAlerts, markAlertAsSent, markAlertAsSaved, cleanOldAlerts, processVehiclesForIdleDetection } from './services/alertService';
 import { saveAlertToDatabase, autoSaveAlert } from './services/databaseService';
@@ -80,7 +81,7 @@ export default function App() {
   const [showApiDetails, setShowApiDetails] = useState(false);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const isReportsTab = activeTab === 'daily-reports' || activeTab === 'monthly-reports' || activeTab === 'contract-analysis' || activeTab === 'telemetry-processor';
+  const isReportsTab = activeTab === 'daily-reports' || activeTab === 'monthly-reports' || activeTab === 'contract-analysis' || activeTab === 'telemetry-processor' || activeTab === 'ralenti-reports';
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -413,7 +414,8 @@ export default function App() {
                                               activeTab === 'daily-reports' ? 'Informes Diarios' :
                                               activeTab === 'monthly-reports' ? 'Informes Mensuales' :
                                               activeTab === 'contract-analysis' ? 'Análisis por Contrato' :
-                                              activeTab === 'telemetry-processor' ? 'Procesador Satelital Directo' : 'Magnex'}
+                                              activeTab === 'telemetry-processor' ? 'Procesador Satelital Directo' :
+                                              activeTab === 'ralenti-reports' ? 'Informe de Ralentí' : 'Magnex'}
                 </h2>
                 <div className="ml-4 opacity-80 scale-90 origin-left">
                   {getStatusBadge()}
@@ -626,6 +628,7 @@ export default function App() {
               {activeTab === 'monthly-reports' && <MonthlyReports />}
               {activeTab === 'contract-analysis' && <ContractAnalysis />}
               {activeTab === 'telemetry-processor' && <TelemetryProcessor />}
+              {activeTab === 'ralenti-reports' && <RalentiReports />}
             </div>
           </div>
         </main>
