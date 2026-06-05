@@ -141,7 +141,7 @@ export const RalentiReports: React.FC = () => {
       }
 
       // 2. Fetch vehicle summary statistics for the period
-      let repVehQuery = supabase.from('reportes_vehiculos')
+      let repVehQuery = supabase.from('ralentis_periodos')
         .select('vehiculo_id, horas_motor_encendido, horas_motor_ralenti, consumo_combustible, ralentis_excesivos')
         .gte('periodo_inicio', dateStart)
         .lte('periodo_fin', dateEnd);

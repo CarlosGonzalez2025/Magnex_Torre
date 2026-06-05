@@ -1911,6 +1911,7 @@ export async function importarDatosPlanosColtrack(
 ): Promise<ImportResult> {
   const erroresGlobales: ValidationError[] = [];
   let registrosInsertados = 0;
+  const detailedEvents: any[] = [];
   const mes = periodoInicio.slice(0, 7);
 
   const normName = (name: string) =>
@@ -2218,8 +2219,6 @@ export async function importarDatosPlanosColtrack(
       const detLines = detContent.split('\n').filter(l => l.trim().length > 0);
       const detSep = detectSeparator(detLines[0] ?? '');
       const detHeaders = detLines[0].split(detSep).map(h => h.trim());
-      
-      const detailedEvents: any[] = [];
 
       for (let i = 1; i < detLines.length; i++) {
         const cols = detLines[i].split(detSep);
@@ -2293,6 +2292,99 @@ export async function importarDatosPlanosColtrack(
       if (detailedEvents.length > 0) {
         await upsertRalentisEventos(detailedEvents);
         registrosInsertados += detailedEvents.length;
+      }
+    }
+
+    // Fallback: Si no hay archivo mensual consolidado de vehículos (fileFaltasVeh) pero hay archivos de ralentí
+    if (!fileFaltasVeh) {
+      if (fileRalenti) {
+        // Solo archivo de Ralentí Coltrack (Ralenti 1): escribir en ralentis_periodos
+        const ralContent = await fileRalenti.text();
+        const rLines = ralContent.split('\n').filter(l => l.trim().length > 0);
+        const rSep = detectSeparator(rLines[0] ?? '');
+        const rHeaders = rLines[0].split(rSep).map(h => h.trim());
+        const ralentisDirectos = [];
+
+        for (let i = 1; i < rLines.length; i++) {
+          const cols = rLines[i].split(rSep);
+          if (cols.length >= 5) {
+            const row: any = {};
+            const esEstructuraExpandida = cols.length >= 10 && /^[A-Z]{3}[0-9]{2,3}[A-Z0-9]?$/i.test(cols[1].trim());
+
+            if (esEstructuraExpandida) {
+              row['Unidad'] = cols[1];
+              row['Empresa'] = cols[2];
+              row['User group'] = cols[3];
+              row['Kms recorridos'] = cols[4];
+              row['Encendido/Apagado'] = cols[5];
+              row['(Ralentis excesivos'] = cols[6];
+              row['Horas motor encendido'] = cols[7];
+              row['Horas motor en ralenti'] = cols[8];
+              row['Consumo de combustible'] = cols[9];
+            } else {
+              rHeaders.forEach((h, idx) => {
+                row[h] = cols[idx];
+              });
+            }
+
+            const placaRaw = row['Unidad'] ?? '';
+            const placaNorm = normPlate(placaRaw);
+            if (!placaNorm) continue;
+
+            const foundVeh = await asegurarVehiculoEnMaestro(placaRaw, vehicPorPlaca, normPlate);
+            if (foundVeh) {
+              ralentisDirectos.push({
+                vehiculo_id:           foundVeh.id,
+                periodo_inicio:        periodoInicio,
+                periodo_fin:           periodoFin,
+                ralentis_excesivos:    num(row['(Ralentis excesivos'] ?? row['Ralentis excesivos'] ?? row['Ralentís excesivos']),
+                horas_motor_encendido: num(row['Horas motor encendido']),
+                horas_motor_ralenti:   num(row['Horas motor en ralenti'] ?? row['Horas motor en ralentí']),
+                kms_recorridos:        num(row['Kms recorridos']),
+                consumo_combustible:   num(row['Consumo de combustible']),
+                encendidos_apagados:   num(row['Encendido/Apagado']),
+              });
+            }
+          }
+        }
+
+        if (ralentisDirectos.length > 0) {
+          const { error } = await supabase
+            .from('ralentis_periodos')
+            .upsert(ralentisDirectos, { onConflict: 'vehiculo_id,periodo_inicio,periodo_fin' });
+          if (error) throw new Error(`Error en ralentis_periodos Coltrack: ${error.message}`);
+          registrosInsertados += ralentisDirectos.length;
+        }
+      } else if (detailedEvents && detailedEvents.length > 0) {
+        // Si no hay archivo consolidado Ralenti 1, construimos resúmenes desde los eventos detallados (Ralenti 2)
+        const statsMap = new Map();
+        detailedEvents.forEach(ev => {
+          const current = statsMap.get(ev.vehiculo_id) ?? { count: 0, horas: 0, combustible: 0 };
+          current.count++;
+          current.horas += ev.duracion_segundos / 3600;
+          current.combustible += ev.galones_consumidos;
+          statsMap.set(ev.vehiculo_id, current);
+        });
+
+        const ralentisDirectos = Array.from(statsMap.entries()).map(([vehId, stats]) => ({
+          vehiculo_id:           vehId,
+          periodo_inicio:        periodoInicio,
+          periodo_fin:           periodoFin,
+          ralentis_excesivos:    stats.count,
+          horas_motor_encendido: 0,
+          horas_motor_ralenti:   stats.horas,
+          kms_recorridos:        0,
+          consumo_combustible:   stats.combustible,
+          encendidos_apagados:   0,
+        }));
+
+        if (ralentisDirectos.length > 0) {
+          const { error } = await supabase
+            .from('ralentis_periodos')
+            .upsert(ralentisDirectos, { onConflict: 'vehiculo_id,periodo_inicio,periodo_fin' });
+          if (error) throw new Error(`Error en ralentis_periodos Coltrack de respaldo: ${error.message}`);
+          registrosInsertados += ralentisDirectos.length;
+        }
       }
     }
 
@@ -2431,9 +2523,11 @@ export async function importarDatosPlanosFagor(
 
         if (esKmCond) {
           fileKmCond = file;
-        } else if (esKmVeh) {
+        }
+        if (esKmVeh) {
           fileKmVeh = file;
-        } else if (esKmVehRespaldo) {
+        }
+        if (esKmVehRespaldo) {
           fileKmVehRespaldo = file;
         }
       }
