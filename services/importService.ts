@@ -1818,9 +1818,21 @@ async function upsertRalentisEventos(
   events: any[]
 ): Promise<void> {
   if (events.length === 0) return;
+
+  // Deduplicar eventos dentro del mismo lote para evitar el error "ON CONFLICT DO UPDATE command cannot affect row a second time"
+  const seen = new Set<string>();
+  const uniqueEvents: any[] = [];
+  for (const ev of events) {
+    const key = `${ev.placa}_${ev.fecha_inicio}_${ev.proveedor}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      uniqueEvents.push(ev);
+    }
+  }
+
   const chunkSize = 500;
-  for (let i = 0; i < events.length; i += chunkSize) {
-    const chunk = events.slice(i, i + chunkSize);
+  for (let i = 0; i < uniqueEvents.length; i += chunkSize) {
+    const chunk = uniqueEvents.slice(i, i + chunkSize);
     const { error } = await supabase
       .from('ralentis_eventos')
       .upsert(chunk, { onConflict: 'placa,fecha_inicio,proveedor', ignoreDuplicates: false });
