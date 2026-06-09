@@ -2009,6 +2009,43 @@ export async function importarDatosPlanosColtrack(
       vehicPorPlaca.set(normPlate(v.placa), v);
     });
 
+    // Parsear archivo de ralentí consolidado si existe para que esté disponible globalmente
+    const ralentiMap = new Map();
+    if (fileRalenti) {
+      const ralContent = await fileRalenti.text();
+      const rLines = ralContent.split('\n').filter(l => l.trim().length > 0);
+      const rSep = detectSeparator(rLines[0] ?? '');
+      const rHeaders = rLines[0].split(rSep).map(h => h.trim());
+      for (let i = 1; i < rLines.length; i++) {
+        const cols = rLines[i].split(rSep);
+        if (cols.length >= 5) {
+          const row: any = {};
+          const esEstructuraExpandida = cols.length >= 10 && /^[A-Z]{3}[0-9]{2,3}[A-Z0-9]?$/i.test(cols[1].trim());
+
+          if (esEstructuraExpandida) {
+            row['Unidad'] = cols[1]; // Placa
+            row['Empresa'] = cols[2];
+            row['User group'] = cols[3];
+            row['Kms recorridos'] = cols[4];
+            row['Encendido/Apagado'] = cols[5];
+            row['(Ralentis excesivos'] = cols[6];
+            row['Horas motor encendido'] = cols[7];
+            row['Horas motor en ralenti'] = cols[8];
+            row['Consumo de combustible'] = cols[9];
+          } else {
+            rHeaders.forEach((h, idx) => {
+              row[h] = cols[idx];
+            });
+          }
+
+          const placaNorm = normPlate(row['Unidad'] ?? '');
+          if (placaNorm) {
+            ralentiMap.set(placaNorm, row);
+          }
+        }
+      }
+    }
+
     // 2. Procesar Conductores Coltrack
     if (fileFaltasCond) {
       const driverMap = new Map();
@@ -2099,44 +2136,6 @@ export async function importarDatosPlanosColtrack(
 
     // 3. Procesar Vehículos Coltrack
     if (fileFaltasVeh) {
-      const ralentiMap = new Map();
-      if (fileRalenti) {
-        const ralContent = await fileRalenti.text();
-        const rLines = ralContent.split('\n').filter(l => l.trim().length > 0);
-        const rSep = detectSeparator(rLines[0] ?? '');
-        const rHeaders = rLines[0].split(rSep).map(h => h.trim());
-        for (let i = 1; i < rLines.length; i++) {
-          const cols = rLines[i].split(rSep);
-          if (cols.length >= 5) {
-            const row: any = {};
-            
-            // Detección dinámica de filas expandidas de Coltrack (10 o más columnas con placa en cols[1])
-            const esEstructuraExpandida = cols.length >= 10 && /^[A-Z]{3}[0-9]{2,3}[A-Z0-9]?$/i.test(cols[1].trim());
-
-            if (esEstructuraExpandida) {
-              row['Unidad'] = cols[1]; // Placa
-              row['Empresa'] = cols[2];
-              row['User group'] = cols[3];
-              row['Kms recorridos'] = cols[4];
-              row['Encendido/Apagado'] = cols[5];
-              row['(Ralentis excesivos'] = cols[6];
-              row['Horas motor encendido'] = cols[7];
-              row['Horas motor en ralenti'] = cols[8];
-              row['Consumo de combustible'] = cols[9];
-            } else {
-              // Estructura estándar de 9 columnas
-              rHeaders.forEach((h, idx) => {
-                row[h] = cols[idx];
-              });
-            }
-
-            const placaNorm = normPlate(row['Unidad'] ?? '');
-            if (placaNorm) {
-              ralentiMap.set(placaNorm, row);
-            }
-          }
-        }
-      }
 
       const vehContent = await fileFaltasVeh.text();
       const vLines = vehContent.split('\n').filter(l => l.trim().length > 0);
@@ -2220,6 +2219,30 @@ export async function importarDatosPlanosColtrack(
       const detSep = detectSeparator(detLines[0] ?? '');
       const detHeaders = detLines[0].split(detSep).map(h => h.trim());
 
+      // Consultar de la DB el resumen de ralentís del período para distribuir las horas correctamente
+      const dbPeriodoMap = new Map<string, number>();
+      try {
+        const { data: dbPeriodos } = await supabase
+          .from('ralentis_periodos')
+          .select('vehiculo_id, horas_motor_ralenti, vehiculos(placa)')
+          .eq('periodo_inicio', periodoInicio)
+          .eq('periodo_fin', periodoFin);
+
+        if (dbPeriodos) {
+          dbPeriodos.forEach((p: any) => {
+            const placaNorm = normPlate(p.vehiculos?.placa ?? '');
+            if (placaNorm) {
+              dbPeriodoMap.set(placaNorm, Number(p.horas_motor_ralenti || 0));
+            }
+          });
+        }
+      } catch (err) {
+        console.error('Error consultando ralentis_periodos de la base de datos:', err);
+      }
+
+      const parsedRows: any[] = [];
+      const eventCountPerVehicle = new Map<string, number>();
+
       for (let i = 1; i < detLines.length; i++) {
         const cols = detLines[i].split(detSep);
         if (cols.length >= 5) {
@@ -2236,57 +2259,83 @@ export async function importarDatosPlanosColtrack(
           const fechaInicioISO = excelDateTimeToISO(rawStart);
           if (!fechaInicioISO) continue;
 
-          // Metros es la duración en segundos en reportes de ralentí
-          const duracionSegundos = Math.max(0, parseInt(row['Metros'], 10) || 0);
-
-          // Calcular fecha fin
-          let fechaFinISO: string | null = null;
-          try {
-            const startDate = new Date(fechaInicioISO);
-            if (!isNaN(startDate.getTime())) {
-              const endDate = new Date(startDate.getTime() + duracionSegundos * 1000);
-              fechaFinISO = endDate.toISOString();
-            }
-          } catch (e) {
-            // ignore
-          }
-
-          // Resolver vehículo
-          const foundVeh = await asegurarVehiculoEnMaestro(placaRaw, vehicPorPlaca, normPlate);
-          if (!foundVeh) continue;
-
-          // Resolver conductor
-          const conductorNombre = String(row['Conductor'] ?? '').trim();
-          let conductorId = null;
-          if (!esConductorNoIdentificado(conductorNombre)) {
-            const foundCond = await asegurarConductorEnMaestro(
-              conductorNombre,
-              undefined,
-              undefined,
-              conductPorNombreNorm,
-              conductPorCedula,
-              normName
-            );
-            conductorId = foundCond?.id ?? null;
-          }
-
-          detailedEvents.push({
-            vehiculo_id: foundVeh.id,
-            conductor_id: conductorId,
-            placa: placaNorm,
-            conductor_nombre: conductorNombre || 'NO REGISTRA',
-            fecha_inicio: fechaInicioISO,
-            fecha_fin: fechaFinISO,
-            duracion_segundos: duracionSegundos,
-            galones_consumidos: 0,
-            ubicacion: String(row['Ubicacion'] || row['Lugar'] || '').trim(),
-            latitud: safeCoord(row['Lat']),
-            longitud: safeCoord(row['Lon']),
-            proveedor: 'COLTRACK',
-            periodo_inicio: periodoInicio,
-            periodo_fin: periodoFin
+          parsedRows.push({
+            row,
+            placaRaw,
+            placaNorm,
+            fechaInicioISO
           });
+
+          eventCountPerVehicle.set(placaNorm, (eventCountPerVehicle.get(placaNorm) || 0) + 1);
         }
+      }
+
+      for (const item of parsedRows) {
+        const { row, placaRaw, placaNorm, fechaInicioISO } = item;
+
+        // Calcular la duración distribuida para este vehículo
+        let duracionSegundos = 300; // default 5 minutos
+        const ralSummary = ralentiMap.get(placaNorm);
+        let totalHours = 0;
+        
+        if (ralSummary) {
+          totalHours = num(ralSummary['Horas motor en ralenti'] ?? ralSummary['Horas motor en ralentí']);
+        } else {
+          totalHours = dbPeriodoMap.get(placaNorm) || 0;
+        }
+
+        const totalEvents = eventCountPerVehicle.get(placaNorm) ?? 1;
+        if (totalHours > 0 && totalEvents > 0) {
+          duracionSegundos = Math.round((totalHours * 3600) / totalEvents);
+        }
+
+        // Calcular fecha fin
+        let fechaFinISO: string | null = null;
+        try {
+          const startDate = new Date(fechaInicioISO);
+          if (!isNaN(startDate.getTime())) {
+            const endDate = new Date(startDate.getTime() + duracionSegundos * 1000);
+            fechaFinISO = endDate.toISOString();
+          }
+        } catch (e) {
+          // ignore
+        }
+
+        // Resolver vehículo
+        const foundVeh = await asegurarVehiculoEnMaestro(placaRaw, vehicPorPlaca, normPlate);
+        if (!foundVeh) continue;
+
+        // Resolver conductor
+        const conductorNombre = String(row['Conductor'] ?? '').trim();
+        let conductorId = null;
+        if (!esConductorNoIdentificado(conductorNombre)) {
+          const foundCond = await asegurarConductorEnMaestro(
+            conductorNombre,
+            undefined,
+            undefined,
+            conductPorNombreNorm,
+            conductPorCedula,
+            normName
+          );
+          conductorId = foundCond?.id ?? null;
+        }
+
+        detailedEvents.push({
+          vehiculo_id: foundVeh.id,
+          conductor_id: conductorId,
+          placa: placaNorm,
+          conductor_nombre: conductorNombre || 'NO REGISTRA',
+          fecha_inicio: fechaInicioISO,
+          fecha_fin: fechaFinISO,
+          duracion_segundos: duracionSegundos,
+          galones_consumidos: 0,
+          ubicacion: String(row['Ubicacion'] || row['Lugar'] || '').trim(),
+          latitud: safeCoord(row['Lat']),
+          longitud: safeCoord(row['Lon']),
+          proveedor: 'COLTRACK',
+          periodo_inicio: periodoInicio,
+          periodo_fin: periodoFin
+        });
       }
 
       if (detailedEvents.length > 0) {

@@ -174,6 +174,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
             {/* Sidebar Container */}
             <aside className={`
+        no-print
         fixed lg:static inset-y-0 left-0 z-50
         w-64 bg-white dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700
         transform transition-transform duration-300 ease-in-out
