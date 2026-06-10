@@ -671,8 +671,10 @@ async function main() {
           km_recorridos_ralenti: num(ralenti['Kms recorridos']),
           horas_motor_encendido: num(ralenti['Horas motor encendido']),
           horas_motor_ralenti: num(ralenti['Horas motor en ralenti']),
-          consumo_combustible: num(ralenti['Consumo de combustible']),
-          ralentis_excesivos: num(ralenti['(Ralentis excesivos']),
+          consumo_combustible: num(ralenti['Horas motor encendido']) > 0
+            ? num(ralenti['Consumo de combustible']) * (num(ralenti['Horas motor en ralenti']) / num(ralenti['Horas motor encendido']))
+            : 0,
+          ralentis_excesivos: num(ralenti['(Ralentis excesivos'] ?? ralenti['Ralentis excesivos'] ?? ralenti['Ralentís excesivos']),
           proyecto: String(foundVeh.cliente ?? ''),
           mes: MES,
           fecha_reporte: new Date().toISOString().slice(0, 10),

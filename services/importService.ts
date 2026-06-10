@@ -2184,7 +2184,9 @@ export async function importarDatosPlanosColtrack(
               km_recorridos_ralenti: num(ralenti['Kms recorridos'] ?? ralenti['Kms recorridos']),
               horas_motor_encendido: num(ralenti['Horas motor encendido'] ?? ralenti['Horas motor encendido']),
               horas_motor_ralenti: num(ralenti['Horas motor en ralenti'] ?? ralenti['Horas motor en ralentí']),
-              consumo_combustible: num(ralenti['Consumo de combustible'] ?? ralenti['Consumo de combustible']),
+              consumo_combustible: num(ralenti['Horas motor encendido']) > 0
+                ? num(ralenti['Consumo de combustible']) * (num(ralenti['Horas motor en ralenti'] ?? ralenti['Horas motor en ralentí']) / num(ralenti['Horas motor encendido']))
+                : 0,
               ralentis_excesivos: num(ralenti['(Ralentis excesivos'] ?? ralenti['Ralentis excesivos'] ?? ralenti['Ralentís excesivos']),
               proyecto: String(foundVeh.cliente ?? ''),
               mes,
@@ -2390,7 +2392,9 @@ export async function importarDatosPlanosColtrack(
                 horas_motor_encendido: num(row['Horas motor encendido']),
                 horas_motor_ralenti:   num(row['Horas motor en ralenti'] ?? row['Horas motor en ralentí']),
                 kms_recorridos:        num(row['Kms recorridos']),
-                consumo_combustible:   num(row['Consumo de combustible']),
+                consumo_combustible:   num(row['Horas motor encendido']) > 0
+                  ? num(row['Consumo de combustible']) * (num(row['Horas motor en ralenti'] ?? row['Horas motor en ralentí']) / num(row['Horas motor encendido']))
+                  : 0,
                 encendidos_apagados:   num(row['Encendido/Apagado']),
               });
             }
@@ -3033,7 +3037,7 @@ export async function importarDatosPlanosFagor(
                 : num(parseTimeStringToHours(row['Ralentí Tiempo Total'])),
               consumo_combustible: ralentiStats && ralentiStatsMap.size > 0
                 ? (!yaRalentiAsignado ? ralentiStats.combustible : 0)
-                : num(row['Galones consumidos']),
+                : num(row['Ralentí Galones Total']),
               ralentis_excesivos: ralentiStats && ralentiStatsMap.size > 0
                 ? (!yaRalentiAsignado ? ralentiStats.count : 0)
                 : 0,

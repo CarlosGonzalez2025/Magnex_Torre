@@ -133,7 +133,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ]
     } : null;
 
-    const allGroups = adminGroup ? [...menuGroups, adminGroup] : menuGroups;
+    // Filter items by allowedModules (null = full access)
+    const isModuleAllowed = (moduleId: string): boolean => {
+        if (!user?.allowedModules) return true;
+        return user.allowedModules.includes(moduleId);
+    };
+
+    const baseGroups = adminGroup ? [...menuGroups, adminGroup] : menuGroups;
+    const allGroups = baseGroups
+        .map(group => ({ ...group, items: group.items.filter(item => isModuleAllowed(item.id)) }))
+        .filter(group => group.items.length > 0);
 
     const activeGroupId = useMemo(() => {
         return allGroups.find(group => group.items.some(item => item.id === activeTab))?.id;
@@ -238,6 +247,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                     {isExpanded && (
                                         <div className="ml-2 space-y-1">
                                             {group.items.map((item) => {
+                                                const typedItem = item as MenuItem;
                                                 const ItemIcon = item.icon;
                                                 const isActive = activeTab === item.id;
 
@@ -257,9 +267,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                                             <ItemIcon className={`w-4 h-4 ${isActive ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400 group-hover:text-slate-600 dark:text-slate-500 dark:group-hover:text-slate-300'}`} />
                                                             <span className="text-sm">{item.label}</span>
                                                         </div>
-                                                        {item.badge && item.badge > 0 && (
+                                                        {typedItem.badge && typedItem.badge > 0 && (
                                                             <span className="bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full shadow-sm">
-                                                                {item.badge}
+                                                                {typedItem.badge}
                                                             </span>
                                                         )}
                                                     </button>

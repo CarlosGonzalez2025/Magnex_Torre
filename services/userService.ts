@@ -59,6 +59,7 @@ class UserService {
         email: profile.email,
         name: profile.name,
         role: profile.role as UserRole,
+        allowedModules: null,
         createdAt: profile.created_at,
         lastLogin: profile.last_login || undefined,
       }));
@@ -100,6 +101,7 @@ class UserService {
         email: data.email,
         name: data.name,
         role: data.role as UserRole,
+        allowedModules: null,
         createdAt: data.created_at,
         lastLogin: data.last_login || undefined,
       };
@@ -425,6 +427,55 @@ class UserService {
         success: false,
         error: error.message || 'Error inesperado'
       };
+    }
+  }
+
+  /**
+   * Obtiene los módulos permitidos para un usuario.
+   * Retorna null si el usuario tiene acceso total (admin/superadmin),
+   * o un array de module IDs si tiene permisos explícitos.
+   */
+  async getModulePermissions(userId: string): Promise<ServiceResult<string[]>> {
+    try {
+      const { data, error } = await supabase
+        .from('user_module_permissions')
+        .select('module_id')
+        .eq('user_id', userId);
+
+      if (error) {
+        return { success: false, error: 'Error al obtener permisos: ' + error.message };
+      }
+
+      return { success: true, data: (data || []).map(r => r.module_id) };
+    } catch (error: any) {
+      return { success: false, error: error.message || 'Error inesperado' };
+    }
+  }
+
+  /**
+   * Reemplaza todos los permisos de módulo de un usuario.
+   * Para admins/superadmin no se deben establecer permisos (acceso total implícito).
+   */
+  async setModulePermissions(
+    userId: string,
+    modules: string[],
+    grantedBy: string
+  ): Promise<ServiceResult> {
+    try {
+      const { error } = await supabase.rpc('set_user_module_permissions', {
+        p_user_id: userId,
+        p_modules: modules,
+        p_granted_by: grantedBy,
+      });
+
+      if (error) {
+        return { success: false, error: 'Error al guardar permisos: ' + error.message };
+      }
+
+      await this.logAudit(grantedBy, 'MODULE_PERMISSIONS_UPDATED', 'user', userId, { modules });
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error.message || 'Error inesperado' };
     }
   }
 

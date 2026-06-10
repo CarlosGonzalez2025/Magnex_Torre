@@ -33,6 +33,7 @@ const COLORS = {
   verdeBg: '#dcfce7',
   amarillo: '#d97706',
   amarilloBg: '#fef3c7',
+  naranja: '#ea580c',
   rojo: '#dc2626',
   rojoBg: '#fee2e2',
   negro: '#0f172a',
@@ -3215,6 +3216,19 @@ function Page1ImpactPanel({
   );
 }
 
+const DRIVER_BAR_GRADIENT = [
+  '#b91c1c', // 1 - rojo intenso
+  '#dc2626', // 2 - rojo
+  '#ea580c', // 3 - naranja-rojo
+  '#f97316', // 4 - naranja
+  '#fb923c', // 5 - naranja suave
+  '#f59e0b', // 6 - ámbar
+  '#d97706', // 7 - ámbar oscuro
+  '#ca8a04', // 8 - ámbar-amarillo
+  '#eab308', // 9 - amarillo
+  '#facc15', // 10 - amarillo claro
+];
+
 function Page2DriverBarChart({
   title,
   data,
@@ -3228,23 +3242,17 @@ function Page2DriverBarChart({
   return (
     <View style={{ flex: 1, backgroundColor: '#ffffff', borderWidth: 0.5, borderColor: '#cbd5e1', borderStyle: 'solid', borderRadius: 4, padding: 8 }} wrap={false}>
       <Text style={{ fontSize: 8.5, fontWeight: 'bold', color: COLORS.azul, marginBottom: 5, textTransform: 'uppercase' }}>{title}</Text>
-      
+
       {data.length === 0 ? (
         <Text style={{ fontSize: 8, color: COLORS.gris, textAlign: 'center', marginVertical: 20 }}>No se registran datos en este período</Text>
       ) : (
         data.slice(0, 10).map((d, idx) => {
           const val = type === 'total' ? d.totalTime : d.maxEvent;
           const barPct = (val / maxVal) * 100;
-          
-          let barColor = COLORS.amarillo;
-          if (idx < 2) {
-            barColor = COLORS.rojo;
-          } else if (idx < 5) {
-            barColor = COLORS.naranja;
-          }
-          
+          const barColor = DRIVER_BAR_GRADIENT[idx] ?? DRIVER_BAR_GRADIENT[9];
+
           return (
-            <View key={idx} style={{ marginBottom: 4.5 }}>
+            <View key={idx} style={{ marginBottom: 4 }}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 1.5, alignItems: 'flex-start' }}>
                 <Text style={{ fontSize: 6.8, fontWeight: 'bold', color: COLORS.negro, flex: 1, marginRight: 5 }}>
                   {idx + 1}. {d.name}
@@ -3253,7 +3261,7 @@ function Page2DriverBarChart({
                   {fmtSecs(val)}
                 </Text>
               </View>
-              <View style={{ height: 6, backgroundColor: '#f1f5f9', borderRadius: 3, overflow: 'hidden' }}>
+              <View style={{ height: 8, backgroundColor: '#f1f5f9', borderRadius: 3, overflow: 'hidden' }}>
                 <View style={{ width: `${Math.min(100, Math.max(1, barPct))}%`, height: '100%', backgroundColor: barColor }} />
               </View>
             </View>
@@ -3285,7 +3293,7 @@ function Page2InterpretationBox({ topByTime, topByMax }: { topByTime: any[]; top
 }
 
 function CO2TrendSVGChart({ trendData }: { trendData: Array<{ date: string; value: number }> }) {
-  if (!trendData || trendData.length === 0) {
+  if (!trendData || trendData.length < 2) {
     return (
       <View style={{ height: 110, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f8fafc', borderWidth: 0.5, borderColor: '#cbd5e1', borderStyle: 'solid', borderRadius: 4 }} wrap={false}>
         <Text style={{ fontSize: 8.5, color: COLORS.gris }}>Sin datos de tendencia para graficar</Text>
@@ -3293,64 +3301,193 @@ function CO2TrendSVGChart({ trendData }: { trendData: Array<{ date: string; valu
     );
   }
 
-  const chartWidth = 550;
-  const chartHeight = 110;
-  const padding = 15;
+  // trendData.value is already cumulative CO₂ in kg — do NOT re-accumulate
+  const n = trendData.length;
+  const values = trendData.map(d => d.value);
 
-  let cumulativeValue = 0;
-  const data = trendData.map(d => {
-    cumulativeValue += d.value;
-    return { date: d.date, value: cumulativeValue };
-  });
+  // ── Linear regression forecast ──────────────────────────────────────────────
+  const meanX = (n - 1) / 2;
+  const meanY = values.reduce((s, v) => s + v, 0) / n;
+  const denom = values.reduce((s, _, i) => s + Math.pow(i - meanX, 2), 0);
+  const slope = denom > 0
+    ? values.reduce((s, v, i) => s + (i - meanX) * (v - meanY), 0) / denom
+    : 0;
+  const intercept = meanY - slope * meanX;
 
-  const values = data.map(d => d.value);
-  const minVal = 0;
-  const maxVal = Math.max(...values, 10);
+  const FORECAST_STEPS = 3;
+  const forecastVals = Array.from({ length: FORECAST_STEPS }, (_, k) =>
+    Math.max(values[n - 1], intercept + slope * (n + k))
+  );
 
-  const points = data.map((d, index) => {
-    const x = padding + (index / Math.max(1, data.length - 1)) * (chartWidth - padding * 2);
-    const y = chartHeight - padding - (d.value / maxVal) * (chartHeight - padding * 2);
-    return { x, y, label: d.date, val: d.value };
-  });
+  const allVals = [...values, ...forecastVals];
+  const chartMax = Math.max(...allVals, 1);
+  const totalPts = n + FORECAST_STEPS;
 
-  let pathD = `M ${points[0].x} ${points[0].y}`;
-  for (let i = 1; i < points.length; i++) {
-    pathD += ` L ${points[i].x} ${points[i].y}`;
-  }
+  // ── SVG dimensions ──────────────────────────────────────────────────────────
+  const SVG_W = 470;
+  const SVG_H = 108;
+  const PAD_L = 4;
+  const PAD_R = 10;
+  const PAD_T = 14;
+  const PAD_B = 8;
+  const YAXIS_W = 38;
 
-  const areaD = `${pathD} L ${points[points.length - 1].x} ${chartHeight - padding} L ${points[0].x} ${chartHeight - padding} Z`;
+  const xOf = (i: number) => PAD_L + (i / (totalPts - 1)) * (SVG_W - PAD_L - PAD_R);
+  const yOf = (v: number) => PAD_T + (1 - v / chartMax) * (SVG_H - PAD_T - PAD_B);
+
+  const pts = trendData.map((d, i) => ({ x: xOf(i), y: yOf(d.value), val: d.value, label: d.date }));
+  const fPts = forecastVals.map((v, k) => ({ x: xOf(n + k), y: yOf(v), val: v }));
+
+  // Paths
+  const mainD = pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+  const areaD = `${mainD} L ${pts[n - 1].x.toFixed(1)} ${(SVG_H - PAD_B).toFixed(1)} L ${pts[0].x.toFixed(1)} ${(SVG_H - PAD_B).toFixed(1)} Z`;
+  const forecastD = [`M ${pts[n - 1].x.toFixed(1)} ${pts[n - 1].y.toFixed(1)}`, ...fPts.map(fp => `L ${fp.x.toFixed(1)} ${fp.y.toFixed(1)}`)].join(' ');
+  const regressionD = (() => {
+    const rx0 = PAD_L;
+    const rxN = xOf(totalPts - 1);
+    const ry0 = yOf(Math.max(0, intercept + slope * 0));
+    const ryN = yOf(Math.max(0, intercept + slope * (totalPts - 1)));
+    return `M ${rx0.toFixed(1)} ${ry0.toFixed(1)} L ${rxN.toFixed(1)} ${ryN.toFixed(1)}`;
+  })();
+
+  // Y-axis ticks (5 levels)
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map(pct => ({
+    val: Math.round(chartMax * pct),
+    y: yOf(chartMax * pct),
+  }));
+
+  // X-axis label indices: first, every ~3rd, last historical, all forecast
+  const xLabelIdxs: number[] = [0];
+  const step = Math.max(1, Math.floor(n / 4));
+  for (let i = step; i < n - 1; i += step) xLabelIdxs.push(i);
+  xLabelIdxs.push(n - 1);
+
+  // Stats
+  const firstVal = values[0];
+  const lastVal = values[n - 1];
+  const dailyAvg = n > 1 ? (lastVal - firstVal) / (n - 1) : lastVal;
+  const projFinal = forecastVals[FORECAST_STEPS - 1];
+  const fmtKg = (v: number) => v >= 1000 ? `${(v / 1000).toFixed(1)}k kg` : `${Math.round(v)} kg`;
 
   return (
-    <View style={{ alignItems: 'center', borderWidth: 0.5, borderColor: '#cbd5e1', borderStyle: 'solid', borderRadius: 4, padding: 8, backgroundColor: '#ffffff', marginBottom: 6 }} wrap={false}>
-      <Text style={{ fontSize: 8.5, fontWeight: 'bold', color: COLORS.azul, marginBottom: 5, alignSelf: 'flex-start', textTransform: 'uppercase' }}>
-        Tendencia de Emisión de CO₂ Acumulado (kg)
-      </Text>
-      <Svg width={chartWidth} height={chartHeight} viewBox={`0 0 ${chartWidth} ${chartHeight}`}>
-        <Line x1={padding} y1={padding} x2={chartWidth - padding} y2={padding} stroke="#f1f5f9" strokeWidth={1} />
-        <Line x1={padding} y1={chartHeight / 2} x2={chartWidth - padding} y2={chartHeight / 2} stroke="#f1f5f9" strokeWidth={1} />
-        <Line x1={padding} y1={chartHeight - padding} x2={chartWidth - padding} y2={chartHeight - padding} stroke="#cbd5e1" strokeWidth={1.5} />
+    <View style={{ borderWidth: 0.5, borderColor: '#cbd5e1', borderStyle: 'solid', borderRadius: 4, padding: 8, backgroundColor: '#ffffff', marginBottom: 6 }} wrap={false}>
 
-        <Path d={areaD} fill="#dbeafe" opacity={0.6} />
-        <Path d={pathD} fill="none" stroke={COLORS.azul} strokeWidth={2} />
-
-        {points.map((p, idx) => (
-          <Circle key={idx} cx={p.x} cy={p.y} r={3.5} fill={COLORS.azul} stroke="#ffffff" strokeWidth={1} />
-        ))}
-      </Svg>
-      
-      {/* Label row using regular react-pdf Text components */}
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', width: chartWidth - padding * 2, marginTop: 4 }}>
-        <Text style={{ fontSize: 6.8, color: COLORS.gris, fontWeight: 'bold' }}>
-          {points[0].label}: {points[0].val.toFixed(0)} kg
-        </Text>
-        {points.length > 2 && (
-          <Text style={{ fontSize: 6.8, color: COLORS.gris, fontWeight: 'bold' }}>
-            {points[Math.floor(points.length / 2)].label}: {points[Math.floor(points.length / 2)].val.toFixed(0)} kg
+      {/* ── Header ── */}
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+        <View>
+          <Text style={{ fontSize: 8.5, fontWeight: 'bold', color: COLORS.azul, textTransform: 'uppercase' }}>
+            Tendencia de Emisión de CO₂ Acumulado (kg)
           </Text>
-        )}
-        <Text style={{ fontSize: 6.8, color: COLORS.gris, fontWeight: 'bold' }}>
-          {points[points.length - 1].label}: {points[points.length - 1].val.toFixed(0)} kg
-        </Text>
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: 2 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+              <View style={{ width: 12, height: 2, backgroundColor: COLORS.azul }} />
+              <Text style={{ fontSize: 5.8, color: COLORS.gris }}>Histórico acumulado</Text>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+              <View style={{ width: 12, height: 1.5, backgroundColor: '#60a5fa' }} />
+              <Text style={{ fontSize: 5.8, color: COLORS.gris }}>Proyección regresión lineal</Text>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+              <View style={{ width: 12, height: 0.8, backgroundColor: '#94a3b8' }} />
+              <Text style={{ fontSize: 5.8, color: COLORS.gris }}>Recta de tendencia</Text>
+            </View>
+          </View>
+        </View>
+        <View style={{ backgroundColor: '#eff6ff', borderRadius: 3, padding: '3 6', borderWidth: 0.5, borderColor: '#bfdbfe', borderStyle: 'solid', alignItems: 'center' }}>
+          <Text style={{ fontSize: 5.5, color: '#3b82f6', fontWeight: 'bold', textTransform: 'uppercase' }}>Proyección Al Cierre</Text>
+          <Text style={{ fontSize: 9, fontWeight: 'bold', color: COLORS.azul }}>{Math.round(projFinal).toLocaleString('es-CO')} kg</Text>
+          <Text style={{ fontSize: 5, color: COLORS.gris }}>+{Math.round(projFinal - lastVal).toLocaleString('es-CO')} kg vs hoy</Text>
+        </View>
+      </View>
+
+      {/* ── Y-axis + SVG ── */}
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+        {/* Y-axis label column */}
+        <View style={{ width: YAXIS_W, height: SVG_H, justifyContent: 'space-between', alignItems: 'flex-end', paddingRight: 3, paddingTop: PAD_T - 5, paddingBottom: PAD_B - 2 }}>
+          {yTicks.slice().reverse().map((t, i) => (
+            <Text key={i} style={{ fontSize: 5.5, color: COLORS.gris, lineHeight: 1 }}>
+              {t.val >= 10000 ? `${(t.val / 1000).toFixed(0)}k` : t.val >= 1000 ? `${(t.val / 1000).toFixed(1)}k` : String(t.val)}
+            </Text>
+          ))}
+        </View>
+
+        {/* SVG chart */}
+        <Svg width={SVG_W} height={SVG_H} viewBox={`0 0 ${SVG_W} ${SVG_H}`}>
+          {/* Grid lines */}
+          {yTicks.slice(1, -1).map((t, i) => (
+            <Line key={`g${i}`} x1={PAD_L} y1={t.y} x2={SVG_W - PAD_R} y2={t.y} stroke="#f1f5f9" strokeWidth={0.7} />
+          ))}
+          {/* Top grid */}
+          <Line x1={PAD_L} y1={PAD_T} x2={SVG_W - PAD_R} y2={PAD_T} stroke="#f1f5f9" strokeWidth={0.7} />
+          {/* Baseline */}
+          <Line x1={PAD_L} y1={SVG_H - PAD_B} x2={SVG_W - PAD_R} y2={SVG_H - PAD_B} stroke="#cbd5e1" strokeWidth={1} />
+          {/* Vertical separator historical/forecast */}
+          <Line x1={pts[n - 1].x} y1={PAD_T} x2={pts[n - 1].x} y2={SVG_H - PAD_B} stroke="#dbeafe" strokeWidth={1} strokeDasharray="3 2" />
+
+          {/* Regression line (full span, subtle) */}
+          <Path d={regressionD} fill="none" stroke="#94a3b8" strokeWidth={0.8} strokeDasharray="3 3" />
+
+          {/* Area fill */}
+          <Path d={areaD} fill="#dbeafe" opacity={0.45} />
+
+          {/* Forecast area */}
+          <Path
+            d={`M ${pts[n - 1].x.toFixed(1)} ${pts[n - 1].y.toFixed(1)} ${fPts.map(fp => `L ${fp.x.toFixed(1)} ${fp.y.toFixed(1)}`).join(' ')} L ${fPts[FORECAST_STEPS - 1].x.toFixed(1)} ${(SVG_H - PAD_B).toFixed(1)} L ${pts[n - 1].x.toFixed(1)} ${(SVG_H - PAD_B).toFixed(1)} Z`}
+            fill="#dbeafe"
+            opacity={0.2}
+          />
+
+          {/* Main historical line */}
+          <Path d={mainD} fill="none" stroke={COLORS.azul} strokeWidth={2} />
+
+          {/* Forecast dashed line */}
+          <Path d={forecastD} fill="none" stroke="#3b82f6" strokeWidth={1.5} strokeDasharray="4 2" />
+
+          {/* Historical points */}
+          {pts.map((p, i) => (
+            <Circle key={`h${i}`} cx={p.x} cy={p.y} r={i === n - 1 ? 3.5 : 2.5} fill={COLORS.azul} stroke="#ffffff" strokeWidth={0.8} />
+          ))}
+
+          {/* Forecast points */}
+          {fPts.map((fp, i) => (
+            <Circle key={`f${i}`} cx={fp.x} cy={fp.y} r={2.5} fill="#60a5fa" stroke="#ffffff" strokeWidth={0.8} />
+          ))}
+        </Svg>
+      </View>
+
+      {/* ── X-axis labels with values (key points) ── */}
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginLeft: YAXIS_W + PAD_L, marginRight: PAD_R, marginTop: 3 }}>
+        {xLabelIdxs.map((idx, i) => (
+          <View key={i} style={{ alignItems: 'center' }}>
+            <Text style={{ fontSize: 5.5, color: COLORS.gris, textAlign: 'center' }}>{trendData[idx].date}</Text>
+            <Text style={{ fontSize: 6, fontWeight: 'bold', color: COLORS.azul, textAlign: 'center' }}>
+              {fmtKg(values[idx])}
+            </Text>
+          </View>
+        ))}
+        {/* Forecast last point */}
+        <View style={{ alignItems: 'center' }}>
+          <Text style={{ fontSize: 5.5, color: '#3b82f6', textAlign: 'center' }}>+{FORECAST_STEPS}d proy.</Text>
+          <Text style={{ fontSize: 6, fontWeight: 'bold', color: '#2563eb', textAlign: 'center' }}>
+            {fmtKg(projFinal)}
+          </Text>
+        </View>
+      </View>
+
+      {/* ── Stats summary bar ── */}
+      <View style={{ flexDirection: 'row', marginTop: 5, backgroundColor: '#f8fafc', borderRadius: 3, borderWidth: 0.5, borderColor: '#e2e8f0', borderStyle: 'solid' }}>
+        {([
+          { label: 'INICIO PERÍODO', val: fmtKg(firstVal), color: COLORS.negro },
+          { label: 'TOTAL ACUMULADO', val: fmtKg(lastVal), color: COLORS.rojo },
+          { label: 'PROMEDIO DIARIO', val: `${Math.round(dailyAvg).toLocaleString('es-CO')} kg/d`, color: COLORS.gris },
+          { label: 'CRECIMIENTO', val: `+${fmtKg(lastVal - firstVal)}`, color: COLORS.naranja },
+          { label: 'PROYECCIÓN CIERRE', val: fmtKg(projFinal), color: '#2563eb' },
+        ] as Array<{ label: string; val: string; color: string }>).map((item, i, arr) => (
+          <View key={i} style={{ flex: 1, alignItems: 'center', padding: '3 2', borderRightWidth: i < arr.length - 1 ? 0.5 : 0, borderRightColor: '#e2e8f0', borderStyle: 'solid' }}>
+            <Text style={{ fontSize: 5, color: COLORS.gris, textTransform: 'uppercase', textAlign: 'center' }}>{item.label}</Text>
+            <Text style={{ fontSize: 6.5, fontWeight: 'bold', color: item.color, textAlign: 'center', marginTop: 1 }}>{item.val}</Text>
+          </View>
+        ))}
       </View>
     </View>
   );
@@ -3474,10 +3611,10 @@ function ProportionsCharts({ data }: { data: RalentiPDFData }) {
             <View>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 2 }}>
                 <Text style={{ fontSize: 6.8, color: COLORS.gris, fontWeight: 'bold', textTransform: 'uppercase' }}>Ralentí Tiempo Total</Text>
-                <Text style={{ fontSize: 7.5, fontWeight: 'bold', color: COLORS.negro }}>{totalHorasMotorRalenti.toFixed(1)} h</Text>
+                <Text style={{ fontSize: 7.5, fontWeight: 'bold', color: '#f97316' }}>{totalHorasMotorRalenti.toFixed(1)} h</Text>
               </View>
               <View style={{ height: 14, backgroundColor: '#f1f5f9', borderRadius: 3, overflow: 'hidden' }}>
-                <View style={{ width: '100%', height: '100%', backgroundColor: '#3b82f6' }} />
+                <View style={{ width: '100%', height: '100%', backgroundColor: '#f97316' }} />
               </View>
             </View>
 
@@ -3485,10 +3622,10 @@ function ProportionsCharts({ data }: { data: RalentiPDFData }) {
             <View>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 2 }}>
                 <Text style={{ fontSize: 6.8, color: COLORS.gris, fontWeight: 'bold', textTransform: 'uppercase' }}>Total T. Ralentí &gt; 5 min</Text>
-                <Text style={{ fontSize: 7.5, fontWeight: 'bold', color: '#f97316' }}>{horasRalentiMas5Min.toFixed(1)} h ({pctRalentiMas5MinDeRalenti.toFixed(0)}%)</Text>
+                <Text style={{ fontSize: 7.5, fontWeight: 'bold', color: '#c2410c' }}>{horasRalentiMas5Min.toFixed(1)} h ({pctRalentiMas5MinDeRalenti.toFixed(0)}%)</Text>
               </View>
               <View style={{ height: 14, backgroundColor: '#f1f5f9', borderRadius: 3, overflow: 'hidden' }}>
-                <View style={{ width: `${pctRalentiMas5MinDeRalenti}%`, height: '100%', backgroundColor: '#f97316' }} />
+                <View style={{ width: `${pctRalentiMas5MinDeRalenti}%`, height: '100%', backgroundColor: '#c2410c' }} />
               </View>
             </View>
           </View>
@@ -3668,7 +3805,7 @@ function DetailedImpactTable({ data, daysInPeriod }: { data: RalentiPDFData; day
 
         {/* Row 1 */}
         <View style={[base.tableRow, { paddingVertical: 3.5 }]}>
-          <Text style={[base.tableCell, { flex: 1.8, textAlign: 'left', paddingLeft: 8, fontSize: 6.8, fontWeight: 700 }]}>Combustible desperdiciado</Text>
+          <Text style={[base.tableCell, { flex: 1.8, textAlign: 'left', paddingLeft: 8, fontSize: 6.8, fontWeight: 700 }]}>Combustible consumido en ralentí</Text>
           <Text style={[base.tableCell, { flex: 1, fontSize: 6.8, fontWeight: 700 }]}>{totalGalonesConsumidos.toFixed(1)} gal</Text>
           <Text style={[base.tableCell, { flex: 2.2, textAlign: 'right', paddingRight: 8, fontSize: 6.8, fontWeight: 700, color: COLORS.rojo }]}>
             ${costTotal.toLocaleString('es-CO', { maximumFractionDigits: 0 })} COP
@@ -3835,7 +3972,7 @@ export function InformeRalentiPDF({ data }: { data: RalentiPDFData }) {
             infoText="Fórmula: (Tiempo Ralentí > 5 min / Tiempo Motor Encendido Total) * 100. Meta < 10%."
           />
           <Page1KpiCard
-            title="Galones Desperdiciados"
+            title="Galones Consumidos en Ralentí"
             value={`${totalGalonesConsumidos.toFixed(1)} Gal`}
             subText={`Meta: 37.0 Gal (${deltaGalones > 0 ? '+' : ''}${deltaGalones.toFixed(1)} Gal)`}
             barPct={(totalGalonesConsumidos / 100) * 100}
@@ -3850,7 +3987,7 @@ export function InformeRalentiPDF({ data }: { data: RalentiPDFData }) {
             barPct={(costAvgDaily / 100000) * 100}
             barColor={costAvgDaily > 40000 ? COLORS.rojo : costAvgDaily > 28000 ? COLORS.naranja : EMERALD}
             metaText={`${multCosto.toFixed(1)}x de la meta`}
-            infoText="Fórmula: (Galones Desperdiciados * $9.922 COP de precio de combustible) / Días."
+            infoText="Fórmula: (Galones Consumidos en Ralentí * $9.922 COP de precio de combustible) / Días."
           />
           <Page1KpiCard
             title="Riesgo Operacional"
@@ -3902,16 +4039,16 @@ export function InformeRalentiPDF({ data }: { data: RalentiPDFData }) {
           <Text style={{ fontSize: 7.5, fontWeight: 700, color: '#ffffff' }}>RESUMEN OPERATIVO, DESVIACIONES Y PLAN DE ACCIÓN</Text>
         </View>
 
-        {/* Detailed Impact Table (Moved here) */}
-        <DetailedImpactTable data={data} daysInPeriod={daysInPeriod} />
-
-        {/* Operational Summary Table */}
+        {/* 1. Operational Summary Table */}
         <OperationalSummaryTable data={data} />
 
-        {/* Key Data Interpretation Table (Full Width) */}
+        {/* 2. Key Data Interpretation Table */}
         <KeyDataInterpretationTable data={data} daysInPeriod={daysInPeriod} />
 
-        {/* Suggested Action Plan Table */}
+        {/* 3. Detailed Impact Table */}
+        <DetailedImpactTable data={data} daysInPeriod={daysInPeriod} />
+
+        {/* 4. Suggested Action Plan Table */}
         <SuggestedActionPlanTable />
 
         {/* Proportions Comparison Table */}

@@ -5,6 +5,8 @@ import { supabase } from '../services/supabaseClient';
 // TYPES
 // =====================================================
 
+export const SUPERADMIN_EMAIL = 'info@datenova.io';
+
 export interface User {
   id: string;
   email: string;
@@ -13,6 +15,9 @@ export interface User {
   avatar?: string;
   createdAt: string;
   lastLogin?: string;
+  isActive?: boolean;
+  /** null = full access (admin / superadmin); string[] = explicit module list */
+  allowedModules: string[] | null;
 }
 
 interface AuthContextType {
@@ -42,11 +47,13 @@ interface AuthProviderProps {
 const DEMO_USER_KEY = 'tdc_demo_user';
 
 function buildDemoUser(email: string): User {
+  const role = email.toLowerCase().includes('admin') || email === SUPERADMIN_EMAIL ? 'admin' : 'operator';
   return {
     id: `demo-${email}`,
     email,
     name: email.split('@')[0],
-    role: email.toLowerCase().includes('admin') ? 'admin' : 'operator',
+    role,
+    allowedModules: null,
     createdAt: new Date().toISOString(),
     lastLogin: new Date().toISOString(),
   };
@@ -101,12 +108,31 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     return () => subscription.unsubscribe();
   }, []);
 
-  const mapSupabaseUser = (supabaseUser: any) => {
+  const mapSupabaseUser = async (supabaseUser: any) => {
+    const email: string = supabaseUser.email!;
+    const role: User['role'] = (supabaseUser.user_metadata?.role as any) || 'operator';
+
+    let allowedModules: string[] | null = null;
+
+    // Non-admin, non-superadmin users have explicit module lists
+    if (role !== 'admin' && email !== SUPERADMIN_EMAIL) {
+      try {
+        const { data } = await supabase
+          .from('user_module_permissions')
+          .select('module_id')
+          .eq('user_id', supabaseUser.id);
+        allowedModules = data ? data.map((r: any) => r.module_id) : [];
+      } catch {
+        allowedModules = [];
+      }
+    }
+
     const userMap: User = {
       id: supabaseUser.id,
-      email: supabaseUser.email!,
-      name: supabaseUser.user_metadata?.name || supabaseUser.email!.split('@')[0],
-      role: (supabaseUser.user_metadata?.role as any) || 'operator', // Default safe role
+      email,
+      name: supabaseUser.user_metadata?.name || email.split('@')[0],
+      role,
+      allowedModules,
       createdAt: supabaseUser.created_at,
       lastLogin: new Date().toISOString(),
     };

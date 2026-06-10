@@ -1135,8 +1135,9 @@ export const RalentiReports: React.FC = () => {
               onChange={(e) => setYear(Number(e.target.value))}
               className="w-full px-3 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 outline-none focus:ring-1 focus:ring-emerald-500"
             >
-              <option value="2026">2026</option>
-              <option value="2025">2025</option>
+              {Array.from({ length: 4 }, (_, i) => new Date().getFullYear() - 1 + i).map(y => (
+                <option key={y} value={y}>{y}</option>
+              ))}
             </select>
           </div>
 
@@ -1249,7 +1250,7 @@ export const RalentiReports: React.FC = () => {
             <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5 shadow-sm space-y-3 relative overflow-hidden group flex flex-col justify-between">
               <div className="space-y-3">
                 <div className="flex justify-between items-start">
-                  <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 tracking-wider">Tiempo Ralentí &gt; 5 Min</span>
+                  <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 tracking-wider">% Total de Ralentí</span>
                   <Clock className="w-4 h-4 text-indigo-500" />
                 </div>
                 <div className="flex items-baseline gap-1">
@@ -1271,15 +1272,15 @@ export const RalentiReports: React.FC = () => {
                 </div>
               </div>
               <div className="text-[10px] text-slate-400 dark:text-slate-500 leading-snug border-t border-slate-100 dark:border-slate-800/80 pt-2 font-medium">
-                Cálculo: (Ralentí &gt; 5 min / Tiempo Motor Encendido) × 100. Proporción de motor inactivo encendido vs total.
+                Cálculo: (Horas Motor Ralentí / Horas Motor Encendido) × 100. Proporción del tiempo total de motor encendido en ralentí.
               </div>
             </div>
 
-            {/* Card 2: Galones desperdiciados */}
+            {/* Card 2: Galones consumidos en ralentí */}
             <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5 shadow-sm space-y-3 relative overflow-hidden group flex flex-col justify-between">
               <div className="space-y-3">
                 <div className="flex justify-between items-start">
-                  <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 tracking-wider">Galones Desperdiciados</span>
+                  <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 tracking-wider">Galones Consumidos en Ralentí</span>
                   <Fuel className="w-4 h-4 text-emerald-500" />
                 </div>
                 <div className="flex items-baseline gap-1">
@@ -1333,7 +1334,7 @@ export const RalentiReports: React.FC = () => {
                 </div>
               </div>
               <div className="text-[10px] text-slate-400 dark:text-slate-500 leading-snug border-t border-slate-100 dark:border-slate-800/80 pt-2 font-medium">
-                Cálculo: (Galones Desperdiciados × $9.922 COP/Gal) / Días. Impacto financiero diario del ralentí.
+                Cálculo: (Galones Consumidos en Ralentí × $9.922 COP/Gal) / Días. Impacto financiero diario del ralentí.
               </div>
             </div>
 
@@ -1590,7 +1591,7 @@ export const RalentiReports: React.FC = () => {
                     </thead>
                     <tbody className="divide-y divide-slate-100 dark:divide-slate-700/60">
                       <tr className="hover:bg-slate-50/50 dark:hover:bg-slate-700/30">
-                        <td className="py-3 px-3 font-semibold text-slate-700 dark:text-slate-300">% Tiempo de ralentí &gt; 5 min</td>
+                        <td className="py-3 px-3 font-semibold text-slate-700 dark:text-slate-300">% Total de Ralentí</td>
                         <td className="py-3 px-3 font-bold text-slate-800 dark:text-slate-200">{stats.pctRalenti.toFixed(1)}%</td>
                         <td className="py-3 px-3 text-slate-500 dark:text-slate-400">&lt; 10%</td>
                         <td className="py-3 px-3">
@@ -1695,7 +1696,7 @@ export const RalentiReports: React.FC = () => {
                     </thead>
                     <tbody className="divide-y divide-slate-100 dark:divide-slate-700/60">
                       <tr className="hover:bg-slate-50/50 dark:hover:bg-slate-700/30">
-                        <td className="py-3 px-3 font-semibold text-slate-700 dark:text-slate-300">Combustible desperdiciado (gal)</td>
+                        <td className="py-3 px-3 font-semibold text-slate-700 dark:text-slate-300">Combustible consumido en ralentí (gal)</td>
                         <td className="py-3 px-3 font-bold text-slate-800 dark:text-slate-200">{stats.totalGalonesConsumidos.toFixed(1)} gal</td>
                         <td className="py-3 px-3 text-slate-800 dark:text-slate-100 font-bold">${stats.costTotal.toLocaleString('es-CO', { maximumFractionDigits: 0 })} COP</td>
                       </tr>

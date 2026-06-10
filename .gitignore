@@ -25,3 +25,6 @@ dist-ssr
 .vercel
 .env
 .env*.local
+
+# LLM Council — claves API (nunca subir al repo)
+.council.env
