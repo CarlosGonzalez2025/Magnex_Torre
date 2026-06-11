@@ -36,7 +36,34 @@ interface VehicleOption {
   cliente?: string;
   contrato_id?: string | null;
   tipo_activo?: string | null;
+  tipo_combustible?: string | null;
 }
+
+// Factores de emisión de CO₂ por combustión, en kg CO₂ por galón consumido.
+// Fuente: Calculadora FECOC (Factores de Emisión de los Combustibles Colombianos), UPME.
+//   https://app.upme.gov.co/Calculadora_Emisiones1/new/calculadora.html
+// La calculadora deriva el CO₂ por estequiometría del carbono (no es un valor tabulado):
+//   kg CO₂/gal = (%C / 100) × (44.0095 / 12.0107) × Densidad[kg/L] × 3.7854118[L/gal]
+// Valores tomados del dataset oficial (js/variables.js → combust_liquidos):
+//   Diesel B2 (ACPM comercial): %C=85.89, Densidad=0.8519 → 10.15
+//   Gasolina Motor:             %C=85.76, Densidad=0.7405 → 8.81
+//   GLP Genérico:               %C=83.27, Densidad=0.5599 → 6.47
+// El tipo de combustible proviene de la columna "Tipo combustible" de la base de
+// vehículos (mapeada a vehiculos.tipo_combustible). El matching es por substring
+// para tolerar variantes de captura ("DIESEL", "ACPM", "Gasolina corriente", etc.).
+const CO2_FACTOR_FALLBACK = 9.923077; // factor mezclado histórico, usado si el tipo no está mapeado
+const CO2_FACTORES_GALON: { test: (t: string) => boolean; factor: number }[] = [
+  { test: t => t.includes('diesel') || t.includes('diésel') || t.includes('acpm'), factor: 10.15 },
+  { test: t => t.includes('gasolina') || t.includes('corriente'), factor: 8.81 },
+  { test: t => t.includes('glp') || t.includes('gas licuado'), factor: 6.47 },
+];
+
+const factorCO2PorGalon = (tipoCombustible?: string | null): number => {
+  const t = (tipoCombustible ?? '').toLowerCase().trim();
+  if (!t) return CO2_FACTOR_FALLBACK;
+  const match = CO2_FACTORES_GALON.find(f => f.test(t));
+  return match ? match.factor : CO2_FACTOR_FALLBACK;
+};
 
 interface MultiSelectDropdownProps {
   label: string;
@@ -180,11 +207,18 @@ export const RalentiReports: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   
   // Summary Metrics from reportes_vehiculos/ralentis_periodos
-  const [summaryMetrics, setSummaryMetrics] = useState({
+  const [summaryMetrics, setSummaryMetrics] = useState<{
+    totalHorasMotorEncendido: number;
+    totalHorasMotorRalenti: number;
+    totalGalonesConsumidos: number;
+    totalRalentisExcesivos: number;
+    galonesPorCombustible: Record<string, number>;
+  }>({
     totalHorasMotorEncendido: 0,
     totalHorasMotorRalenti: 0,
     totalGalonesConsumidos: 0,
     totalRalentisExcesivos: 0,
+    galonesPorCombustible: {},
   });
 
   // Detailed events from ralentis_eventos
@@ -219,11 +253,24 @@ export const RalentiReports: React.FC = () => {
           .order('nombre');
         if (dbContracts) setContracts(dbContracts);
 
-        const { data: dbVehicles } = await supabase
-          .from('vehiculos')
-          .select('id, placa, cliente, contrato_id, tipo_activo')
-          .order('placa');
-        if (dbVehicles) setVehicles(dbVehicles);
+        // Paginado para soportar flotas de más de 1000 vehículos (límite por request de Supabase).
+        // Es indispensable traer la flota completa: el tipo de combustible de cada vehículo
+        // se resuelve contra este arreglo para aplicar el factor de emisión correcto.
+        const pageSize = 1000;
+        const allVehicles: VehicleOption[] = [];
+        for (let page = 0; ; page++) {
+          const from = page * pageSize;
+          const { data: chunk, error: vehErr } = await supabase
+            .from('vehiculos')
+            .select('id, placa, cliente, contrato_id, tipo_activo, tipo_combustible')
+            .order('placa')
+            .range(from, from + pageSize - 1);
+          if (vehErr) throw vehErr;
+          if (!chunk || chunk.length === 0) break;
+          allVehicles.push(...(chunk as VehicleOption[]));
+          if (chunk.length < pageSize) break;
+        }
+        setVehicles(allVehicles);
       } catch (err) {
         console.error('Error fetching filters:', err);
       }
@@ -274,6 +321,7 @@ export const RalentiReports: React.FC = () => {
             totalHorasMotorRalenti: 0,
             totalGalonesConsumidos: 0,
             totalRalentisExcesivos: 0,
+            galonesPorCombustible: {},
           });
           setEvents([]);
           setLoading(false);
@@ -385,6 +433,18 @@ export const RalentiReports: React.FC = () => {
       const sumGalones = filteredRepVehs.reduce((acc, r) => acc + (Number(r.consumo_combustible) || 0), 0);
       const sumExcesivos = filteredRepVehs.reduce((acc, r) => acc + (Number(r.ralentis_excesivos) || 0), 0);
 
+      // Agrupar galones por tipo de combustible para emisiones diferenciadas (FECOC/UPME).
+      // El tipo se resuelve por vehiculo_id contra la base de vehículos ("Tipo combustible").
+      const vehFuelMap = new Map<string, string>();
+      vehicles.forEach(v => vehFuelMap.set(String(v.id), (v.tipo_combustible ?? '').trim()));
+
+      const galonesPorCombustible: Record<string, number> = {};
+      filteredRepVehs.forEach((r: any) => {
+        const tipo = vehFuelMap.get(String(r.vehiculo_id)) || 'NO REGISTRA';
+        const key = tipo.toUpperCase();
+        galonesPorCombustible[key] = (galonesPorCombustible[key] ?? 0) + (Number(r.consumo_combustible) || 0);
+      });
+
       const prevSumEncendido = prevRepVehs.reduce((acc, r) => acc + (Number(r.horas_motor_encendido) || 0), 0);
       const prevSumRalenti = prevRepVehs.reduce((acc, r) => acc + (Number(r.horas_motor_ralenti) || 0), 0);
       const prevSumGalones = prevRepVehs.reduce((acc, r) => acc + (Number(r.consumo_combustible) || 0), 0);
@@ -394,6 +454,7 @@ export const RalentiReports: React.FC = () => {
         totalHorasMotorRalenti: sumRalenti,
         totalGalonesConsumidos: sumGalones,
         totalRalentisExcesivos: sumExcesivos,
+        galonesPorCombustible,
       });
 
       setPrevSummaryMetrics({
@@ -525,7 +586,16 @@ export const RalentiReports: React.FC = () => {
     const costTotal = totalGalonesConsumidos * 9922; // $9.922 COP per gallon
     const costAvgDaily = daysInPeriod > 0 ? costTotal / daysInPeriod : 0;
 
-    const co2Kg = totalGalonesConsumidos * 9.923077; // CO2 kg formula
+    // Huella de carbono diferenciada por tipo de combustible (FECOC/UPME): se aplica
+    // el factor kg CO₂/galón propio de cada combustible sobre los galones de ese grupo,
+    // en lugar de un factor único promediado para toda la flota.
+    const galonesPorCombustible = summaryMetrics.galonesPorCombustible ?? {};
+    const galonesClasificados = Object.values(galonesPorCombustible).reduce((a, b) => a + b, 0);
+    const co2Kg = galonesClasificados > 0
+      ? Object.entries(galonesPorCombustible).reduce((acc, [tipo, gal]) => acc + gal * factorCO2PorGalon(tipo), 0)
+      : totalGalonesConsumidos * CO2_FACTOR_FALLBACK;
+    // Factor efectivo (mezcla real de la flota) para distribuciones derivadas (tendencia, proveedor).
+    const co2FactorEfectivo = totalGalonesConsumidos > 0 ? co2Kg / totalGalonesConsumidos : CO2_FACTOR_FALLBACK;
     const treesEquivalent = co2Kg / 22; // Trees formula
 
     const mayorEventoSegundos = events.length > 0 
@@ -650,6 +720,7 @@ export const RalentiReports: React.FC = () => {
       costTotal,
       costAvgDaily,
       co2Kg,
+      co2FactorEfectivo,
       treesEquivalent,
       mayorEventoSegundos,
       promedioEventoSegundos,
@@ -777,7 +848,7 @@ export const RalentiReports: React.FC = () => {
         ? (duration / totalEventSecs) * stats.totalGalonesConsumidos 
         : 0;
 
-      const co2KgDia = galonesDia * 9.923077;
+      const co2KgDia = galonesDia * stats.co2FactorEfectivo;
       cumulativeCO2 += co2KgDia;
       
       dataPoints.push({
@@ -787,7 +858,7 @@ export const RalentiReports: React.FC = () => {
     });
 
     return dataPoints;
-  }, [events, stats.totalGalonesConsumidos]);
+  }, [events, stats.totalGalonesConsumidos, stats.co2FactorEfectivo]);
 
   // Group CO2 by provider/platform
   const providerCO2Data = useMemo(() => {
@@ -803,13 +874,13 @@ export const RalentiReports: React.FC = () => {
       const galones = totalEventSecs > 0 
         ? (secs / totalEventSecs) * stats.totalGalonesConsumidos 
         : 0;
-      const co2Kg = galones * 9.923077;
+      const co2Kg = galones * stats.co2FactorEfectivo;
       return {
         name: provider,
         co2Tons: Number((co2Kg / 1000).toFixed(3)),
       };
     });
-  }, [events, stats.totalGalonesConsumidos]);
+  }, [events, stats.totalGalonesConsumidos, stats.co2FactorEfectivo]);
 
   // Render horizontal bar chart for top drivers (native SVG)
   const renderHorizontalBarChart = (data: { name: string; value: number }[], metricType: 'time' | 'max') => {
@@ -1439,6 +1510,9 @@ export const RalentiReports: React.FC = () => {
                     {(stats.co2Kg / 1000).toFixed(3)} Tn
                   </span>
                   <span className="text-xs text-emerald-200">De emisiones de CO2 generadas</span>
+                  <span className="text-[10px] text-emerald-200/80 block pt-1">
+                    Factores FECOC/UPME por combustible · Mezcla flota: {stats.co2FactorEfectivo.toFixed(2)} kg CO₂/gal
+                  </span>
                 </div>
                 <div className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center">
                   <Leaf className="w-5 h-5 text-emerald-200" />
@@ -1924,6 +1998,94 @@ export const RalentiReports: React.FC = () => {
                   ))
                 )}
               </div>
+            </div>
+          </div>
+
+          {/* Methodology & Sources */}
+          <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-6 shadow-sm space-y-4">
+            <h3 className="font-bold text-slate-800 dark:text-slate-100 text-sm flex items-center gap-2">
+              <Info className="w-4 h-4 text-sky-500" /> Metodología de Cálculo y Fuentes
+            </h3>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+              Los indicadores económicos y ambientales de este informe se derivan del combustible consumido en
+              ralentí (galones). El cálculo es transparente y trazable:
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Costos */}
+              <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-4 space-y-2 bg-slate-50/60 dark:bg-slate-900/30">
+                <div className="flex items-center gap-2">
+                  <DollarSign className="w-4 h-4 text-amber-500" />
+                  <span className="text-xs font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wide">Costo del combustible</span>
+                </div>
+                <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                  <code className="text-[10px] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5">Costo Total = Galones en ralentí × $9.922 COP/Gal</code>
+                </p>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                  El costo promedio diario divide el costo total entre los días del período. Precio de referencia
+                  del galón de combustible parametrizado en <span className="font-semibold">$9.922 COP</span>.
+                </p>
+              </div>
+
+              {/* CO2 */}
+              <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-4 space-y-2 bg-emerald-50/50 dark:bg-emerald-950/20">
+                <div className="flex items-center gap-2">
+                  <Leaf className="w-4 h-4 text-emerald-500" />
+                  <span className="text-xs font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wide">Huella de carbono (CO₂)</span>
+                </div>
+                <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                  <code className="text-[10px] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5">CO₂ = Σ (Galones por combustible × Factor del combustible)</code>
+                </p>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                  Cada vehículo aplica el factor de su tipo de combustible (columna <span className="font-semibold">"Tipo combustible"</span>),
+                  sin promediar. La equivalencia en árboles es <code className="text-[10px]">CO₂ kg / 22</code> (absorción anual de un árbol maduro).
+                </p>
+              </div>
+            </div>
+
+            {/* Factor table */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="bg-slate-50 dark:bg-slate-900/50 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-200 dark:border-slate-700">
+                    <th className="py-2 px-3">Tipo de combustible</th>
+                    <th className="py-2 px-3 text-right">Factor de emisión</th>
+                    <th className="py-2 px-3">Base de cálculo (UPME)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-700/60">
+                  <tr>
+                    <td className="py-2.5 px-3 font-semibold text-slate-700 dark:text-slate-200">Diésel / ACPM</td>
+                    <td className="py-2.5 px-3 text-right font-bold text-slate-800 dark:text-slate-100">10,15 kg CO₂/gal</td>
+                    <td className="py-2.5 px-3 text-slate-500 dark:text-slate-400">Diesel B2 · %C 85,89 · densidad 0,8519 kg/L</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2.5 px-3 font-semibold text-slate-700 dark:text-slate-200">Gasolina</td>
+                    <td className="py-2.5 px-3 text-right font-bold text-slate-800 dark:text-slate-100">8,81 kg CO₂/gal</td>
+                    <td className="py-2.5 px-3 text-slate-500 dark:text-slate-400">Gasolina Motor · %C 85,76 · densidad 0,7405 kg/L</td>
+                  </tr>
+                  <tr>
+                    <td className="py-2.5 px-3 font-semibold text-slate-700 dark:text-slate-200">GLP</td>
+                    <td className="py-2.5 px-3 text-right font-bold text-slate-800 dark:text-slate-100">6,47 kg CO₂/gal</td>
+                    <td className="py-2.5 px-3 text-slate-500 dark:text-slate-400">GLP Genérico · %C 83,27 · densidad 0,5599 kg/L</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed border-t border-slate-100 dark:border-slate-800/80 pt-3 space-y-1">
+              <p>
+                <span className="font-semibold text-slate-600 dark:text-slate-300">Fuente:</span> Factores de Emisión de los
+                Combustibles Colombianos (FECOC) — Unidad de Planeación Minero Energética (UPME). Los factores se derivan por
+                estequiometría del carbono: <code className="text-[10px]">kg CO₂/gal = (%C/100) × (44,0095/12,0107) × Densidad × 3,7854118</code>.
+              </p>
+              <p>
+                Calculadora oficial:{' '}
+                <a href="https://app.upme.gov.co/Calculadora_Emisiones1/new/calculadora.html" target="_blank" rel="noopener noreferrer" className="text-sky-600 dark:text-sky-400 font-semibold hover:underline">
+                  app.upme.gov.co/Calculadora_Emisiones1
+                </a>
+                . Mezcla efectiva de la flota en el período: <span className="font-semibold">{stats.co2FactorEfectivo.toFixed(2)} kg CO₂/gal</span>.
+              </p>
             </div>
           </div>
 
