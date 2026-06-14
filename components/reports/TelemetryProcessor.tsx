@@ -147,7 +147,11 @@ export const TelemetryProcessor: React.FC = () => {
               <li><strong>Consolidado_Faltas_Por_Vehículo_Coltrack.csv</strong> (Métricas de faltas de vehículos)</li>
               <li><strong>Conductores_Coltrack.csv</strong> (Mapeador de iButtons y Cédulas - Requerido)</li>
               <li><strong>Ralenti_Coltrack.csv</strong> (Tiempos de ralentí y consumo de combustible - Opcional)</li>
+              <li className="text-emerald-700 dark:text-emerald-400">
+                <strong>Excesos_Ralentí_Semanal_*.xlsx</strong> <span className="font-normal text-slate-500">(Eventos reales de ralentí excesivo: duración y galones por evento. Recomendado — reemplaza la estimación y da exactitud al informe. Columnas: Placa / Conductor / Inicio Exceso / Fin Exceso / Duracion / Número Estimado de Galones)</span>
+              </li>
             </ul>
+            <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1 italic">Nota: cuando se incluye el archivo semanal de excesos, el informe usa sus duraciones y galones reales por evento, y los totales de galones/CO₂ se reconcilian con ese detalle.</p>
           </div>
         )}
 
