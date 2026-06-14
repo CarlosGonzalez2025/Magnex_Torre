@@ -65,6 +65,25 @@ const factorCO2PorGalon = (tipoCombustible?: string | null): number => {
   return match ? match.factor : CO2_FACTOR_FALLBACK;
 };
 
+// Umbral de "ralentí excesivo" (alerta) por proveedor satelital, en segundos.
+// Cada plataforma define la alerta con un umbral propio: Coltrack a partir de 10 min,
+// Fagor a partir de 5 min. El conteo de alertas y la analítica de excesos se calcula
+// SOLO sobre los eventos que superan el umbral nativo de su proveedor (no se normaliza).
+const UMBRAL_RALENTI_SEG: Record<string, number> = { COLTRACK: 600, FAGOR: 300 };
+const umbralRalentiSeg = (proveedor?: string | null): number =>
+  UMBRAL_RALENTI_SEG[(proveedor ?? '').toUpperCase().trim()] ?? 300;
+
+// Conductores no atribuibles (N/A, no identificado, etc.). Se excluyen de las métricas
+// que destacan a un conductor (p. ej. "Mayor evento único"), igual que en los Top.
+const PLACEHOLDER_CONDUCTOR = new Set([
+  '', 'N/A', 'NA', 'NO REGISTRA', 'NO IDENTIFICADO', 'SIN CONDUCTOR',
+  'DESCONOCIDO', 'NO ASIGNADO', 'CONDUCTOR N/A', 'NINGUNO',
+]);
+const esConductorPlaceholder = (nombre?: string | null): boolean => {
+  const n = (nombre ?? '').toUpperCase().trim();
+  return PLACEHOLDER_CONDUCTOR.has(n);
+};
+
 interface MultiSelectDropdownProps {
   label: string;
   options: { value: string; label: string }[];
@@ -563,12 +582,23 @@ export const RalentiReports: React.FC = () => {
     return lastDay;
   }, [year, month, quincena]);
 
-  const stats = useMemo(() => {
-    const { totalHorasMotorEncendido, totalHorasMotorRalenti, totalGalonesConsumidos, totalRalentisExcesivos } = summaryMetrics;
+  // Eventos que constituyen "alerta de ralentí" según el umbral NATIVO de cada proveedor
+  // (Coltrack ≥10 min, Fagor ≥5 min). Toda la analítica de excesos se calcula sobre este conjunto,
+  // no sobre los eventos crudos (que incluyen ralentís cortos por debajo del umbral de alerta).
+  const alertEvents = useMemo(
+    () => events.filter(e => e.duracion_segundos >= umbralRalentiSeg(e.proveedor)),
+    [events]
+  );
 
-    const segundosRalentiMas5Min = events
-      .filter(e => e.duracion_segundos > 300)
-      .reduce((acc, e) => acc + e.duracion_segundos, 0);
+  const stats = useMemo(() => {
+    const { totalHorasMotorEncendido, totalHorasMotorRalenti, totalGalonesConsumidos } = summaryMetrics;
+
+    // Nº de alertas de ralentí = eventos que superan el umbral nativo de su proveedor.
+    // NO se usa el conteo del agregado (que incluye todos los ralentís, no solo las alertas).
+    const totalRalentisExcesivos = alertEvents.length;
+
+    // Horas en ralentí excesivo: suma real de la duración de los eventos que son alerta.
+    const segundosRalentiMas5Min = alertEvents.reduce((acc, e) => acc + e.duracion_segundos, 0);
     const horasRalentiMas5Min = segundosRalentiMas5Min / 3600;
 
     const pctRalentiMas5MinDeRalenti = totalHorasMotorRalenti > 0
@@ -598,16 +628,19 @@ export const RalentiReports: React.FC = () => {
     const co2FactorEfectivo = totalGalonesConsumidos > 0 ? co2Kg / totalGalonesConsumidos : CO2_FACTOR_FALLBACK;
     const treesEquivalent = co2Kg / 22; // Trees formula
 
-    const mayorEventoSegundos = events.length > 0 
-      ? Math.max(...events.map(e => e.duracion_segundos)) 
+    // "Mayor evento único" se mide solo entre eventos con conductor identificado
+    // (se excluyen N/A, No registra, etc.), igual que los Top de conductores.
+    const alertEventsConConductor = alertEvents.filter(e => !esConductorPlaceholder(e.conductor_nombre));
+    const mayorEventoSegundos = alertEventsConConductor.length > 0
+      ? Math.max(...alertEventsConConductor.map(e => e.duracion_segundos))
       : 0;
 
-    const totalDuracionEventosSegundos = events.reduce((acc, e) => acc + e.duracion_segundos, 0);
-    const promedioEventoSegundos = events.length > 0 
-      ? totalDuracionEventosSegundos / events.length 
+    const totalDuracionEventosSegundos = alertEvents.reduce((acc, e) => acc + e.duracion_segundos, 0);
+    const promedioEventoSegundos = alertEvents.length > 0
+      ? totalDuracionEventosSegundos / alertEvents.length
       : 0;
 
-    const eventosMas30Min = events.filter(e => e.duracion_segundos > 1800).length;
+    const eventosMas30Min = alertEvents.filter(e => e.duracion_segundos > 1800).length;
 
     // Operational Risk estimation based on pctRalenti
     let riskLevel: 'Bajo' | 'Medio' | 'Alto' = 'Bajo';
@@ -659,7 +692,7 @@ export const RalentiReports: React.FC = () => {
 
     // Anomaly Outliers Detection (Mean + 1.2 * StdDev)
     const vehicleSummaryMap = new Map<string, { totalTime: number; count: number }>();
-    events.forEach(e => {
+    alertEvents.forEach(e => {
       const p = e.placa || 'Desconocido';
       const current = vehicleSummaryMap.get(p) || { totalTime: 0, count: 0 };
       vehicleSummaryMap.set(p, {
@@ -699,7 +732,7 @@ export const RalentiReports: React.FC = () => {
     const predictedCosto = predictedGalones * 9922;
 
     const vehMap = new Map<string, number>();
-    events.forEach(e => {
+    alertEvents.forEach(e => {
       const p = e.placa || 'SIN PLACA';
       vehMap.set(p, (vehMap.get(p) || 0) + e.duracion_segundos);
     });
@@ -749,7 +782,7 @@ export const RalentiReports: React.FC = () => {
       placaCritica,
       tiempoCriticaSegundos,
     };
-  }, [summaryMetrics, events, daysInPeriod, prevSummaryMetrics]);
+  }, [summaryMetrics, alertEvents, daysInPeriod, prevSummaryMetrics]);
 
   // Helper to format seconds as hh:mm:ss
   const formatSeconds = (totalSecs: number): string => {
@@ -763,7 +796,7 @@ export const RalentiReports: React.FC = () => {
   const driverData = useMemo(() => {
     const driverMap = new Map<string, { totalTime: number; maxEvent: number; count: number; name: string }>();
 
-    events.forEach(e => {
+    alertEvents.forEach(e => {
       const name = e.conductor_nombre || 'NO REGISTRA';
       const current = driverMap.get(name) ?? { totalTime: 0, maxEvent: 0, count: 0, name };
       current.totalTime += e.duracion_segundos;
@@ -785,13 +818,13 @@ export const RalentiReports: React.FC = () => {
       .slice(0, 10);
 
     return { topByTime, topByMax };
-  }, [events]);
+  }, [alertEvents]);
 
   // Group events by vehicle and compute metrics
   const vehicleData = useMemo(() => {
     const vehicleMap = new Map<string, { totalTime: number; maxEvent: number; count: number; name: string; type: string }>();
 
-    events.forEach(e => {
+    alertEvents.forEach(e => {
       const name = e.placa || 'SIN PLACA';
       const current = vehicleMap.get(name) ?? { 
         totalTime: 0, 
@@ -819,12 +852,12 @@ export const RalentiReports: React.FC = () => {
       .slice(0, 10);
 
     return { topByTime, topByMax };
-  }, [events, vehicles]);
+  }, [alertEvents, vehicles]);
 
   // Daily CO2 trend logic (distribute total summary gallons over events timeline)
   const dailyCO2Trend = useMemo(() => {
     const dailyDurations = new Map<string, number>();
-    events.forEach(e => {
+    alertEvents.forEach(e => {
       const dateKey = String(e.fecha_inicio ?? '').slice(0, 10);
       if (dateKey) {
         dailyDurations.set(dateKey, (dailyDurations.get(dateKey) ?? 0) + e.duracion_segundos);
@@ -835,7 +868,7 @@ export const RalentiReports: React.FC = () => {
     const sortedDates = Array.from(dailyDurations.keys()).sort();
     
     // Total duration of all detailed events
-    const totalEventSecs = events.reduce((acc, e) => acc + e.duracion_segundos, 0);
+    const totalEventSecs = alertEvents.reduce((acc, e) => acc + e.duracion_segundos, 0);
 
     let cumulativeCO2 = 0;
     const dataPoints: { date: string; value: number }[] = [];
@@ -858,17 +891,17 @@ export const RalentiReports: React.FC = () => {
     });
 
     return dataPoints;
-  }, [events, stats.totalGalonesConsumidos, stats.co2FactorEfectivo]);
+  }, [alertEvents, stats.totalGalonesConsumidos, stats.co2FactorEfectivo]);
 
   // Group CO2 by provider/platform
   const providerCO2Data = useMemo(() => {
     const provMap = new Map<string, number>();
-    events.forEach(e => {
+    alertEvents.forEach(e => {
       const prov = e.proveedor || 'COLTRACK';
       provMap.set(prov, (provMap.get(prov) ?? 0) + e.duracion_segundos);
     });
 
-    const totalEventSecs = events.reduce((acc, e) => acc + e.duracion_segundos, 0);
+    const totalEventSecs = alertEvents.reduce((acc, e) => acc + e.duracion_segundos, 0);
 
     return Array.from(provMap.entries()).map(([provider, secs]) => {
       const galones = totalEventSecs > 0 
@@ -880,7 +913,7 @@ export const RalentiReports: React.FC = () => {
         co2Tons: Number((co2Kg / 1000).toFixed(3)),
       };
     });
-  }, [events, stats.totalGalonesConsumidos, stats.co2FactorEfectivo]);
+  }, [alertEvents, stats.totalGalonesConsumidos, stats.co2FactorEfectivo]);
 
   // Render horizontal bar chart for top drivers (native SVG)
   const renderHorizontalBarChart = (data: { name: string; value: number }[], metricType: 'time' | 'max') => {
@@ -1096,7 +1129,7 @@ export const RalentiReports: React.FC = () => {
                 : `Multicontrato (${selectedContracts.length})`;
 
             const vehMap = new Map<string, number>();
-            events.forEach(e => {
+            alertEvents.forEach(e => {
               const p = e.placa || 'SIN PLACA';
               vehMap.set(p, (vehMap.get(p) || 0) + e.duracion_segundos);
             });
@@ -1132,7 +1165,7 @@ export const RalentiReports: React.FC = () => {
             };
 
             const allDriversList = Array.from(
-              events.reduce((map, e) => {
+              alertEvents.reduce((map, e) => {
                 const name = e.conductor_nombre || 'NO REGISTRA';
                 const current = map.get(name) ?? { totalTime: 0, maxEvent: 0, count: 0, name };
                 current.totalTime += e.duracion_segundos;
@@ -1158,8 +1191,8 @@ export const RalentiReports: React.FC = () => {
               totalHorasMotorEncendido: summaryMetrics.totalHorasMotorEncendido,
               totalHorasMotorRalenti: summaryMetrics.totalHorasMotorRalenti,
               totalGalonesConsumidos: summaryMetrics.totalGalonesConsumidos,
-              totalRalentisExcesivos: summaryMetrics.totalRalentisExcesivos,
-              totalEventos: events.length,
+              totalRalentisExcesivos: stats.totalRalentisExcesivos,
+              totalEventos: alertEvents.length,
               costTotal: stats.costTotal,
               costAvgDaily: stats.costAvgDaily,
               co2Kg: stats.co2Kg,
@@ -1477,9 +1510,9 @@ export const RalentiReports: React.FC = () => {
                 </div>
 
                 <div className="bg-slate-50 dark:bg-slate-900/50 p-4 rounded-xl border border-slate-200 dark:border-slate-800">
-                  <span className="text-[9px] uppercase font-bold text-slate-400 dark:text-slate-500 block">Eventos de Ralentí Totales</span>
+                  <span className="text-[9px] uppercase font-bold text-slate-400 dark:text-slate-500 block">Alertas de Ralentí (≥ umbral por proveedor)</span>
                   <span className="text-lg font-black text-slate-700 dark:text-slate-200 mt-1 block">
-                    {events.length}
+                    {alertEvents.length}
                   </span>
                 </div>
               </div>

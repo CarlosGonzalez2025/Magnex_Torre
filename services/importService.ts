@@ -1912,6 +1912,9 @@ export async function importarDatosPlanosColtrack(
   const erroresGlobales: ValidationError[] = [];
   let registrosInsertados = 0;
   const detailedEvents: any[] = [];
+  // Agregación por vehículo del archivo semanal de excesos (galones / horas / conteo REALES).
+  // Sirve como fuente única para reconciliar ralentis_periodos al final.
+  const weeklyAgg = new Map<string, { count: number; galones: number; horas: number }>();
   const mes = periodoInicio.slice(0, 7);
 
   const normName = (name: string) =>
@@ -1945,8 +1948,29 @@ export async function importarDatosPlanosColtrack(
   let fileFaltasVeh: File | null = null;
   let fileRalenti: File | null = null;
   let fileRalentiDetalle: File | null = null;
+  // Archivo semanal de "Excesos de Ralentí" (XLSX): trae duración y galones REALES por evento.
+  // Cuando está presente reemplaza la estimación sintética del CSV "Ralenti 2".
+  let fileExcesosSemanal: File | null = null;
 
   for (const file of files) {
+    // El semanal de Coltrack es XLSX; los demás insumos Coltrack son CSV de texto plano.
+    if (/\.xls[xm]?$/i.test(file.name)) {
+      try {
+        const ab = await file.arrayBuffer();
+        const wb = XLSX.read(new Uint8Array(ab), { type: 'array' });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const firstRow = ((XLSX.utils.sheet_to_json(sheet, { header: 1 })[0] as any[]) ?? [])
+          .map(c => String(c ?? '').trim());
+        const hasPlaca = firstRow.some(h => /^placa$/i.test(h));
+        const hasInicio = firstRow.some(h => /inicio\s*exceso/i.test(h));
+        const hasDuracion = firstRow.some(h => /duracion/i.test(h));
+        if (hasPlaca && hasInicio && hasDuracion) fileExcesosSemanal = file;
+      } catch {
+        // Si no se puede leer como workbook, se ignora.
+      }
+      continue;
+    }
+
     const text = await file.text();
     const headerLine = text.split('\n')[0] ?? '';
     if (headerLine.includes('No. Identificaci') || (headerLine.includes('iButton') && headerLine.includes('Rh'))) {
@@ -1962,8 +1986,8 @@ export async function importarDatosPlanosColtrack(
     }
   }
 
-  if (!fileFaltasCond && !fileFaltasVeh && !fileRalenti && !fileRalentiDetalle) {
-    throw new Error('No se detectó ningún archivo válido para procesar en Coltrack (consolidado de faltas o ralentí).');
+  if (!fileFaltasCond && !fileFaltasVeh && !fileRalenti && !fileRalentiDetalle && !fileExcesosSemanal) {
+    throw new Error('No se detectó ningún archivo válido para procesar en Coltrack (consolidado de faltas, ralentí o excesos semanales).');
   }
 
   const nombreCarga = `Coltrack planos: ${files.map(f => f.name).join(', ')}`;
@@ -2213,9 +2237,11 @@ export async function importarDatosPlanosColtrack(
       }
     }
 
-    // 4. Procesar Eventos Detallados de Ralentí Coltrack (Ralenti 2)
-    if (fileRalentiDetalle) {
-      console.log('Procesando eventos detallados de ralentí Coltrack (Ralenti 2)...');
+    // 4. Procesar Eventos Detallados de Ralentí Coltrack (Ralenti 2).
+    //    Esta ruta ESTIMA la duración por reparto uniforme; solo se usa si NO vino el
+    //    archivo semanal de excesos (que sí trae duración y galones reales por evento).
+    if (fileRalentiDetalle && !fileExcesosSemanal) {
+      console.log('Procesando eventos detallados de ralentí Coltrack (Ralenti 2, duración estimada)...');
       const detContent = await fileRalentiDetalle.text();
       const detLines = detContent.split('\n').filter(l => l.trim().length > 0);
       const detSep = detectSeparator(detLines[0] ?? '');
@@ -2346,6 +2372,91 @@ export async function importarDatosPlanosColtrack(
       }
     }
 
+    // 4b. Procesar archivo SEMANAL de Excesos de Ralentí Coltrack (duración y galones REALES por evento).
+    //     Reemplaza la estimación sintética del CSV "Ralenti 2".
+    if (fileExcesosSemanal) {
+      console.log('Procesando archivo semanal de excesos de ralentí Coltrack (datos reales)...');
+      const ab = await fileExcesosSemanal.arrayBuffer();
+      const wb = XLSX.read(new Uint8Array(ab), { type: 'array' });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' }) as any[];
+      const eventosSemanal: any[] = [];
+
+      for (const row of rows) {
+        const placaRaw = String(row['Placa'] ?? '').trim();
+        const placaNorm = normPlate(placaRaw);
+        if (!placaNorm) continue;
+
+        const fechaInicioISO = excelDateTimeToISO(row['Inicio Exceso']);
+        if (!fechaInicioISO) continue;
+        const fechaFinISO = excelDateTimeToISO(row['Fin Exceso']);
+
+        // Duración real: preferir (Fin - Inicio) sobre los seriales Excel; fallback al texto "hh:mm:ss".
+        let duracionSegundos = 0;
+        const ini = row['Inicio Exceso'];
+        const fin = row['Fin Exceso'];
+        if (typeof ini === 'number' && typeof fin === 'number' && fin > ini) {
+          duracionSegundos = Math.round((fin - ini) * 86400);
+        }
+        if (duracionSegundos <= 0) {
+          const parts = String(row['Duracion (24hh:mm:ss)'] ?? '').split(':').map(n => parseInt(n, 10) || 0);
+          if (parts.length === 3) duracionSegundos = parts[0] * 3600 + parts[1] * 60 + parts[2];
+        }
+        if (duracionSegundos <= 0) continue;
+
+        const galones = num(row['Número Estimado de Galones'] ?? row['Numero Estimado de Galones']);
+
+        const foundVeh = await asegurarVehiculoEnMaestro(placaRaw, vehicPorPlaca, normPlate);
+        if (!foundVeh) continue;
+
+        const conductorNombre = String(row['Conductor'] ?? '').trim();
+        let conductorId = null;
+        if (!esConductorNoIdentificado(conductorNombre)) {
+          const foundCond = await asegurarConductorEnMaestro(
+            conductorNombre, undefined, undefined,
+            conductPorNombreNorm, conductPorCedula, normName
+          );
+          conductorId = foundCond?.id ?? null;
+        }
+
+        let fechaFinFinal = fechaFinISO;
+        if (!fechaFinFinal) {
+          const startDate = new Date(fechaInicioISO);
+          if (!isNaN(startDate.getTime())) {
+            fechaFinFinal = new Date(startDate.getTime() + duracionSegundos * 1000).toISOString();
+          }
+        }
+
+        eventosSemanal.push({
+          vehiculo_id: foundVeh.id,
+          conductor_id: conductorId,
+          placa: placaNorm,
+          conductor_nombre: conductorNombre || 'NO REGISTRA',
+          fecha_inicio: fechaInicioISO,
+          fecha_fin: fechaFinFinal,
+          duracion_segundos: duracionSegundos,
+          galones_consumidos: galones,
+          ubicacion: String(row['Lugar'] || row['Dirección (Click para Maps)'] || row['Ciudad'] || '').trim(),
+          latitud: null,
+          longitud: null,
+          proveedor: 'COLTRACK',
+          periodo_inicio: periodoInicio,
+          periodo_fin: periodoFin,
+        });
+
+        const agg = weeklyAgg.get(foundVeh.id) ?? { count: 0, galones: 0, horas: 0 };
+        agg.count++;
+        agg.galones += galones;
+        agg.horas += duracionSegundos / 3600;
+        weeklyAgg.set(foundVeh.id, agg);
+      }
+
+      if (eventosSemanal.length > 0) {
+        await upsertRalentisEventos(eventosSemanal);
+        registrosInsertados += eventosSemanal.length;
+      }
+    }
+
     // Fallback: Si no hay archivo mensual consolidado de vehículos (fileFaltasVeh) pero hay archivos de ralentí
     if (!fileFaltasVeh) {
       if (fileRalenti) {
@@ -2439,6 +2550,43 @@ export async function importarDatosPlanosColtrack(
           registrosInsertados += ralentisDirectos.length;
         }
       }
+    }
+
+    // 4c. FUENTE ÚNICA DE GALONES: si vino el archivo semanal con galones reales por evento,
+    //     los totales de galones y nº de excesivos en ralentis_periodos se derivan de esos eventos,
+    //     para que las tarjetas de resumen del informe coincidan exactamente con el detalle.
+    //     Se preservan las horas de motor encendido/ralentí (Ralenti 1) como denominador del % ralentí.
+    if (fileExcesosSemanal && weeklyAgg.size > 0) {
+      const existentes = await fetchAllRows(
+        supabase
+          .from('ralentis_periodos')
+          .select('vehiculo_id, horas_motor_encendido, horas_motor_ralenti, kms_recorridos, encendidos_apagados')
+          .eq('periodo_inicio', periodoInicio)
+          .eq('periodo_fin', periodoFin)
+      );
+      const exMap = new Map<string, any>((existentes ?? []).map((r: any) => [r.vehiculo_id, r]));
+
+      const overrides = Array.from(weeklyAgg.entries()).map(([vehId, agg]) => {
+        const ex = exMap.get(vehId);
+        return {
+          vehiculo_id: vehId,
+          periodo_inicio: periodoInicio,
+          periodo_fin: periodoFin,
+          ralentis_excesivos: agg.count,
+          consumo_combustible: Number(agg.galones.toFixed(4)),
+          // Horas: si existe el agregado (Ralenti 1) se conserva como denominador del %;
+          // si no, se usa el total de horas de excesos del semanal.
+          horas_motor_ralenti: ex ? Number(ex.horas_motor_ralenti ?? 0) : Number(agg.horas.toFixed(4)),
+          horas_motor_encendido: ex ? Number(ex.horas_motor_encendido ?? 0) : 0,
+          kms_recorridos: ex ? Number(ex.kms_recorridos ?? 0) : 0,
+          encendidos_apagados: ex ? Number(ex.encendidos_apagados ?? 0) : 0,
+        };
+      });
+
+      const { error } = await supabase
+        .from('ralentis_periodos')
+        .upsert(overrides, { onConflict: 'vehiculo_id,periodo_inicio,periodo_fin' });
+      if (error) throw new Error(`Error reconciliando galones reales del semanal Coltrack: ${error.message}`);
     }
 
     return { cargaId, exito: true, registrosInsertados, errores: erroresGlobales };

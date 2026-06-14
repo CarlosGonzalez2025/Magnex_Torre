@@ -3185,7 +3185,7 @@ function Page1ImpactPanel({
       <View style={{ flexDirection: 'row', gap: 16 }}>
         {/* Combustible */}
         <View style={{ flex: 1, borderRightWidth: 0.5, borderRightColor: '#cbd5e1', borderStyle: 'solid', paddingRight: 10 }}>
-          <Text style={{ fontSize: 6.8, color: COLORS.gris, textTransform: 'uppercase', marginBottom: 4 }}>Desperdicio de Combustible</Text>
+          <Text style={{ fontSize: 6.8, color: COLORS.gris, textTransform: 'uppercase', marginBottom: 4 }}>Consumo de Combustible en Ralentí</Text>
           <Text style={{ fontSize: 13.5, fontWeight: 'bold', color: '#9a3412', marginBottom: 3 }}>{galones.toFixed(1)} Galones</Text>
           <Text style={{ fontSize: 12.5, fontWeight: 'bold', color: COLORS.negro }}>{fmtCOP(costTotal)}</Text>
         </View>
