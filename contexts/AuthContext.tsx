@@ -110,7 +110,25 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const mapSupabaseUser = async (supabaseUser: any) => {
     const email: string = supabaseUser.email!;
-    const role: User['role'] = (supabaseUser.user_metadata?.role as any) || 'operator';
+
+    // El rol se ADMINISTRA en la tabla pública user_profiles (no en el metadata de Auth).
+    // Se lee de ahí como fuente autoritativa, con fallback al metadata si no hay perfil.
+    let role: User['role'] = (supabaseUser.user_metadata?.role as any) || 'operator';
+    let profileName: string | null = null;
+    try {
+      const { data: profile } = await supabase
+        .from('user_profiles')
+        .select('role, name, is_active')
+        .eq('id', supabaseUser.id)
+        .maybeSingle();
+      if (profile?.role) role = profile.role as User['role'];
+      if (profile?.name) profileName = String(profile.name);
+    } catch {
+      // Si no se puede leer el perfil (RLS/red), se conserva el rol del metadata.
+    }
+
+    // El superadmin siempre es admin, sin importar el metadata o el perfil.
+    if (email === SUPERADMIN_EMAIL) role = 'admin';
 
     let allowedModules: string[] | null = null;
 
@@ -130,7 +148,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     const userMap: User = {
       id: supabaseUser.id,
       email,
-      name: supabaseUser.user_metadata?.name || email.split('@')[0],
+      name: profileName || supabaseUser.user_metadata?.name || email.split('@')[0],
       role,
       allowedModules,
       createdAt: supabaseUser.created_at,
