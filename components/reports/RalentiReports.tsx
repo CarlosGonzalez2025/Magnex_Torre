@@ -20,7 +20,10 @@ import {
   FileSpreadsheet,
   Printer,
   BrainCircuit,
-  Truck
+  Truck,
+  BookOpen,
+  Database,
+  X
 } from 'lucide-react';
 import { supabase } from '../../services/supabaseClient';
 import { descargarPDFRalenti } from '../../services/pdfTemplates';
@@ -69,6 +72,30 @@ const factorCO2PorGalon = (tipoCombustible?: string | null): number | null => {
   if (!t) return null;
   const match = CO2_FACTORES_GALON.find(f => f.test(t));
   return match ? match.factor : null;
+};
+
+// Precio de referencia del galón de combustible, en COP, DIFERENCIADO por tipo (mismo
+// principio que el CO₂: cada galón se valora con el precio de SU combustible, no con un
+// promedio plano). Estos valores se mantienen manualmente: actualizarlos cuando cambie
+// la regulación del Ministerio de Minas y Energía / SICOM. NO se conectan a una fuente
+// externa automática (no existe API oficial estable de precios en Colombia).
+// Eléctrico = $0 (no consume combustible líquido). El GLP no se incluye porque la flota
+// actual no tiene vehículos de GLP; si se agregaran, cargar aquí su precio vigente.
+// Los galones sin tipo definido (o sin precio cargado) NO se estiman: se excluyen del
+// costo y se reportan aparte (galonesSinTipo / vehiculosSinTipo). Solo cifras reales.
+const PRECIO_COMBUSTIBLE_GALON: { test: (t: string) => boolean; precio: number }[] = [
+  { test: t => t.includes('diesel') || t.includes('diésel') || t.includes('acpm'), precio: 11200 },
+  { test: t => t.includes('gasolina') || t.includes('corriente'), precio: 16000 },
+  { test: t => t.includes('electric') || t.includes('eléctric'), precio: 0 },
+];
+
+// Devuelve el precio COP/galón del combustible, o null si el tipo no está definido o no
+// tiene precio cargado (en cuyo caso ese consumo se excluye del costo).
+const precioCombustiblePorGalon = (tipoCombustible?: string | null): number | null => {
+  const t = (tipoCombustible ?? '').toLowerCase().trim();
+  if (!t) return null;
+  const match = PRECIO_COMBUSTIBLE_GALON.find(f => f.test(t));
+  return match ? match.precio : null;
 };
 
 // Umbral de "ralentí excesivo" (alerta) por proveedor satelital, en segundos.
@@ -382,6 +409,9 @@ export const RalentiReports: React.FC = () => {
   // Telemetry Data
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Guía técnica de cálculo (colapsable)
+  const [showTechGuide, setShowTechGuide] = useState<boolean>(false);
   
   // Summary Metrics from reportes_vehiculos/ralentis_periodos
   const [summaryMetrics, setSummaryMetrics] = useState<{
@@ -847,9 +877,6 @@ export const RalentiReports: React.FC = () => {
       ? (totalHorasMotorRalenti / totalHorasMotorEncendido) * 100 
       : 0;
 
-    const costTotal = totalGalonesConsumidos * 9922; // $9.922 COP per gallon
-    const costAvgDaily = daysInPeriod > 0 ? costTotal / daysInPeriod : 0;
-
     // Huella de carbono diferenciada por tipo de combustible (FECOC/UPME): se aplica
     // el factor kg CO₂/galón propio de cada combustible SOLO sobre los galones cuyo tipo
     // está definido y reconocido. Los galones sin tipo NO se promedian ni se estiman: se
@@ -866,6 +893,21 @@ export const RalentiReports: React.FC = () => {
     // Factor de distribución del CO₂ real sobre el total de galones, para que la suma
     // de la tendencia diaria y del desglose por proveedor reconcilie con co2Kg.
     const co2FactorEfectivo = totalGalonesConsumidos > 0 ? co2Kg / totalGalonesConsumidos : 0;
+
+    // Costo del combustible DIFERENCIADO por tipo (mismo principio que el CO₂): cada
+    // galón se valora con el precio de SU combustible (diésel ≠ gasolina), SOLO sobre los
+    // galones cuyo tipo está definido y tiene precio cargado. Los galones sin tipo/precio
+    // NO se estiman: quedan fuera del costo (se reportan en galonesSinTipo). Eléctrico=$0.
+    const costTotal = Object.entries(galonesPorCombustible).reduce((acc, [tipo, gal]) => {
+      const p = precioCombustiblePorGalon(tipo);
+      return p === null ? acc : acc + gal * p;
+    }, 0);
+    const costAvgDaily = daysInPeriod > 0 ? costTotal / daysInPeriod : 0;
+    // Precio efectivo (mezcla real) por galón consumido, para reconciliar la proyección y
+    // la comparación con el periodo anterior (que solo guarda el total de galones, sin
+    // desglose por combustible). Diluye el costo sobre TODOS los galones, igual que
+    // co2FactorEfectivo hace con el CO₂.
+    const costFactorEfectivo = totalGalonesConsumidos > 0 ? costTotal / totalGalonesConsumidos : 0;
     const treesEquivalent = co2Kg / 22; // Trees formula
 
     // "Mayor evento único" se mide solo entre eventos con conductor identificado
@@ -933,7 +975,7 @@ export const RalentiReports: React.FC = () => {
       ? (prevSummaryMetrics.totalHorasMotorRalenti / prevSummaryMetrics.totalHorasMotorEncendido) * 100 
       : 0;
     const pctRalentiDiff = pctRalenti - prevPctRalenti;
-    const costTotalDiff = (totalGalonesConsumidos * 9922) - (prevSummaryMetrics.totalGalonesConsumidos * 9922);
+    const costTotalDiff = costTotal - (prevSummaryMetrics.totalGalonesConsumidos * costFactorEfectivo);
 
     // Anomaly Outliers Detection (Mean + 1.2 * StdDev)
     const vehicleSummaryMap = new Map<string, { totalTime: number; count: number }>();
@@ -974,7 +1016,7 @@ export const RalentiReports: React.FC = () => {
     const trendRatio = prevPctRalenti > 0 ? pctRalenti / prevPctRalenti : 1;
     const predictedPct = Math.min(100, Math.max(1, pctRalenti * (trendRatio > 1.5 ? 1.15 : trendRatio < 0.5 ? 0.85 : trendRatio)));
     const predictedGalones = totalGalonesConsumidos * (predictedPct / (pctRalenti || 1));
-    const predictedCosto = predictedGalones * 9922;
+    const predictedCosto = predictedGalones * costFactorEfectivo;
 
     const vehMap = new Map<string, number>();
     alertEvents.forEach(e => {
@@ -1713,7 +1755,7 @@ export const RalentiReports: React.FC = () => {
                 </div>
               </div>
               <div className="text-[10px] text-slate-400 dark:text-slate-500 leading-snug border-t border-slate-100 dark:border-slate-800/80 pt-2 font-medium">
-                Cálculo: (Galones Consumidos en Ralentí × $9.922 COP/Gal) / Días. Impacto financiero diario del ralentí.
+                Cálculo: (Galones por combustible × precio de su tipo) / Días. Diésel $11.200 y gasolina $16.000 COP/Gal. Impacto financiero diario del ralentí.
               </div>
             </div>
 
@@ -2339,11 +2381,11 @@ export const RalentiReports: React.FC = () => {
                   <span className="text-xs font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wide">Costo del combustible</span>
                 </div>
                 <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
-                  <code className="text-[10px] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5">Costo Total = Galones en ralentí × $9.922 COP/Gal</code>
+                  <code className="text-[10px] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5">Costo Total = Σ (Galones por combustible × Precio del combustible)</code>
                 </p>
                 <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                  El costo promedio diario divide el costo total entre los días del período. Precio de referencia
-                  del galón de combustible parametrizado en <span className="font-semibold">$9.922 COP</span>.
+                  Cada galón se valora con el precio de su tipo de combustible, sin promediar: <span className="font-semibold">diésel $11.200</span> y <span className="font-semibold">gasolina $16.000 COP/Gal</span> (eléctrico $0).
+                  Los galones sin tipo definido se excluyen del costo. El costo promedio diario divide el costo total entre los días del período.
                 </p>
               </div>
 
@@ -2408,6 +2450,377 @@ export const RalentiReports: React.FC = () => {
               </p>
             </div>
           </div>
+
+          {/* ====================== GUÍA TÉCNICA DE CÁLCULO (botón flotante + modal) ====================== */}
+          {/* Botón flotante: abre la guía como ventana modal */}
+          <button
+            type="button"
+            onClick={() => setShowTechGuide(true)}
+            title="Guía Técnica de Cálculo del Informe"
+            className="fixed bottom-6 right-6 z-40 flex items-center gap-2 px-4 py-3 rounded-full shadow-lg bg-sky-600 hover:bg-sky-700 active:scale-95 text-white transition-all"
+          >
+            <BookOpen className="w-5 h-5" />
+            <span className="text-sm font-semibold hidden sm:inline">Guía Técnica</span>
+          </button>
+
+          {/* Modal de la guía técnica */}
+          {showTechGuide && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+              onClick={() => setShowTechGuide(false)}
+            >
+              <div
+                className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-4xl max-h-[88vh] flex flex-col overflow-hidden"
+                onClick={e => e.stopPropagation()}
+              >
+                {/* Header del modal */}
+                <div className="flex items-center justify-between gap-3 px-6 py-4 border-b border-slate-200 dark:border-slate-700 shrink-0">
+                  <span className="flex items-center gap-2.5">
+                    <span className="w-8 h-8 rounded-lg bg-sky-50 dark:bg-sky-950/40 flex items-center justify-center">
+                      <BookOpen className="w-4 h-4 text-sky-600 dark:text-sky-400" />
+                    </span>
+                    <span>
+                      <span className="block font-bold text-slate-800 dark:text-slate-100 text-sm">Guía Técnica de Cálculo del Informe</span>
+                      <span className="block text-[11px] text-slate-500 dark:text-slate-400">Fórmulas, fuentes de datos y definiciones de cada indicador del módulo</span>
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowTechGuide(false)}
+                    className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors shrink-0"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {/* Cuerpo desplazable */}
+                <div className="px-6 pb-6 pt-2 space-y-6 overflow-y-auto">
+                {/* Intro */}
+                <p className="text-[11.5px] text-slate-600 dark:text-slate-300 leading-relaxed pt-4">
+                  Este documento describe, con detalle técnico, cómo se obtiene <span className="font-semibold">cada cifra y porcentaje</span> del
+                  informe. Todos los valores se calculan exclusivamente con datos reales de telemetría; <span className="font-semibold">no se usan
+                  promedios, estimaciones ni valores de respaldo</span>. Cuando un dato no está disponible (p. ej. el tipo de combustible de un
+                  vehículo), el registro se excluye del cálculo y se reporta aparte, nunca se rellena con supuestos.
+                </p>
+
+                {/* 1. Fuentes de datos */}
+                <section className="space-y-2">
+                  <h4 className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wide">
+                    <Database className="w-4 h-4 text-sky-500" /> 1. Fuentes de datos
+                  </h4>
+                  <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                    El informe combina tres tablas de la base de datos. La granularidad es distinta en cada una y por eso cada métrica
+                    indica explícitamente de cuál proviene:
+                  </p>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-[11px]">
+                      <thead>
+                        <tr className="bg-slate-50 dark:bg-slate-900/50 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-200 dark:border-slate-700">
+                          <th className="py-2 px-3">Tabla</th>
+                          <th className="py-2 px-3">Granularidad</th>
+                          <th className="py-2 px-3">Columnas clave usadas</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-700/60 align-top">
+                        <tr>
+                          <td className="py-2.5 px-3 font-mono font-semibold text-slate-700 dark:text-slate-200">ralentis_periodos</td>
+                          <td className="py-2.5 px-3 text-slate-500 dark:text-slate-400">1 fila por vehículo y período (quincena)</td>
+                          <td className="py-2.5 px-3 text-slate-500 dark:text-slate-400">horas_motor_encendido, horas_motor_ralenti, consumo_combustible</td>
+                        </tr>
+                        <tr>
+                          <td className="py-2.5 px-3 font-mono font-semibold text-slate-700 dark:text-slate-200">ralentis_eventos</td>
+                          <td className="py-2.5 px-3 text-slate-500 dark:text-slate-400">1 fila por cada evento de ralentí detectado</td>
+                          <td className="py-2.5 px-3 text-slate-500 dark:text-slate-400">duracion_segundos, conductor_nombre, placa, proveedor, fecha_inicio</td>
+                        </tr>
+                        <tr>
+                          <td className="py-2.5 px-3 font-mono font-semibold text-slate-700 dark:text-slate-200">vehiculos</td>
+                          <td className="py-2.5 px-3 text-slate-500 dark:text-slate-400">1 fila por vehículo (maestro)</td>
+                          <td className="py-2.5 px-3 text-slate-500 dark:text-slate-400">tipo_combustible, cliente, contrato_id, tipo_activo, placa</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="text-[10.5px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                    <span className="font-semibold">Relación fundamental:</span> <code className="text-[10px] bg-slate-100 dark:bg-slate-900 rounded px-1">horas_motor_encendido</code> ya
+                    <span className="font-semibold"> incluye</span> a <code className="text-[10px] bg-slate-100 dark:bg-slate-900 rounded px-1">horas_motor_ralenti</code> (el ralentí
+                    es un subconjunto del tiempo con motor encendido). Por eso el porcentaje de ralentí se calcula sobre el encendido, nunca
+                    sobre su suma.
+                  </p>
+                </section>
+
+                {/* 2. Filtros y periodo */}
+                <section className="space-y-2">
+                  <h4 className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wide">
+                    <Filter className="w-4 h-4 text-indigo-500" /> 2. Filtros y período de análisis
+                  </h4>
+                  <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                    Todas las cifras son <span className="font-semibold">dinámicas</span>: se recalculan al aplicar cualquier combinación de filtros
+                    (Cliente, Contrato, Tipo de vehículo, Placa y período). El período se determina por Año + Mes + Quincena:
+                  </p>
+                  <code className="block w-full text-[10.5px] font-mono bg-slate-900 text-emerald-300 dark:bg-black/40 rounded-md px-3 py-2 leading-relaxed whitespace-pre-wrap">
+{`Quincena 1  →  día 01 al 15 del mes
+Quincena 2  →  día 16 al último día del mes
+"Todo el mes" → día 01 al último día del mes
+N.º de días del período = (fecha_fin − fecha_inicio) + 1`}
+                  </code>
+                  <p className="text-[10.5px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                    Los filtros se aplican en la consulta SQL mediante <code className="text-[10px] bg-slate-100 dark:bg-slate-900 rounded px-1">JOIN</code> con la
+                    tabla <code className="text-[10px] bg-slate-100 dark:bg-slate-900 rounded px-1">vehiculos</code>, de modo que afectan por igual a los agregados
+                    (ralentis_periodos) y a los eventos (ralentis_eventos).
+                  </p>
+                </section>
+
+                {/* 3. Tiempos y % de ralentí */}
+                <section className="space-y-2">
+                  <h4 className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wide">
+                    <Clock className="w-4 h-4 text-amber-500" /> 3. Tiempos y porcentaje de ralentí
+                  </h4>
+                  <code className="block w-full text-[10.5px] font-mono bg-slate-900 text-emerald-300 dark:bg-black/40 rounded-md px-3 py-2 leading-relaxed whitespace-pre-wrap">
+{`Tiempo Total en Ralentí  = Σ horas_motor_ralenti        (todas las filas del período)
+Tiempo Motor Encendido   = Σ horas_motor_encendido
+% Ralentí                = (Tiempo Ralentí ÷ Tiempo Encendido) × 100
+Tiempo en Movimiento     = Tiempo Encendido − Tiempo Ralentí`}
+                  </code>
+                  <p className="text-[10.5px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                    El <span className="font-semibold">% Ralentí</span> es el indicador maestro del informe: representa qué fracción del tiempo con
+                    motor encendido el vehículo estuvo detenido quemando combustible sin desplazarse.
+                  </p>
+                </section>
+
+                {/* 4. Eventos, umbrales y alertas */}
+                <section className="space-y-2">
+                  <h4 className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wide">
+                    <ShieldAlert className="w-4 h-4 text-rose-500" /> 4. Eventos, umbrales y alertas
+                  </h4>
+                  <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                    Un <span className="font-semibold">evento de ralentí</span> se convierte en <span className="font-semibold">alerta</span> solo si su
+                    duración supera el umbral nativo del proveedor satelital que lo reportó. No se normaliza a un umbral común porque cada
+                    plataforma define la alerta de forma distinta:
+                  </p>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-[11px]">
+                      <thead>
+                        <tr className="bg-slate-50 dark:bg-slate-900/50 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-200 dark:border-slate-700">
+                          <th className="py-2 px-3">Proveedor</th>
+                          <th className="py-2 px-3 text-right">Umbral de alerta</th>
+                          <th className="py-2 px-3 text-right">En segundos</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-700/60">
+                        <tr>
+                          <td className="py-2.5 px-3 font-semibold text-slate-700 dark:text-slate-200">Coltrack</td>
+                          <td className="py-2.5 px-3 text-right text-slate-600 dark:text-slate-300">≥ 10 minutos</td>
+                          <td className="py-2.5 px-3 text-right font-bold text-slate-800 dark:text-slate-100">600 s</td>
+                        </tr>
+                        <tr>
+                          <td className="py-2.5 px-3 font-semibold text-slate-700 dark:text-slate-200">Fagor</td>
+                          <td className="py-2.5 px-3 text-right text-slate-600 dark:text-slate-300">≥ 5 minutos</td>
+                          <td className="py-2.5 px-3 text-right font-bold text-slate-800 dark:text-slate-100">300 s</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <code className="block w-full text-[10.5px] font-mono bg-slate-900 text-emerald-300 dark:bg-black/40 rounded-md px-3 py-2 leading-relaxed whitespace-pre-wrap">
+{`alerta  ⇔  duracion_segundos ≥ umbral(proveedor)
+N.º de Alertas (ralentís excesivos) = cantidad de eventos que son alerta
+Horas en ralentí > umbral           = Σ duracion_segundos(alertas) ÷ 3600`}
+                  </code>
+                  <p className="text-[10.5px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                    El conteo de alertas se calcula <span className="font-semibold">sobre los eventos reales</span>, no a partir del contador agregado
+                    de la tabla de períodos (que incluiría todos los ralentís, no solo los que superan el umbral).
+                  </p>
+                </section>
+
+                {/* 5. Combustible y costo */}
+                <section className="space-y-2">
+                  <h4 className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wide">
+                    <DollarSign className="w-4 h-4 text-amber-500" /> 5. Combustible y costo
+                  </h4>
+                  <code className="block w-full text-[10.5px] font-mono bg-slate-900 text-emerald-300 dark:bg-black/40 rounded-md px-3 py-2 leading-relaxed whitespace-pre-wrap">
+{`Galones en Ralentí  = Σ consumo_combustible          (galones)
+Costo Total         = Σ (galones_del_combustible × precio_del_combustible)
+Costo Promedio Diario = Costo Total ÷ N.º de días del período
+Precio efectivo/gal   = Costo Total ÷ Galones totales (mezcla real de la flota)`}
+                  </code>
+                  <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                    El costo se valora <span className="font-semibold">por tipo de combustible</span>, no con una tarifa plana. Cada galón usa el precio
+                    de su propio combustible (columna <span className="font-semibold">"Tipo combustible"</span> del vehículo). Precios de referencia,
+                    actualizables manualmente cuando cambie la regulación:
+                  </p>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-[11px]">
+                      <thead>
+                        <tr className="bg-slate-50 dark:bg-slate-900/50 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-200 dark:border-slate-700">
+                          <th className="py-2 px-3">Combustible</th>
+                          <th className="py-2 px-3 text-right">Precio COP / galón</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-700/60">
+                        <tr><td className="py-2.5 px-3 font-semibold text-slate-700 dark:text-slate-200">Diésel / ACPM</td><td className="py-2.5 px-3 text-right font-bold text-slate-800 dark:text-slate-100">$11.200</td></tr>
+                        <tr><td className="py-2.5 px-3 font-semibold text-slate-700 dark:text-slate-200">Gasolina</td><td className="py-2.5 px-3 text-right font-bold text-slate-800 dark:text-slate-100">$16.000</td></tr>
+                        <tr><td className="py-2.5 px-3 font-semibold text-slate-700 dark:text-slate-200">Eléctrico</td><td className="py-2.5 px-3 text-right font-bold text-slate-800 dark:text-slate-100">$0</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="text-[10.5px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                    Los galones de vehículos <span className="font-semibold">sin tipo de combustible definido</span> se excluyen del costo (no se
+                    estiman con promedios) y se reportan aparte en la tarjeta ambiental.
+                  </p>
+                </section>
+
+                {/* 6. Huella de carbono */}
+                <section className="space-y-2">
+                  <h4 className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wide">
+                    <Leaf className="w-4 h-4 text-emerald-500" /> 6. Huella de carbono (CO₂)
+                  </h4>
+                  <code className="block w-full text-[10.5px] font-mono bg-slate-900 text-emerald-300 dark:bg-black/40 rounded-md px-3 py-2 leading-relaxed whitespace-pre-wrap">
+{`CO₂ (kg) = Σ (galones_del_combustible × factor_del_combustible)
+Factor (kg CO₂/gal) = (%C ÷ 100) × (44,0095 ÷ 12,0107) × Densidad[kg/L] × 3,7854118[L/gal]
+Equivalente en árboles = CO₂(kg) ÷ 22      (absorción anual de un árbol maduro)
+Factor efectivo flota  = CO₂(kg) ÷ Galones totales`}
+                  </code>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-[11px]">
+                      <thead>
+                        <tr className="bg-slate-50 dark:bg-slate-900/50 text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-200 dark:border-slate-700">
+                          <th className="py-2 px-3">Combustible</th>
+                          <th className="py-2 px-3 text-right">Factor</th>
+                          <th className="py-2 px-3">Base FECOC/UPME</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-700/60">
+                        <tr><td className="py-2.5 px-3 font-semibold text-slate-700 dark:text-slate-200">Diésel / ACPM</td><td className="py-2.5 px-3 text-right font-bold text-slate-800 dark:text-slate-100">10,15</td><td className="py-2.5 px-3 text-slate-500 dark:text-slate-400">%C 85,89 · dens. 0,8519</td></tr>
+                        <tr><td className="py-2.5 px-3 font-semibold text-slate-700 dark:text-slate-200">Gasolina</td><td className="py-2.5 px-3 text-right font-bold text-slate-800 dark:text-slate-100">8,81</td><td className="py-2.5 px-3 text-slate-500 dark:text-slate-400">%C 85,76 · dens. 0,7405</td></tr>
+                        <tr><td className="py-2.5 px-3 font-semibold text-slate-700 dark:text-slate-200">GLP</td><td className="py-2.5 px-3 text-right font-bold text-slate-800 dark:text-slate-100">6,47</td><td className="py-2.5 px-3 text-slate-500 dark:text-slate-400">%C 83,27 · dens. 0,5599</td></tr>
+                        <tr><td className="py-2.5 px-3 font-semibold text-slate-700 dark:text-slate-200">Eléctrico</td><td className="py-2.5 px-3 text-right font-bold text-slate-800 dark:text-slate-100">0</td><td className="py-2.5 px-3 text-slate-500 dark:text-slate-400">Sin combustión</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="text-[10.5px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                    Fuente: Factores de Emisión de los Combustibles Colombianos (FECOC) — UPME. Igual que en el costo, los galones sin tipo
+                    de combustible se excluyen y se reportan aparte.
+                  </p>
+                </section>
+
+                {/* 7. Datos clave */}
+                <section className="space-y-2">
+                  <h4 className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wide">
+                    <Activity className="w-4 h-4 text-violet-500" /> 7. Datos clave de eventos
+                  </h4>
+                  <code className="block w-full text-[10.5px] font-mono bg-slate-900 text-emerald-300 dark:bg-black/40 rounded-md px-3 py-2 leading-relaxed whitespace-pre-wrap">
+{`Mayor Evento Único   = máx(duracion_segundos) entre eventos con conductor identificado
+Promedio por Evento  = Σ duracion_segundos(alertas) ÷ N.º de alertas
+Eventos > 30 min     = cantidad de alertas con duracion_segundos > 1800
+Formato h:mm:ss      = se deriva de los segundos totales del evento`}
+                  </code>
+                  <p className="text-[10.5px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                    "Mayor Evento Único" se mide solo entre eventos con conductor plenamente identificado (se descartan "N/A", "No registra",
+                    etc.), para poder atribuir el evento a una persona.
+                  </p>
+                </section>
+
+                {/* 8. Riesgo operacional y metas */}
+                <section className="space-y-2">
+                  <h4 className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wide">
+                    <AlertTriangle className="w-4 h-4 text-orange-500" /> 8. Riesgo operacional y metas
+                  </h4>
+                  <code className="block w-full text-[10.5px] font-mono bg-slate-900 text-emerald-300 dark:bg-black/40 rounded-md px-3 py-2 leading-relaxed whitespace-pre-wrap">
+{`Riesgo Operacional según % Ralentí:
+   % > 15           →  ALTO
+   10 ≤ % ≤ 15      →  MEDIO
+   % < 10           →  BAJO
+
+Metas de referencia (objetivos de gestión):
+   Meta % Ralentí        = 10 %
+   Meta Galones/período  = 37 gal
+   Meta Costo diario     = $28.000 COP/día
+Desviación (Δ) = valor real − meta   (se muestra en rojo si supera la meta)`}
+                  </code>
+                  <p className="text-[10.5px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                    Las metas son objetivos de gestión definidos por la operación; no alteran las cifras reales, solo sirven para colorear y
+                    contextualizar las desviaciones.
+                  </p>
+                </section>
+
+                {/* 9. Comparación y proyección */}
+                <section className="space-y-2">
+                  <h4 className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wide">
+                    <TrendingUp className="w-4 h-4 text-sky-500" /> 9. Comparación con período anterior y proyección
+                  </h4>
+                  <code className="block w-full text-[10.5px] font-mono bg-slate-900 text-emerald-300 dark:bg-black/40 rounded-md px-3 py-2 leading-relaxed whitespace-pre-wrap">
+{`Δ % vs período anterior = % Ralentí actual − % Ralentí anterior
+Δ Costo vs anterior     = Costo actual − (Galones anteriores × precio efectivo actual)
+
+Proyección (tendencia):
+   ratio       = % actual ÷ % anterior
+   % proyectado = % actual × factor_suavizado(ratio)   [límite 1–100 %]
+   Galones proy. = Galones actuales × (% proyectado ÷ % actual)
+   Costo proy.   = Galones proy. × precio efectivo`}
+                  </code>
+                  <p className="text-[10.5px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                    La proyección es un indicador de tendencia (suavizado para evitar saltos extremos), no una predicción contractual. El
+                    período anterior solo almacena el total de galones, por eso su costo se reconstruye con el precio efectivo del período actual.
+                  </p>
+                </section>
+
+                {/* 10. Anomalías */}
+                <section className="space-y-2">
+                  <h4 className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wide">
+                    <BrainCircuit className="w-4 h-4 text-fuchsia-500" /> 10. Detección de anomalías (outliers)
+                  </h4>
+                  <code className="block w-full text-[10.5px] font-mono bg-slate-900 text-emerald-300 dark:bg-black/40 rounded-md px-3 py-2 leading-relaxed whitespace-pre-wrap">
+{`Por cada vehículo:  tiempo_total = Σ duracion_segundos(sus alertas)
+media (μ)   = promedio de tiempo_total entre vehículos
+desv. (σ)   = desviación estándar
+umbral      = μ + 1,2 × σ
+Es anomalía ⇔ tiempo_total > umbral  Y  tiempo_total > 3600 s (1 h)
+excessRatio = tiempo_total ÷ μ`}
+                  </code>
+                  <p className="text-[10.5px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                    Identifica vehículos cuyo ralentí se desvía estadísticamente del comportamiento de la flota, priorizándolos para revisión.
+                  </p>
+                </section>
+
+                {/* 11. Tops y calificación */}
+                <section className="space-y-2">
+                  <h4 className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wide">
+                    <FileSpreadsheet className="w-4 h-4 text-emerald-500" /> 11. Clasificación de conductores y vehículos
+                  </h4>
+                  <code className="block w-full text-[10.5px] font-mono bg-slate-900 text-emerald-300 dark:bg-black/40 rounded-md px-3 py-2 leading-relaxed whitespace-pre-wrap">
+{`Tiempo por conductor/vehículo = Σ duracion_segundos de sus alertas
+Top = orden descendente por ese tiempo acumulado
+% del total = tiempo_del_conductor ÷ Tiempo Total en Ralentí × 100
+Calificación estimada = 100 − (horas_en_ralentí × 5)   [acotada a 0–100]`}
+                  </code>
+                  <p className="text-[10.5px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                    La calificación es un puntaje indicativo que penaliza el tiempo acumulado en ralentí; sirve para priorizar
+                    retroalimentación, no como evaluación formal de desempeño.
+                  </p>
+                </section>
+
+                {/* 12. Reglas de exclusión */}
+                <section className="space-y-2">
+                  <h4 className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-200 uppercase tracking-wide">
+                    <CheckCircle className="w-4 h-4 text-emerald-500" /> 12. Reglas de exclusión y calidad del dato
+                  </h4>
+                  <ul className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed list-disc pl-5 space-y-1.5">
+                    <li>Los registros cuyo conductor es <span className="font-semibold">"Taller"</span> se excluyen de los tops y de las cifras de eventos: corresponden a vehículos en mantenimiento, no a operación real.</li>
+                    <li>Los eventos sin conductor identificado (<span className="font-semibold">"N/A", "No registra"</span>) se excluyen de los rankings y del "Mayor Evento Único", pero se mantienen en los totales de tiempo/costo de la flota.</li>
+                    <li>Los galones de vehículos <span className="font-semibold">sin tipo de combustible</span> se excluyen del costo y del CO₂, y se reportan como pendientes por definir.</li>
+                    <li>Vehículos <span className="font-semibold">eléctricos</span>: factor de CO₂ y precio = 0 (es un tipo conocido, no un dato faltante).</li>
+                    <li><span className="font-semibold">Principio rector:</span> ninguna cifra se completa con promedios o supuestos. Si el dato real no existe, se excluye y se informa.</li>
+                  </ul>
+                </section>
+
+                {/* Cierre */}
+                <div className="text-[10px] text-slate-400 dark:text-slate-500 leading-relaxed border-t border-slate-100 dark:border-slate-800/80 pt-3">
+                  Documento técnico del módulo de Informe de Ralentí · Magnex Torre de Control. Las cifras mostradas reflejan los filtros
+                  activos en pantalla. Fuentes regulatorias: FECOC/UPME (emisiones) y Ministerio de Minas y Energía (precios de combustible).
+                </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Details Tables Grid: Drivers & Vehicles */}
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">

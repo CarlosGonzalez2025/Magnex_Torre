@@ -3072,7 +3072,7 @@ function Page1KpiCard({
 }: {
   title: string;
   value: string;
-  subText: string;
+  subText?: string;
   valueColor?: string;
   infoText?: string;
 }) {
@@ -3081,7 +3081,7 @@ function Page1KpiCard({
       <View>
         <Text style={{ fontSize: 7.5, fontWeight: 'bold', color: COLORS.gris, textTransform: 'uppercase', marginBottom: 2 }}>{title}</Text>
         <Text style={{ fontSize: 15, fontWeight: 'bold', color: valueColor, marginBottom: 2 }}>{value}</Text>
-        <Text style={{ fontSize: 6.8, color: COLORS.gris, marginBottom: 3 }}>{subText}</Text>
+        {subText ? <Text style={{ fontSize: 6.8, color: COLORS.gris, marginBottom: 3 }}>{subText}</Text> : null}
       </View>
       {infoText && (
         <Text style={{ fontSize: 6, color: COLORS.gris, borderTopWidth: 0.5, borderTopColor: '#e2e8f0', paddingTop: 3, marginTop: 2 }}>
@@ -3495,28 +3495,37 @@ function ProportionsCharts({ data }: { data: RalentiPDFData }) {
   const pctRalentiChart = totalHorasMotorEncendido > 0 ? (totalHorasMotorRalenti / totalHorasMotorEncendido) * 100 : 0;
   const pctMovimientoChart = totalHorasMotorEncendido > 0 ? (horasEnMovimiento / totalHorasMotorEncendido) * 100 : 0;
 
-  // SVG Pie/Donut Chart based on Circle strokeDashoffset to ensure 100% robust rendering in react-pdf
-  const radius = 42;
-  const circumference = 2 * Math.PI * radius; // 263.89
-  const strokeDashoffset = circumference - (Math.min(pctRalentiChart, 100) / 100) * circumference;
+  // Donut de dos colores dibujado con arcos SVG (Path). NOTA: react-pdf NO soporta
+  // strokeDashoffset en <Circle>, por eso el arco de ralentí se traza como Path; así la
+  // porción "en movimiento" (azul) queda visible como el complemento del ralentí (naranja).
+  const cx = 57.5, cy = 57.5, r = 42;
+  const fRalenti = Math.min(Math.max(pctRalentiChart / 100, 0), 1);
+  const puntoEnCirculo = (frac: number): [number, number] => {
+    const ang = (-90 + frac * 360) * (Math.PI / 180); // 0% arriba, sentido horario
+    return [cx + r * Math.cos(ang), cy + r * Math.sin(ang)];
+  };
+  const [ralIniX, ralIniY] = puntoEnCirculo(0);
+  const [ralFinX, ralFinY] = puntoEnCirculo(fRalenti);
+  const ralentiLargeArc = fRalenti > 0.5 ? 1 : 0;
+  const ralentiArcPath = `M ${ralIniX.toFixed(2)} ${ralIniY.toFixed(2)} A ${r} ${r} 0 ${ralentiLargeArc} 1 ${ralFinX.toFixed(2)} ${ralFinY.toFixed(2)}`;
+  // Casos extremos: 0% o 100% de ralentí no se pueden representar con un arco (inicio=fin).
+  const ralentiEsCompleto = fRalenti >= 0.999;
+  const ralentiEsNulo = fRalenti <= 0.001;
 
   return (
-    <View style={{ marginBottom: 4, marginTop: 4 }} wrap={false}>
-      <View style={{ backgroundColor: COLORS.azul, padding: '4 8', marginBottom: 4 }}>
-        <Text style={{ fontSize: 7.5, fontWeight: 700, color: COLORS.blanco }}>ANÁLISIS DE DISTRIBUCIÓN Y PROPORCIONES DE RALENTÍ</Text>
-      </View>
-
+    <View style={{ marginBottom: 8, marginTop: 0 }} wrap={false}>
       <View style={{ flexDirection: 'row', gap: 10, borderWidth: 0.5, borderColor: '#cbd5e1', borderRadius: 4, padding: 8, backgroundColor: '#ffffff', minHeight: 100, alignItems: 'center' }}>
 
         {/* Left Column: Pie Chart (Donut) */}
         <View style={{ flex: 1.2, alignItems: 'center', justifyContent: 'center', borderRightWidth: 0.5, borderRightColor: '#e2e8f0', borderStyle: 'solid', paddingRight: 10 }}>
-          <Text style={{ fontSize: 8.5, fontWeight: 'bold', color: COLORS.azul, marginBottom: 4 }}>Ralentí vs Horas Motor</Text>
+          <Text style={{ fontSize: 8.5, fontWeight: 'bold', color: COLORS.azul, marginBottom: 4 }}>% Tiempo Ralentí · Ralentí vs Horas Motor</Text>
 
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
             {/* SVG Donut */}
             <View style={{ width: 92, height: 92, position: 'relative', justifyContent: 'center', alignItems: 'center' }}>
               <Svg width={92} height={92} viewBox="0 0 115 115" style={{ width: 92, height: 92 }}>
-                {/* Background Full Circle (driving: blue) */}
+                {/* Anillo de fondo = Tiempo en Movimiento (azul). Cubre todo el círculo;
+                    el arco de ralentí (naranja) se superpone solo sobre su porción. */}
                 <Circle
                   cx="57.5"
                   cy="57.5"
@@ -3525,19 +3534,15 @@ function ProportionsCharts({ data }: { data: RalentiPDFData }) {
                   stroke="#3b82f6"
                   strokeWidth="18"
                 />
-                {/* Foreground Partial Circle (idle: orange) */}
-                <Circle
-                  cx="57.5"
-                  cy="57.5"
-                  r="42"
-                  fill="none"
-                  stroke="#f97316"
-                  strokeWidth="18"
-                  strokeDasharray={String(circumference)}
-                  strokeDashoffset={String(strokeDashoffset)}
-                  transform="rotate(-90 57.5 57.5)"
-                />
-                {/* Center Mask to create high-definition donut holes */}
+                {/* Arco de ralentí (naranja) sobre su fracción real. */}
+                {!ralentiEsNulo && (
+                  ralentiEsCompleto ? (
+                    <Circle cx="57.5" cy="57.5" r="42" fill="none" stroke="#f97316" strokeWidth="18" />
+                  ) : (
+                    <Path d={ralentiArcPath} fill="none" stroke="#f97316" strokeWidth="18" />
+                  )
+                )}
+                {/* Máscara central para formar el agujero del donut. */}
                 <Circle cx="57.5" cy="57.5" r="32" fill="#ffffff" />
               </Svg>
               <View style={{ position: 'absolute', width: 92, height: 92, justifyContent: 'center', alignItems: 'center' }}>
@@ -3548,6 +3553,13 @@ function ProportionsCharts({ data }: { data: RalentiPDFData }) {
 
             {/* Legends */}
             <View style={{ gap: 6 }}>
+              {/* Base 100%: total de horas de motor encendido */}
+              <View>
+                <Text style={{ fontSize: 6, color: COLORS.gris, textTransform: 'uppercase', fontWeight: 'bold' }}>Total Horas Motor Encendido</Text>
+                <Text style={{ fontSize: 9, fontWeight: 'bold', color: COLORS.azul, marginTop: 1 }}>{totalHorasMotorEncendido.toFixed(1)} h (100%)</Text>
+                <Text style={{ fontSize: 5, color: COLORS.gris, marginTop: 0.5 }}>Base de cálculo · suma de las dos porciones</Text>
+              </View>
+              <View style={{ height: 0.5, backgroundColor: '#e2e8f0', marginVertical: 1 }} />
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                 <View style={{ width: 8, height: 8, backgroundColor: '#3b82f6', borderRadius: 2 }} />
                 <View>
@@ -3915,32 +3927,27 @@ export function InformeRalentiPDF({ data }: { data: RalentiPDFData }) {
           tiposNombre={tiposNombre}
         />
 
-        {/* 4 KPIs Row */}
+        {/* KPIs banner */}
         <View style={{ backgroundColor: COLORS.azul, padding: '4 8', marginBottom: 4 }} wrap={false}>
           <Text style={{ fontSize: 7.5, fontWeight: 700, color: COLORS.blanco }}>INDICADORES CLAVE DE DESEMPEÑO (KPIs)</Text>
         </View>
-        
+
+        {/* Gráfico unificado: donut de % ralentí (vs horas motor) + barras de ralentí > 5 min */}
+        <ProportionsCharts data={data} />
+
+        {/* Tarjetas KPI restantes (el % de ralentí queda representado por el donut superior) */}
         <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8 }} wrap={false}>
-          <Page1KpiCard
-            title="% Tiempo Ralentí"
-            value={`${pctRalenti.toFixed(2)}%`}
-            subText="Meta: 10.00%"
-            valueColor={deltaPct > 0 ? COLORS.rojo : COLORS.negro}
-            infoText="Del tiempo que el motor estuvo encendido, qué parte pasó detenido sin avanzar. Entre más bajo, mejor aprovechamiento del vehículo."
-          />
           <Page1KpiCard
             title="Galones Consumidos en Ralentí"
             value={`${totalGalonesConsumidos.toFixed(1)} Gal`}
-            subText="Meta: 37.0 Gal"
             valueColor={deltaGalones > 0 ? COLORS.rojo : COLORS.negro}
-            infoText="Combustible gastado con el vehículo detenido y el motor encendido. Es consumo que no produce ningún desplazamiento."
+            infoText="Combustible gastado con el vehículo detenido. Es el combustible que se esta desperdiciando por Ralentí."
           />
           <Page1KpiCard
-            title="Costo Promedio Diario"
-            value={fmtCOP(costAvgDaily)}
-            subText="Meta: $28k / día"
+            title="Costo Total de Combustible en Ralentí"
+            value={fmtCOP(costTotal)}
             valueColor={deltaCosto > 0 ? COLORS.rojo : COLORS.negro}
-            infoText="Dinero que cuesta cada día, en promedio, el combustible quemado mientras el vehículo está detenido. Es gasto evitable."
+            infoText="Costo total del combustible quemado con el vehículo detenido durante el período. Es gasto evitable."
           />
           <Page1KpiCard
             title="Riesgo Operacional"
@@ -3979,9 +3986,6 @@ export function InformeRalentiPDF({ data }: { data: RalentiPDFData }) {
           costTotal={costTotal}
           co2Kg={co2Kg}
         />
-
-        {/* Análisis de Distribución y Proporciones de Ralentí */}
-        <ProportionsCharts data={data} />
 
         <ReportFooterDiario />
       </Page>
