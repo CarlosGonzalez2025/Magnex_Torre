@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../../services/supabaseClient';
 import { descargarPDFRalenti } from '../../services/pdfTemplates';
+import { RalentiAnalisisGeneral } from './RalentiAnalisisGeneral';
 
 interface ContractOption {
   id: string;
@@ -393,6 +394,9 @@ interface IdlingEvent {
 }
 
 export const RalentiReports: React.FC = () => {
+  // View mode: period report or general analysis across all periods
+  const [activeView, setActiveView] = useState<'periodo' | 'general'>('periodo');
+
   // Filter States
   const [year, setYear] = useState<number>(2026);
   const [month, setMonth] = useState<number>(4); // Default to April, where our test data resides
@@ -686,8 +690,8 @@ export const RalentiReports: React.FC = () => {
       const [repVehRes, prevVehRes] = await Promise.all([repVehQuery, prevVehQuery]);
       if (repVehRes.error) throw repVehRes.error;
 
-      const filteredRepVehs = repVehRes.data ?? [];
-      const prevRepVehs = prevVehRes.data ?? [];
+      const filteredRepVehs: any[] = repVehRes.data ?? [];
+      const prevRepVehs: any[] = prevVehRes.data ?? [];
 
       // Sum metrics
       const sumEncendido = filteredRepVehs.reduce((acc, r) => acc + (Number(r.horas_motor_encendido) || 0), 0);
@@ -1545,64 +1549,94 @@ export const RalentiReports: React.FC = () => {
         </button>
       </div>
 
-      {/* Filter Bar */}
-      <div className="no-print bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3 shadow-sm">
+      {/* View Tab Switcher */}
+      <div className="no-print flex items-center gap-1 bg-slate-100 dark:bg-slate-800 rounded-xl p-1 w-fit border border-slate-200 dark:border-slate-700">
+        <button
+          onClick={() => setActiveView('periodo')}
+          className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg transition-all ${
+            activeView === 'periodo'
+              ? 'bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-100 shadow-sm'
+              : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+          }`}
+        >
+          <BarChart3 className="w-3.5 h-3.5" />
+          Informe por Período
+        </button>
+        <button
+          onClick={() => setActiveView('general')}
+          className={`flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg transition-all ${
+            activeView === 'general'
+              ? 'bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-100 shadow-sm'
+              : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+          }`}
+        >
+          <TrendingUp className="w-3.5 h-3.5" />
+          Análisis General
+        </button>
+      </div>
+
+      {/* Filter Bar — only shown in "por período" view */}
+      {activeView === 'periodo' && <div className="no-print bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3 shadow-sm">
         <div className="flex items-center gap-2 text-slate-700 dark:text-slate-300 font-semibold text-sm">
           <Filter className="w-4 h-4 text-emerald-500" />
           <span>Filtros Gerenciales</span>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-          {/* Year */}
-          <div>
-            <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1 block">Año</label>
-            <select
-              value={year}
-              onChange={(e) => setYear(Number(e.target.value))}
-              className="w-full px-3 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 outline-none focus:ring-1 focus:ring-emerald-500"
-            >
-              {Array.from({ length: 4 }, (_, i) => new Date().getFullYear() - 1 + i).map(y => (
-                <option key={y} value={y}>{y}</option>
-              ))}
-            </select>
-          </div>
+          {activeView === 'periodo' && (
+            <>
+              {/* Year */}
+              <div>
+                <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1 block">Año</label>
+                <select
+                  value={year}
+                  onChange={(e) => setYear(Number(e.target.value))}
+                  className="w-full px-3 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 outline-none focus:ring-1 focus:ring-emerald-500"
+                >
+                  {Array.from({ length: 4 }, (_, i) => new Date().getFullYear() - 1 + i).map(y => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+              </div>
 
-          {/* Month */}
-          <div>
-            <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1 block">Mes</label>
-            <select
-              value={month}
-              onChange={(e) => setMonth(Number(e.target.value))}
-              className="w-full px-3 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 outline-none focus:ring-1 focus:ring-emerald-500"
-            >
-              <option value="1">Enero</option>
-              <option value="2">Febrero</option>
-              <option value="3">Marzo</option>
-              <option value="4">Abril</option>
-              <option value="5">Mayo</option>
-              <option value="6">Junio</option>
-              <option value="7">Julio</option>
-              <option value="8">Agosto</option>
-              <option value="9">Septiembre</option>
-              <option value="10">Octubre</option>
-              <option value="11">Noviembre</option>
-              <option value="12">Diciembre</option>
-            </select>
-          </div>
+              {/* Month */}
+              <div>
+                <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1 block">Mes</label>
+                <select
+                  value={month}
+                  onChange={(e) => setMonth(Number(e.target.value))}
+                  className="w-full px-3 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 outline-none focus:ring-1 focus:ring-emerald-500"
+                >
+                  <option value="1">Enero</option>
+                  <option value="2">Febrero</option>
+                  <option value="3">Marzo</option>
+                  <option value="4">Abril</option>
+                  <option value="5">Mayo</option>
+                  <option value="6">Junio</option>
+                  <option value="7">Julio</option>
+                  <option value="8">Agosto</option>
+                  <option value="9">Septiembre</option>
+                  <option value="10">Octubre</option>
+                  <option value="11">Noviembre</option>
+                  <option value="12">Diciembre</option>
+                </select>
+              </div>
 
-          {/* Quincena */}
-          <div>
-            <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1 block">Quincena</label>
-            <select
-              value={quincena}
-              onChange={(e) => setQuincena(e.target.value as any)}
-              className="w-full px-3 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 outline-none focus:ring-1 focus:ring-emerald-500"
-            >
-              <option value="1">Primera Quincena (1-15)</option>
-              <option value="2">Segunda Quincena (16-Fin)</option>
-              <option value="all">Mes Completo</option>
-            </select>
-          </div>
+              {/* Quincena */}
+              <div>
+                <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1 block">Quincena</label>
+                <select
+                  value={quincena}
+                  onChange={(e) => setQuincena(e.target.value as any)}
+                  className="w-full px-3 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 outline-none focus:ring-1 focus:ring-emerald-500"
+                >
+                  <option value="1">Primera Quincena (1-15)</option>
+                  <option value="2">Segunda Quincena (16-Fin)</option>
+                  <option value="all">Mes Completo</option>
+                </select>
+              </div>
+            </>
+          )}
 
           {/* Client */}
           <MultiSelectDropdown
@@ -1631,19 +1665,26 @@ export const RalentiReports: React.FC = () => {
             placeholder="Todos los tipos"
           />
 
-          {/* Vehicle */}
-          <SearchableSelect
-            label="Vehículo (Matrícula)"
-            options={vehicleSelectOptions}
-            value={placa}
-            onChange={setPlaca}
-            placeholder="Buscar placa..."
-            allLabel="Todos los vehículos"
-          />
+          {/* Vehicle — solo en vista por período */}
+          {activeView === 'periodo' && (
+            <SearchableSelect
+              label="Vehículo (Matrícula)"
+              options={vehicleSelectOptions}
+              value={placa}
+              onChange={setPlaca}
+              placeholder="Buscar placa..."
+              allLabel="Todos los vehículos"
+            />
+          )}
         </div>
-      </div>
+      </div>}
 
-      {loading ? (
+      {activeView === 'general' ? (
+        <RalentiAnalisisGeneral
+          vehicles={vehicles}
+          contracts={contracts}
+        />
+      ) : loading ? (
         <div className="flex justify-center items-center py-20">
           <div className="w-10 h-10 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin" />
         </div>
