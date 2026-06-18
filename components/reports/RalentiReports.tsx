@@ -51,18 +51,24 @@ interface VehicleOption {
 // El tipo de combustible proviene de la columna "Tipo combustible" de la base de
 // vehículos (mapeada a vehiculos.tipo_combustible). El matching es por substring
 // para tolerar variantes de captura ("DIESEL", "ACPM", "Gasolina corriente", etc.).
-const CO2_FACTOR_FALLBACK = 9.923077; // factor mezclado histórico, usado si el tipo no está mapeado
+// IMPORTANTE: NO se usan factores promediados ni de respaldo. Si el tipo de combustible
+// no está definido o no se reconoce, el galón NO entra al cálculo de CO₂ (se reporta
+// aparte como "pendiente por definir"). Solo se emiten cifras con datos reales.
 const CO2_FACTORES_GALON: { test: (t: string) => boolean; factor: number }[] = [
   { test: t => t.includes('diesel') || t.includes('diésel') || t.includes('acpm'), factor: 10.15 },
   { test: t => t.includes('gasolina') || t.includes('corriente'), factor: 8.81 },
   { test: t => t.includes('glp') || t.includes('gas licuado'), factor: 6.47 },
+  // Eléctrico: cero emisiones por combustión (es un tipo conocido, no un faltante).
+  { test: t => t.includes('electric') || t.includes('eléctric'), factor: 0 },
 ];
 
-const factorCO2PorGalon = (tipoCombustible?: string | null): number => {
+// Devuelve el factor kg CO₂/galón del combustible, o null si el tipo no está definido
+// o no se reconoce (en cuyo caso ese consumo se excluye del cálculo).
+const factorCO2PorGalon = (tipoCombustible?: string | null): number | null => {
   const t = (tipoCombustible ?? '').toLowerCase().trim();
-  if (!t) return CO2_FACTOR_FALLBACK;
+  if (!t) return null;
   const match = CO2_FACTORES_GALON.find(f => f.test(t));
-  return match ? match.factor : CO2_FACTOR_FALLBACK;
+  return match ? match.factor : null;
 };
 
 // Umbral de "ralentí excesivo" (alerta) por proveedor satelital, en segundos.
@@ -84,6 +90,12 @@ const esConductorPlaceholder = (nombre?: string | null): boolean => {
   return PLACEHOLDER_CONDUCTOR.has(n);
 };
 
+// Registros cuyo conductor/operador es "Taller" corresponden a vehículos en
+// mantenimiento, no a operación real. Se excluyen POR COMPLETO del informe
+// (tops y todas las cifras basadas en eventos), no solo de los destacados.
+const esConductorTaller = (nombre?: string | null): boolean =>
+  (nombre ?? '').toUpperCase().includes('TALLER');
+
 interface MultiSelectDropdownProps {
   label: string;
   options: { value: string; label: string }[];
@@ -100,12 +112,14 @@ const MultiSelectDropdown: React.FC<MultiSelectDropdownProps> = ({
   placeholder = 'Seleccionar...',
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [search, setSearch] = useState('');
   const dropdownRef = React.useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setIsOpen(false);
+        setSearch('');
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -120,12 +134,26 @@ const MultiSelectDropdown: React.FC<MultiSelectDropdownProps> = ({
     }
   };
 
+  const filteredOptions = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return options;
+    return options.filter(o => o.label.toLowerCase().includes(q));
+  }, [options, search]);
+
+  // "Seleccionar"/"Limpiar" operan sobre lo visible cuando hay búsqueda activa,
+  // para que el usuario pueda accionar exactamente sobre los resultados filtrados.
   const handleSelectAll = () => {
-    onChange(options.map(o => o.value));
+    const merged = new Set([...selectedValues, ...filteredOptions.map(o => o.value)]);
+    onChange(Array.from(merged));
   };
 
   const handleClearAll = () => {
-    onChange([]);
+    if (search.trim()) {
+      const toRemove = new Set(filteredOptions.map(o => o.value));
+      onChange(selectedValues.filter(v => !toRemove.has(v)));
+    } else {
+      onChange([]);
+    }
   };
 
   const displayText = useMemo(() => {
@@ -139,54 +167,183 @@ const MultiSelectDropdown: React.FC<MultiSelectDropdownProps> = ({
     return `${selectedValues.length} seleccionados`;
   }, [selectedValues, options, placeholder]);
 
+  const hasSelection = selectedValues.length > 0;
+  const isPartial = hasSelection && selectedValues.length < options.length;
+
   return (
     <div ref={dropdownRef} className="relative w-full">
       <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1 block">{label}</label>
       <button
         type="button"
-        onClick={() => setIsOpen(!isOpen)}
-        className="w-full px-3 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 outline-none focus:ring-1 focus:ring-emerald-500 flex justify-between items-center text-left shadow-sm hover:border-slate-300 dark:hover:border-slate-600 transition-colors"
+        onClick={() => { setIsOpen(o => !o); setSearch(''); }}
+        className={`w-full px-3 py-2 text-xs border rounded-lg bg-white dark:bg-slate-800 outline-none flex justify-between items-center text-left shadow-sm transition-colors ${isOpen ? 'border-emerald-500 ring-1 ring-emerald-500' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'}`}
       >
-        <span className="truncate pr-2">{displayText}</span>
-        <span className="shrink-0 text-slate-400 text-[8px] transform transition-transform duration-200" style={{ transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}>▼</span>
+        <span className={`truncate pr-2 ${hasSelection ? 'text-slate-900 dark:text-slate-100 font-medium' : 'text-slate-400 dark:text-slate-500'}`}>{displayText}</span>
+        <span className="flex items-center gap-1.5 shrink-0">
+          {isPartial && (
+            <span className="bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 text-[9px] font-bold px-1.5 py-0.5 rounded-full leading-none">{selectedValues.length}</span>
+          )}
+          <span className="text-slate-400 text-[8px] transform transition-transform duration-200" style={{ transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}>▼</span>
+        </span>
       </button>
 
       {isOpen && (
-        <div className="absolute z-50 mt-1 w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl max-h-60 overflow-y-auto p-2 space-y-2">
-          <div className="flex justify-between items-center pb-2 border-b border-slate-100 dark:border-slate-700/60 px-1">
+        <div className="absolute z-50 mt-1 w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl overflow-hidden">
+          <div className="p-2 border-b border-slate-100 dark:border-slate-700/60">
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                autoFocus
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Buscar..."
+                className="w-full pl-8 pr-2 py-1.5 text-xs border border-slate-200 dark:border-slate-700 rounded-md bg-slate-50 dark:bg-slate-900/40 text-slate-900 dark:text-slate-100 outline-none focus:ring-1 focus:ring-emerald-500"
+              />
+            </div>
+          </div>
+          <div className="flex justify-between items-center py-1.5 px-3 border-b border-slate-100 dark:border-slate-700/60">
             <button
               type="button"
               onClick={handleSelectAll}
               className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 hover:underline"
             >
-              Seleccionar Todos
+              {search.trim() ? 'Seleccionar visibles' : 'Seleccionar Todos'}
             </button>
             <button
               type="button"
               onClick={handleClearAll}
               className="text-[10px] font-bold text-slate-500 dark:text-slate-400 hover:underline"
             >
-              Limpiar
+              {search.trim() ? 'Quitar visibles' : 'Limpiar'}
             </button>
           </div>
-          <div className="space-y-1">
-            {options.map(opt => {
-              const isChecked = selectedValues.includes(opt.value);
-              return (
-                <label
+          <div className="max-h-56 overflow-y-auto p-2 space-y-1">
+            {filteredOptions.length === 0 ? (
+              <div className="text-center text-[11px] text-slate-400 py-4">Sin resultados</div>
+            ) : (
+              filteredOptions.map(opt => {
+                const isChecked = selectedValues.includes(opt.value);
+                return (
+                  <label
+                    key={opt.value}
+                    className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-50 dark:hover:bg-slate-700/40 cursor-pointer text-xs text-slate-700 dark:text-slate-300 transition-colors"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={() => handleToggleOption(opt.value)}
+                      className="rounded text-emerald-600 focus:ring-emerald-500 h-3.5 w-3.5 border-slate-300 dark:border-slate-600 dark:bg-slate-700"
+                    />
+                    <span className="truncate">{opt.label}</span>
+                  </label>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+interface SearchableSelectProps {
+  label: string;
+  options: { value: string; label: string }[];
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  allLabel?: string;
+}
+
+// Selector de un solo valor con buscador integrado (reemplaza al <select> nativo
+// para mantener una experiencia consistente con los dropdowns multi-selección).
+const SearchableSelect: React.FC<SearchableSelectProps> = ({
+  label,
+  options,
+  value,
+  onChange,
+  placeholder = 'Buscar...',
+  allLabel = 'Todos',
+}) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const dropdownRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+        setSearch('');
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const filteredOptions = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return options;
+    return options.filter(o => o.label.toLowerCase().includes(q));
+  }, [options, search]);
+
+  const selectedLabel = value ? (options.find(o => o.value === value)?.label ?? value) : allLabel;
+
+  const handleSelect = (val: string) => {
+    onChange(val);
+    setIsOpen(false);
+    setSearch('');
+  };
+
+  return (
+    <div ref={dropdownRef} className="relative w-full">
+      <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1 block">{label}</label>
+      <button
+        type="button"
+        onClick={() => { setIsOpen(o => !o); setSearch(''); }}
+        className={`w-full px-3 py-2 text-xs border rounded-lg bg-white dark:bg-slate-800 outline-none flex justify-between items-center text-left shadow-sm transition-colors ${isOpen ? 'border-emerald-500 ring-1 ring-emerald-500' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'}`}
+      >
+        <span className={`truncate pr-2 ${value ? 'text-slate-900 dark:text-slate-100 font-medium' : 'text-slate-400 dark:text-slate-500'}`}>{selectedLabel}</span>
+        <span className="shrink-0 text-slate-400 text-[8px] transform transition-transform duration-200" style={{ transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}>▼</span>
+      </button>
+
+      {isOpen && (
+        <div className="absolute z-50 mt-1 w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-xl overflow-hidden">
+          <div className="p-2 border-b border-slate-100 dark:border-slate-700/60">
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                autoFocus
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder={placeholder}
+                className="w-full pl-8 pr-2 py-1.5 text-xs border border-slate-200 dark:border-slate-700 rounded-md bg-slate-50 dark:bg-slate-900/40 text-slate-900 dark:text-slate-100 outline-none focus:ring-1 focus:ring-emerald-500"
+              />
+            </div>
+          </div>
+          <div className="max-h-56 overflow-y-auto p-2 space-y-1">
+            <button
+              type="button"
+              onClick={() => handleSelect('')}
+              className={`w-full text-left px-2 py-1.5 rounded-md text-xs transition-colors ${!value ? 'bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 font-semibold' : 'text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/40'}`}
+            >
+              {allLabel}
+            </button>
+            {filteredOptions.length === 0 ? (
+              <div className="text-center text-[11px] text-slate-400 py-4">Sin resultados</div>
+            ) : (
+              filteredOptions.map(opt => (
+                <button
                   key={opt.value}
-                  className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-50 dark:hover:bg-slate-700/40 cursor-pointer text-xs text-slate-700 dark:text-slate-300 transition-colors"
+                  type="button"
+                  onClick={() => handleSelect(opt.value)}
+                  className={`w-full text-left px-2 py-1.5 rounded-md text-xs transition-colors truncate ${value === opt.value ? 'bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 font-semibold' : 'text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/40'}`}
                 >
-                  <input
-                    type="checkbox"
-                    checked={isChecked}
-                    onChange={() => handleToggleOption(opt.value)}
-                    className="rounded text-emerald-600 focus:ring-emerald-500 h-3.5 w-3.5 border-slate-300 dark:border-slate-600 dark:bg-slate-700"
-                  />
-                  <span className="truncate">{opt.label}</span>
-                </label>
-              );
-            })}
+                  {opt.label}
+                </button>
+              ))
+            )}
           </div>
         </div>
       )}
@@ -213,6 +370,7 @@ export const RalentiReports: React.FC = () => {
   const [year, setYear] = useState<number>(2026);
   const [month, setMonth] = useState<number>(4); // Default to April, where our test data resides
   const [quincena, setQuincena] = useState<'1' | '2' | 'all'>('1');
+  const [selectedClients, setSelectedClients] = useState<string[]>([]);
   const [selectedContracts, setSelectedContracts] = useState<string[]>([]);
   const [selectedVehicleTypes, setSelectedVehicleTypes] = useState<string[]>([]);
   const [placa, setPlaca] = useState<string>('');
@@ -232,12 +390,16 @@ export const RalentiReports: React.FC = () => {
     totalGalonesConsumidos: number;
     totalRalentisExcesivos: number;
     galonesPorCombustible: Record<string, number>;
+    galonesSinTipo: number;
+    vehiculosSinTipo: number;
   }>({
     totalHorasMotorEncendido: 0,
     totalHorasMotorRalenti: 0,
     totalGalonesConsumidos: 0,
     totalRalentisExcesivos: 0,
     galonesPorCombustible: {},
+    galonesSinTipo: 0,
+    vehiculosSinTipo: 0,
   });
 
   // Detailed events from ralentis_eventos
@@ -261,6 +423,34 @@ export const RalentiReports: React.FC = () => {
     });
     return Array.from(types).sort().map(t => ({ value: t, label: t }));
   }, [vehicles]);
+
+  // Opciones de Cliente derivadas de la base de vehículos (columna "cliente").
+  const clientOptions = useMemo(() => {
+    const set = new Set<string>();
+    vehicles.forEach(v => {
+      if (v.cliente) {
+        const trimmed = v.cliente.trim();
+        if (trimmed) set.add(trimmed);
+      }
+    });
+    return Array.from(set).sort().map(c => ({ value: c, label: c }));
+  }, [vehicles]);
+
+  // Vehículos disponibles para el selector individual, respetando los filtros
+  // de cliente, contrato y tipo activos (para no ofrecer placas fuera del alcance).
+  const vehicleSelectOptions = useMemo(() => {
+    const isContractFilterActive = selectedContracts.length > 0 && selectedContracts.length < contracts.length;
+    const isTypeFilterActive = selectedVehicleTypes.length > 0 && selectedVehicleTypes.length < vehicleTypesOptions.length;
+    const isClientFilterActive = selectedClients.length > 0 && selectedClients.length < clientOptions.length;
+    return vehicles
+      .filter(v => {
+        const matchesClient = !isClientFilterActive || (v.cliente && selectedClients.includes(v.cliente.trim()));
+        const matchesContract = !isContractFilterActive || (v.contrato_id && selectedContracts.includes(v.contrato_id));
+        const matchesType = !isTypeFilterActive || (v.tipo_activo && selectedVehicleTypes.includes(v.tipo_activo.trim()));
+        return matchesClient && matchesContract && matchesType;
+      })
+      .map(v => ({ value: v.id, label: v.placa }));
+  }, [vehicles, selectedClients, clientOptions, selectedContracts, contracts, selectedVehicleTypes, vehicleTypesOptions]);
 
   // Fetch initial dropdown data
   useEffect(() => {
@@ -320,12 +510,27 @@ export const RalentiReports: React.FC = () => {
 
       // 1. Resolve vehicles under chosen contracts and types if filters are active
       let vehIds: string[] = [];
+      const isClientFilterActive = selectedClients.length > 0 && selectedClients.length < clientOptions.length;
       const isContractFilterActive = selectedContracts.length > 0 && selectedContracts.length < contracts.length;
       const isTypeFilterActive = selectedVehicleTypes.length > 0 && selectedVehicleTypes.length < vehicleTypesOptions.length;
-      const hasFilters = isContractFilterActive || isTypeFilterActive;
+      const hasFilters = isClientFilterActive || isContractFilterActive || isTypeFilterActive;
+
+      // Valores crudos (sin trim) de cliente para filtrar contra la BD, tolerando
+      // variantes con espacios — mismo criterio que se usa para tipo de activo.
+      const rawClients = new Set<string>();
+      if (isClientFilterActive) {
+        selectedClients.forEach(c => {
+          vehicles.forEach(v => {
+            if (v.cliente && v.cliente.trim() === c) rawClients.add(v.cliente);
+          });
+        });
+      }
 
       if (hasFilters) {
         let filteredVeh = vehicles;
+        if (isClientFilterActive) {
+          filteredVeh = filteredVeh.filter(v => v.cliente && selectedClients.includes(v.cliente.trim()));
+        }
         if (isContractFilterActive) {
           filteredVeh = filteredVeh.filter(v => v.contrato_id && selectedContracts.includes(v.contrato_id));
         }
@@ -341,6 +546,8 @@ export const RalentiReports: React.FC = () => {
             totalGalonesConsumidos: 0,
             totalRalentisExcesivos: 0,
             galonesPorCombustible: {},
+            galonesSinTipo: 0,
+            vehiculosSinTipo: 0,
           });
           setEvents([]);
           setLoading(false);
@@ -350,7 +557,7 @@ export const RalentiReports: React.FC = () => {
 
       // 2. Fetch vehicle summary statistics for the period
       const fields = hasFilters 
-        ? 'vehiculo_id, horas_motor_encendido, horas_motor_ralenti, consumo_combustible, ralentis_excesivos, vehiculos!inner(contrato_id, tipo_activo)'
+        ? 'vehiculo_id, horas_motor_encendido, horas_motor_ralenti, consumo_combustible, ralentis_excesivos, vehiculos!inner(contrato_id, tipo_activo, cliente)'
         : 'vehiculo_id, horas_motor_encendido, horas_motor_ralenti, consumo_combustible, ralentis_excesivos';
 
       let repVehQuery = supabase.from('ralentis_periodos')
@@ -361,6 +568,9 @@ export const RalentiReports: React.FC = () => {
       if (placa) {
         repVehQuery = repVehQuery.eq('vehiculo_id', placa);
       } else if (hasFilters) {
+        if (isClientFilterActive) {
+          repVehQuery = repVehQuery.in('vehiculos.cliente', Array.from(rawClients));
+        }
         if (isContractFilterActive) {
           repVehQuery = repVehQuery.in('vehiculos.contrato_id', selectedContracts);
         }
@@ -413,7 +623,7 @@ export const RalentiReports: React.FC = () => {
       }
 
       const prevFields = hasFilters
-        ? 'vehiculo_id, horas_motor_encendido, horas_motor_ralenti, consumo_combustible, vehiculos!inner(contrato_id, tipo_activo)'
+        ? 'vehiculo_id, horas_motor_encendido, horas_motor_ralenti, consumo_combustible, vehiculos!inner(contrato_id, tipo_activo, cliente)'
         : 'vehiculo_id, horas_motor_encendido, horas_motor_ralenti, consumo_combustible';
 
       let prevVehQuery = supabase.from('ralentis_periodos')
@@ -424,6 +634,9 @@ export const RalentiReports: React.FC = () => {
       if (placa) {
         prevVehQuery = prevVehQuery.eq('vehiculo_id', placa);
       } else if (hasFilters) {
+        if (isClientFilterActive) {
+          prevVehQuery = prevVehQuery.in('vehiculos.cliente', Array.from(rawClients));
+        }
         if (isContractFilterActive) {
           prevVehQuery = prevVehQuery.in('vehiculos.contrato_id', selectedContracts);
         }
@@ -457,11 +670,21 @@ export const RalentiReports: React.FC = () => {
       const vehFuelMap = new Map<string, string>();
       vehicles.forEach(v => vehFuelMap.set(String(v.id), (v.tipo_combustible ?? '').trim()));
 
+      // Agrupamos por tipo y, en paralelo, contamos los vehículos/galones cuyo tipo de
+      // combustible NO está definido o no se reconoce: esos NO entran al cálculo de CO₂
+      // (no se promedia), sino que se reportan aparte como "pendiente por definir".
       const galonesPorCombustible: Record<string, number> = {};
+      let galonesSinTipo = 0;
+      let vehiculosSinTipo = 0;
       filteredRepVehs.forEach((r: any) => {
-        const tipo = vehFuelMap.get(String(r.vehiculo_id)) || 'NO REGISTRA';
-        const key = tipo.toUpperCase();
-        galonesPorCombustible[key] = (galonesPorCombustible[key] ?? 0) + (Number(r.consumo_combustible) || 0);
+        const tipo = vehFuelMap.get(String(r.vehiculo_id)) || '';
+        const key = (tipo || 'NO REGISTRA').toUpperCase();
+        const gal = Number(r.consumo_combustible) || 0;
+        galonesPorCombustible[key] = (galonesPorCombustible[key] ?? 0) + gal;
+        if (factorCO2PorGalon(tipo) === null) {
+          galonesSinTipo += gal;
+          vehiculosSinTipo += 1;
+        }
       });
 
       const prevSumEncendido = prevRepVehs.reduce((acc, r) => acc + (Number(r.horas_motor_encendido) || 0), 0);
@@ -474,6 +697,8 @@ export const RalentiReports: React.FC = () => {
         totalGalonesConsumidos: sumGalones,
         totalRalentisExcesivos: sumExcesivos,
         galonesPorCombustible,
+        galonesSinTipo,
+        vehiculosSinTipo,
       });
 
       setPrevSummaryMetrics({
@@ -484,7 +709,7 @@ export const RalentiReports: React.FC = () => {
 
       // 3. Fetch detailed ralentis_eventos (paginated in parallel to bypass the default 1000 limit)
       const eventFields = hasFilters
-        ? '*, vehiculos!inner(contrato_id, tipo_activo)'
+        ? '*, vehiculos!inner(contrato_id, tipo_activo, cliente)'
         : '*';
 
       let countQuery = supabase.from('ralentis_eventos')
@@ -495,6 +720,9 @@ export const RalentiReports: React.FC = () => {
       if (placa) {
         countQuery = countQuery.eq('vehiculo_id', placa);
       } else if (hasFilters) {
+        if (isClientFilterActive) {
+          countQuery = countQuery.in('vehiculos.cliente', Array.from(rawClients));
+        }
         if (isContractFilterActive) {
           countQuery = countQuery.in('vehiculos.contrato_id', selectedContracts);
         }
@@ -520,7 +748,7 @@ export const RalentiReports: React.FC = () => {
       const promises = [];
 
       const evFields = hasFilters
-        ? 'id, placa, conductor_nombre, fecha_inicio, fecha_fin, duracion_segundos, galones_consumidos, ubicacion, proveedor, vehiculo_id, conductor_id, vehiculos!inner(contrato_id, tipo_activo)'
+        ? 'id, placa, conductor_nombre, fecha_inicio, fecha_fin, duracion_segundos, galones_consumidos, ubicacion, proveedor, vehiculo_id, conductor_id, vehiculos!inner(contrato_id, tipo_activo, cliente)'
         : 'id, placa, conductor_nombre, fecha_inicio, fecha_fin, duracion_segundos, galones_consumidos, ubicacion, proveedor, vehiculo_id, conductor_id';
 
       for (let page = 0; page < numPages; page++) {
@@ -536,6 +764,9 @@ export const RalentiReports: React.FC = () => {
         if (placa) {
           evQuery = evQuery.eq('vehiculo_id', placa);
         } else if (hasFilters) {
+          if (isClientFilterActive) {
+            evQuery = evQuery.in('vehiculos.cliente', Array.from(rawClients));
+          }
           if (isContractFilterActive) {
             evQuery = evQuery.in('vehiculos.contrato_id', selectedContracts);
           }
@@ -569,7 +800,7 @@ export const RalentiReports: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [year, month, quincena, selectedContracts, selectedVehicleTypes, placa, vehicles, contracts, vehicleTypesOptions]);
+  }, [year, month, quincena, selectedClients, selectedContracts, selectedVehicleTypes, placa, vehicles, contracts, clientOptions, vehicleTypesOptions]);
 
   useEffect(() => {
     fetchData();
@@ -586,7 +817,10 @@ export const RalentiReports: React.FC = () => {
   // (Coltrack ≥10 min, Fagor ≥5 min). Toda la analítica de excesos se calcula sobre este conjunto,
   // no sobre los eventos crudos (que incluyen ralentís cortos por debajo del umbral de alerta).
   const alertEvents = useMemo(
-    () => events.filter(e => e.duracion_segundos >= umbralRalentiSeg(e.proveedor)),
+    () => events.filter(e =>
+      !esConductorTaller(e.conductor_nombre) &&
+      e.duracion_segundos >= umbralRalentiSeg(e.proveedor)
+    ),
     [events]
   );
 
@@ -617,23 +851,34 @@ export const RalentiReports: React.FC = () => {
     const costAvgDaily = daysInPeriod > 0 ? costTotal / daysInPeriod : 0;
 
     // Huella de carbono diferenciada por tipo de combustible (FECOC/UPME): se aplica
-    // el factor kg CO₂/galón propio de cada combustible sobre los galones de ese grupo,
-    // en lugar de un factor único promediado para toda la flota.
+    // el factor kg CO₂/galón propio de cada combustible SOLO sobre los galones cuyo tipo
+    // está definido y reconocido. Los galones sin tipo NO se promedian ni se estiman: se
+    // excluyen del CO₂ y se reportan aparte (galonesSinTipo / vehiculosSinTipo).
     const galonesPorCombustible = summaryMetrics.galonesPorCombustible ?? {};
-    const galonesClasificados = Object.values(galonesPorCombustible).reduce((a, b) => a + b, 0);
-    const co2Kg = galonesClasificados > 0
-      ? Object.entries(galonesPorCombustible).reduce((acc, [tipo, gal]) => acc + gal * factorCO2PorGalon(tipo), 0)
-      : totalGalonesConsumidos * CO2_FACTOR_FALLBACK;
-    // Factor efectivo (mezcla real de la flota) para distribuciones derivadas (tendencia, proveedor).
-    const co2FactorEfectivo = totalGalonesConsumidos > 0 ? co2Kg / totalGalonesConsumidos : CO2_FACTOR_FALLBACK;
+    const galonesSinTipo = summaryMetrics.galonesSinTipo ?? 0;
+    const vehiculosSinTipo = summaryMetrics.vehiculosSinTipo ?? 0;
+    // Galones realmente clasificados (con factor conocido, incluido eléctrico = 0).
+    const galonesClasificados = Math.max(totalGalonesConsumidos - galonesSinTipo, 0);
+    const co2Kg = Object.entries(galonesPorCombustible).reduce((acc, [tipo, gal]) => {
+      const f = factorCO2PorGalon(tipo);
+      return f === null ? acc : acc + gal * f;
+    }, 0);
+    // Factor de distribución del CO₂ real sobre el total de galones, para que la suma
+    // de la tendencia diaria y del desglose por proveedor reconcilie con co2Kg.
+    const co2FactorEfectivo = totalGalonesConsumidos > 0 ? co2Kg / totalGalonesConsumidos : 0;
     const treesEquivalent = co2Kg / 22; // Trees formula
 
     // "Mayor evento único" se mide solo entre eventos con conductor identificado
     // (se excluyen N/A, No registra, etc.), igual que los Top de conductores.
+    // Se conserva el evento completo para poder mostrar el conductor y la placa.
     const alertEventsConConductor = alertEvents.filter(e => !esConductorPlaceholder(e.conductor_nombre));
-    const mayorEventoSegundos = alertEventsConConductor.length > 0
-      ? Math.max(...alertEventsConConductor.map(e => e.duracion_segundos))
-      : 0;
+    let mayorEvento: IdlingEvent | null = null;
+    for (const e of alertEventsConConductor) {
+      if (!mayorEvento || e.duracion_segundos > mayorEvento.duracion_segundos) mayorEvento = e;
+    }
+    const mayorEventoSegundos = mayorEvento ? mayorEvento.duracion_segundos : 0;
+    const mayorEventoConductor = mayorEvento ? mayorEvento.conductor_nombre : 'No registra';
+    const mayorEventoPlaca = mayorEvento ? mayorEvento.placa : '';
 
     const totalDuracionEventosSegundos = alertEvents.reduce((acc, e) => acc + e.duracion_segundos, 0);
     const promedioEventoSegundos = alertEvents.length > 0
@@ -755,7 +1000,12 @@ export const RalentiReports: React.FC = () => {
       co2Kg,
       co2FactorEfectivo,
       treesEquivalent,
+      galonesClasificados,
+      galonesSinTipo,
+      vehiculosSinTipo,
       mayorEventoSegundos,
+      mayorEventoConductor,
+      mayorEventoPlaca,
       promedioEventoSegundos,
       eventosMas30Min,
       riskLevel,
@@ -1122,11 +1372,38 @@ export const RalentiReports: React.FC = () => {
               const lastDay = new Date(year, month, 0).getDate();
               dateEnd = `${yearStr}-${monthStr}-${lastDay}`;
             }
-            const contratoNombre = selectedContracts.length === 0 || selectedContracts.length === contracts.length
-              ? 'Todos los contratos'
-              : selectedContracts.length <= 2
+            const isClientSel = selectedClients.length > 0 && selectedClients.length < clientOptions.length;
+            const isContractSel = selectedContracts.length > 0 && selectedContracts.length < contracts.length;
+            const isTypeSel = selectedVehicleTypes.length > 0 && selectedVehicleTypes.length < vehicleTypesOptions.length;
+
+            const clienteNombre = !isClientSel
+              ? 'Todos los clientes'
+              : selectedClients.length <= 2
+                ? selectedClients.join(', ')
+                : `Multicliente (${selectedClients.length})`;
+
+            // Contratos a mostrar: si se seleccionó contrato explícitamente, ese(esos);
+            // si no, pero hay un cliente (grupo) seleccionado, los contratos de ese grupo;
+            // en su defecto, todos.
+            let contratoNombre: string;
+            if (isContractSel) {
+              contratoNombre = selectedContracts.length <= 3
                 ? selectedContracts.map(cid => contracts.find(c => c.id === cid)?.nombre ?? '').filter(Boolean).join(', ')
                 : `Multicontrato (${selectedContracts.length})`;
+            } else if (isClientSel) {
+              const ids = new Set<string>();
+              vehicles.forEach(v => {
+                if (v.cliente && selectedClients.includes(v.cliente.trim()) && v.contrato_id) ids.add(v.contrato_id);
+              });
+              const nombres = Array.from(ids)
+                .map(id => contracts.find(c => c.id === id)?.nombre)
+                .filter(Boolean) as string[];
+              contratoNombre = nombres.length > 0 ? nombres.sort().join(', ') : 'Todos los contratos';
+            } else {
+              contratoNombre = 'Todos los contratos';
+            }
+
+            const tiposNombre = !isTypeSel ? 'Todos los tipos' : selectedVehicleTypes.join(', ');
 
             const vehMap = new Map<string, number>();
             alertEvents.forEach(e => {
@@ -1198,6 +1475,7 @@ export const RalentiReports: React.FC = () => {
               co2Kg: stats.co2Kg,
               treesEquivalent: stats.treesEquivalent,
               mayorEventoSegundos: stats.mayorEventoSegundos,
+              mayorEventoConductor: stats.mayorEventoConductor,
               promedioEventoSegundos: stats.promedioEventoSegundos,
               eventosMas30Min: stats.eventosMas30Min,
               riskLevel: stats.riskLevel,
@@ -1207,6 +1485,8 @@ export const RalentiReports: React.FC = () => {
               providerCO2: providerCO2Data,
               dailyCO2Trend: dailyCO2Trend,
               contratoNombre,
+              clienteNombre,
+              tiposNombre,
               placaCritica,
               tiempoCriticaSegundos,
               fapProbability: stats.fapRisk === 'Crítico' ? 70 : stats.fapRisk === 'Moderado' ? 40 : 15,
@@ -1230,7 +1510,7 @@ export const RalentiReports: React.FC = () => {
           <span>Filtros Gerenciales</span>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
           {/* Year */}
           <div>
             <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1 block">Año</label>
@@ -1282,6 +1562,15 @@ export const RalentiReports: React.FC = () => {
             </select>
           </div>
 
+          {/* Client */}
+          <MultiSelectDropdown
+            label="Clientes"
+            options={clientOptions}
+            selectedValues={selectedClients}
+            onChange={(vals) => { setSelectedClients(vals); setPlaca(''); }}
+            placeholder="Todos los clientes"
+          />
+
           {/* Contract */}
           <MultiSelectDropdown
             label="Contratos"
@@ -1301,28 +1590,14 @@ export const RalentiReports: React.FC = () => {
           />
 
           {/* Vehicle */}
-          <div>
-            <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1 block">Vehículo (Matrícula)</label>
-            <select
-              value={placa}
-              onChange={(e) => setPlaca(e.target.value)}
-              className="w-full px-3 py-2 text-xs border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 outline-none focus:ring-1 focus:ring-emerald-500"
-            >
-              <option value="">Todos los vehículos</option>
-              {vehicles
-                .filter(v => {
-                  const isContractFilterActive = selectedContracts.length > 0 && selectedContracts.length < contracts.length;
-                  const isTypeFilterActive = selectedVehicleTypes.length > 0 && selectedVehicleTypes.length < vehicleTypesOptions.length;
-                  const matchesContract = !isContractFilterActive || (v.contrato_id && selectedContracts.includes(v.contrato_id));
-                  const matchesType = !isTypeFilterActive || (v.tipo_activo && selectedVehicleTypes.includes(v.tipo_activo.trim()));
-                  return matchesContract && matchesType;
-                })
-                .map(v => (
-                  <option key={v.id} value={v.id}>{v.placa}</option>
-                ))
-              }
-            </select>
-          </div>
+          <SearchableSelect
+            label="Vehículo (Matrícula)"
+            options={vehicleSelectOptions}
+            value={placa}
+            onChange={setPlaca}
+            placeholder="Buscar placa..."
+            allLabel="Todos los vehículos"
+          />
         </div>
       </div>
 
@@ -1540,11 +1815,11 @@ export const RalentiReports: React.FC = () => {
                 <div className="space-y-1">
                   <h3 className="font-bold text-sm text-emerald-100 uppercase tracking-widest">Impacto Ecológico</h3>
                   <span className="text-3xl font-black block">
-                    {(stats.co2Kg / 1000).toFixed(3)} Tn
+                    {(stats.co2Kg / 1000).toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Tn
                   </span>
-                  <span className="text-xs text-emerald-200">De emisiones de CO2 generadas</span>
+                  <span className="text-xs text-emerald-200">De emisiones de CO₂ generadas</span>
                   <span className="text-[10px] text-emerald-200/80 block pt-1">
-                    Factores FECOC/UPME por combustible · Mezcla flota: {stats.co2FactorEfectivo.toFixed(2)} kg CO₂/gal
+                    Cálculo real con factores FECOC/UPME, solo sobre vehículos con tipo de combustible definido ({stats.galonesClasificados.toLocaleString('es-CO', { maximumFractionDigits: 0 })} gal).
                   </span>
                 </div>
                 <div className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center">
@@ -1564,6 +1839,18 @@ export const RalentiReports: React.FC = () => {
                   </div>
                 </div>
               </div>
+
+              {stats.vehiculosSinTipo > 0 && (
+                <div className="bg-amber-400/15 border border-amber-300/40 rounded-xl p-3 flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-200 shrink-0 mt-0.5" />
+                  <div className="text-[10px] leading-snug text-amber-50">
+                    <strong className="block text-amber-100">
+                      {stats.vehiculosSinTipo} vehículo(s) sin tipo de combustible definido
+                    </strong>
+                    Sus {stats.galonesSinTipo.toLocaleString('es-CO', { maximumFractionDigits: 1 })} gal NO se incluyen en el CO₂ (no se estima con promedios). Defínelos en la base de vehículos para un cálculo completo.
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 

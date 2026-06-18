@@ -3010,6 +3010,7 @@ export interface RalentiPDFData {
   co2Kg: number;
   treesEquivalent: number;
   mayorEventoSegundos: number;
+  mayorEventoConductor?: string;
   promedioEventoSegundos: number;
   eventosMas30Min: number;
   riskLevel: 'Bajo' | 'Medio' | 'Alto';
@@ -3019,6 +3020,8 @@ export interface RalentiPDFData {
   providerCO2: Array<{ name: string; co2Tons: number }>;
   dailyCO2Trend: Array<{ date: string; value: number }>;
   contratoNombre?: string;
+  clienteNombre?: string;
+  tiposNombre?: string;
   placaCritica?: string;
   tiempoCriticaSegundos?: number;
   fapProbability?: number;
@@ -3064,32 +3067,21 @@ function Page1KpiCard({
   title,
   value,
   subText,
-  barPct,
-  barColor,
-  metaText,
+  valueColor = COLORS.negro,
   infoText,
 }: {
   title: string;
   value: string;
   subText: string;
-  barPct: number;
-  barColor: string;
-  metaText: string;
+  valueColor?: string;
   infoText?: string;
 }) {
   return (
-    <View style={{ flex: 1, backgroundColor: '#ffffff', borderRadius: 4, padding: 8, borderWidth: 0.5, borderColor: '#cbd5e1', borderStyle: 'solid', minHeight: 120, justifyContent: 'space-between' }} wrap={false}>
+    <View style={{ flex: 1, backgroundColor: '#ffffff', borderRadius: 4, padding: 7, borderWidth: 0.5, borderColor: '#cbd5e1', borderStyle: 'solid', minHeight: 96, justifyContent: 'space-between' }} wrap={false}>
       <View>
-        <Text style={{ fontSize: 7.5, fontWeight: 'bold', color: COLORS.gris, textTransform: 'uppercase', marginBottom: 3 }}>{title}</Text>
-        <Text style={{ fontSize: 16, fontWeight: 'bold', color: COLORS.negro, marginBottom: 2 }}>{value}</Text>
-        <Text style={{ fontSize: 6.8, color: COLORS.gris, marginBottom: 4 }}>{subText}</Text>
-        
-        {/* Progress Bar */}
-        <View style={{ height: 5, backgroundColor: '#f1f5f9', borderRadius: 4.5, overflow: 'hidden', marginBottom: 4 }}>
-          <View style={{ width: `${Math.min(100, Math.max(0, barPct))}%`, height: '100%', backgroundColor: barColor }} />
-        </View>
-        
-        <Text style={{ fontSize: 6.8, fontWeight: 'bold', color: barColor, marginBottom: 3 }}>{metaText}</Text>
+        <Text style={{ fontSize: 7.5, fontWeight: 'bold', color: COLORS.gris, textTransform: 'uppercase', marginBottom: 2 }}>{title}</Text>
+        <Text style={{ fontSize: 15, fontWeight: 'bold', color: valueColor, marginBottom: 2 }}>{value}</Text>
+        <Text style={{ fontSize: 6.8, color: COLORS.gris, marginBottom: 3 }}>{subText}</Text>
       </View>
       {infoText && (
         <Text style={{ fontSize: 6, color: COLORS.gris, borderTopWidth: 0.5, borderTopColor: '#e2e8f0', paddingTop: 3, marginTop: 2 }}>
@@ -3101,44 +3093,31 @@ function Page1KpiCard({
 }
 
 // Helper: Alert box for executive summary on Page 1
-function GerencialSummaryBox({ riskLevel, pctRalenti, totalEventos, periodoLabel, contratoNombre }: { riskLevel: string; pctRalenti: number; totalEventos: number; periodoLabel: string; contratoNombre: string }) {
-  const isHigh = riskLevel === 'Alto';
-  const isMed = riskLevel === 'Medio';
-  const boxBg = isHigh ? '#fef2f2' : isMed ? '#fffbeb' : '#ecfdf5';
-  const borderColor = isHigh ? '#fca5a5' : isMed ? '#fcd34d' : '#6ee7b7';
-  const textColor = isHigh ? '#991b1b' : isMed ? '#92400e' : '#065f46';
-  const titleColor = isHigh ? '#b91c1c' : isMed ? '#b45309' : '#047857';
-  
-  let riskText = '';
-  if (isHigh) {
-    riskText = `ALERTA CRÍTICA: Se ha detectado un nivel de ralentí elevado del ${pctRalenti.toFixed(2)}%, superando significativamente el umbral establecido. Esto incrementa los costos operativos y el riesgo de colmatación del Filtro de Partículas Diésel (FAP/DPF) y saturación del sistema AdBlue.`;
-  } else if (isMed) {
-    riskText = `ALERTA MODERADA: El nivel de ralentí se sitúa en el ${pctRalenti.toFixed(2)}%, por encima de la meta del 10%. Se recomienda revisar los hábitos de los conductores críticos y programar capacitaciones de conducción eficiente.`;
-  } else {
-    riskText = `OPERACIÓN EFICIENTE: El nivel de ralentí de la flota se encuentra en el ${pctRalenti.toFixed(2)}%, cumpliendo de forma óptima con la meta menor al 10%. Felicitaciones al equipo de operación y conductores por el cumplimiento de las metas.`;
-  }
-
+function GerencialSummaryBox({ contratoNombre, clienteNombre, tiposNombre }: { contratoNombre: string; clienteNombre: string; tiposNombre: string }) {
   return (
-    <View style={{ backgroundColor: boxBg, borderWidth: 0.5, borderColor: borderColor, borderStyle: 'solid', borderRadius: 4, padding: 8, marginBottom: 8 }} wrap={false}>
-      <Text style={{ fontSize: 8, fontWeight: 'bold', color: titleColor, marginBottom: 3, textTransform: 'uppercase' }}>
-        Resumen Operativo y Recomendaciones — Contrato: {contratoNombre}
+    <View style={{ backgroundColor: '#f8fafc', borderWidth: 0.5, borderColor: '#cbd5e1', borderStyle: 'solid', borderRadius: 4, padding: 8, marginBottom: 8 }} wrap={false}>
+      <Text style={{ fontSize: 8, fontWeight: 'bold', color: COLORS.azul, marginBottom: 4, textTransform: 'uppercase' }}>
+        Resumen Operativo
       </Text>
-      <Text style={{ fontSize: 6.8, color: textColor, lineHeight: 1.4 }}>
-        {riskText} Durante el período {periodoLabel}, se registraron un total de {totalEventos} eventos de ralentí.
+      <Text style={{ fontSize: 7, color: COLORS.negro, lineHeight: 1.5, textAlign: 'justify' }}>
+        Informe generado para el cliente/grupo {clienteNombre}, que abarca los contratos: {contratoNombre}. El análisis comprende los siguientes tipos de vehículo: {tiposNombre}.
       </Text>
     </View>
   );
 }
 
 // Helper: Page 1 Data Key Cell
-function Page1DataKeyCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
+function Page1DataKeyCard({ label, value, sub, sub2 }: { label: string; value: string; sub?: string; sub2?: string }) {
   return (
     <View style={{ flex: 1, backgroundColor: '#f8fafc', borderWidth: 0.5, borderColor: '#cbd5e1', borderStyle: 'solid', borderRadius: 4, padding: 8, minHeight: 52, justifyContent: 'space-between' }} wrap={false}>
       <View>
         <Text style={{ fontSize: 6.8, fontWeight: 'bold', color: COLORS.gris, textTransform: 'uppercase', marginBottom: 3 }}>{label}</Text>
         <Text style={{ fontSize: 13, fontWeight: 'bold', color: COLORS.negro }}>{value}</Text>
       </View>
-      {sub && <Text style={{ fontSize: 6.5, color: COLORS.gris, marginTop: 2 }}>{sub}</Text>}
+      <View style={{ marginTop: 2 }}>
+        {sub && <Text style={{ fontSize: 6.5, color: COLORS.gris }}>{sub}</Text>}
+        {sub2 && <Text style={{ fontSize: 6.5, color: COLORS.negro, fontWeight: 'bold' }}>{sub2}</Text>}
+      </View>
     </View>
   );
 }
@@ -3169,19 +3148,15 @@ function Page1ImpactPanel({
   galones,
   costTotal,
   co2Kg,
-  fapProbability,
 }: {
   galones: number;
   costTotal: number;
   co2Kg: number;
-  fapProbability: number;
 }) {
-  const fapColor = fapProbability >= 60 ? COLORS.rojo : fapProbability >= 30 ? COLORS.amarillo : EMERALD;
-  const fapText = fapProbability >= 60 ? 'RIESGO ALTO' : fapProbability >= 30 ? 'RIESGO MEDIO' : 'RIESGO BAJO';
   return (
-    <View style={{ backgroundColor: '#fdfdfd', borderWidth: 0.5, borderColor: '#cbd5e1', borderStyle: 'solid', borderRadius: 4, padding: 10, marginTop: 6 }} wrap={false}>
-      <Text style={{ fontSize: 9.5, fontWeight: 'bold', color: COLORS.azul, textTransform: 'uppercase', marginBottom: 8 }}>Panel de Impacto y Consecuencias</Text>
-      
+    <View style={{ backgroundColor: '#fdfdfd', borderWidth: 0.5, borderColor: '#cbd5e1', borderStyle: 'solid', borderRadius: 4, padding: 8, marginTop: 4 }} wrap={false}>
+      <Text style={{ fontSize: 9.5, fontWeight: 'bold', color: COLORS.azul, textTransform: 'uppercase', marginBottom: 6 }}>Panel de Impacto y Consecuencias</Text>
+
       <View style={{ flexDirection: 'row', gap: 16 }}>
         {/* Combustible */}
         <View style={{ flex: 1, borderRightWidth: 0.5, borderRightColor: '#cbd5e1', borderStyle: 'solid', paddingRight: 10 }}>
@@ -3191,25 +3166,10 @@ function Page1ImpactPanel({
         </View>
 
         {/* Huella de Carbono */}
-        <View style={{ flex: 1, borderRightWidth: 0.5, borderRightColor: '#cbd5e1', borderStyle: 'solid', paddingRight: 10 }}>
+        <View style={{ flex: 1 }}>
           <Text style={{ fontSize: 6.8, color: COLORS.gris, textTransform: 'uppercase', marginBottom: 4 }}>Emisiones de CO₂ Generadas</Text>
-          <Text style={{ fontSize: 13.5, fontWeight: 'bold', color: '#166534', marginBottom: 3 }}>{(co2Kg / 1000).toFixed(3)} Toneladas</Text>
-          <Text style={{ fontSize: 9.5, color: COLORS.gris }}>{co2Kg.toFixed(0)} kg CO₂</Text>
-        </View>
-
-        {/* FAP */}
-        <View style={{ flex: 1.2 }}>
-          <Text style={{ fontSize: 6.8, color: COLORS.gris, textTransform: 'uppercase', marginBottom: 3 }}>Probabilidad de Falla FAP / AdBlue</Text>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
-            <Text style={{ fontSize: 13.5, fontWeight: 'bold', color: fapColor }}>{fapProbability}%</Text>
-            <Text style={{ fontSize: 8.5, fontWeight: 'bold', color: fapColor }}>{fapText}</Text>
-          </View>
-          <View style={{ height: 6, backgroundColor: '#f1f5f9', borderRadius: 3, overflow: 'hidden', marginBottom: 4 }}>
-            <View style={{ width: `${fapProbability}%`, height: '100%', backgroundColor: fapColor }} />
-          </View>
-          <Text style={{ fontSize: 6.5, color: COLORS.gris, lineHeight: 1.3 }}>
-            La operación prolongada en ralentí enfría las cámaras de combustión, causando depósitos de hollín acelerados en el filtro de partículas.
-          </Text>
+          <Text style={{ fontSize: 13.5, fontWeight: 'bold', color: '#166534', marginBottom: 3 }}>{(co2Kg / 1000).toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Toneladas</Text>
+          <Text style={{ fontSize: 9.5, color: COLORS.gris }}>Equivale a {co2Kg.toLocaleString('es-CO', { maximumFractionDigits: 0 })} kg de CO₂</Text>
         </View>
       </View>
     </View>
@@ -3503,7 +3463,7 @@ function Page3EnvironmentalBox({ co2Kg, treesEquivalent }: { co2Kg: number; tree
       </Text>
       <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
         <View style={{ flex: 1, backgroundColor: '#ffffff', borderRadius: 4, padding: 6, borderWidth: 0.5, borderColor: '#cbd5e1', borderStyle: 'solid', alignItems: 'center' }}>
-          <Text style={{ fontSize: 13.5, fontWeight: 'bold', color: '#15803d' }}>{co2Tons.toFixed(3)} Ton</Text>
+          <Text style={{ fontSize: 13.5, fontWeight: 'bold', color: '#15803d' }}>{co2Tons.toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Ton</Text>
           <Text style={{ fontSize: 6.8, color: COLORS.gris, textTransform: 'uppercase', marginTop: 2 }}>Gases CO₂</Text>
         </View>
         <View style={{ flex: 1, backgroundColor: '#ffffff', borderRadius: 4, padding: 6, borderWidth: 0.5, borderColor: '#cbd5e1', borderStyle: 'solid', alignItems: 'center' }}>
@@ -3527,9 +3487,13 @@ function ProportionsCharts({ data }: { data: RalentiPDFData }) {
     pctRalentiMas5MinDeRalenti = 0,
   } = data;
 
-  const totalSlices = totalHorasMotorEncendido + totalHorasMotorRalenti;
-  const pctRalentiChart = totalSlices > 0 ? (totalHorasMotorRalenti / totalSlices) * 100 : 0;
-  const pctEncendidoChart = totalSlices > 0 ? (totalHorasMotorEncendido / totalSlices) * 100 : 0;
+  // El ralentí está CONTENIDO dentro de las horas de motor encendido (no es un sumando
+  // aparte). La base correcta es el tiempo de motor encendido; la porción "en movimiento"
+  // es el remanente (encendido − ralentí). Así el donut coincide con el KPI (ralentí/encendido)
+  // en lugar de diluirse al duplicar el ralentí en el denominador.
+  const horasEnMovimiento = Math.max(totalHorasMotorEncendido - totalHorasMotorRalenti, 0);
+  const pctRalentiChart = totalHorasMotorEncendido > 0 ? (totalHorasMotorRalenti / totalHorasMotorEncendido) * 100 : 0;
+  const pctMovimientoChart = totalHorasMotorEncendido > 0 ? (horasEnMovimiento / totalHorasMotorEncendido) * 100 : 0;
 
   // SVG Pie/Donut Chart based on Circle strokeDashoffset to ensure 100% robust rendering in react-pdf
   const radius = 42;
@@ -3537,21 +3501,21 @@ function ProportionsCharts({ data }: { data: RalentiPDFData }) {
   const strokeDashoffset = circumference - (Math.min(pctRalentiChart, 100) / 100) * circumference;
 
   return (
-    <View style={{ marginBottom: 6 }} wrap={false}>
+    <View style={{ marginBottom: 4, marginTop: 4 }} wrap={false}>
       <View style={{ backgroundColor: COLORS.azul, padding: '4 8', marginBottom: 4 }}>
         <Text style={{ fontSize: 7.5, fontWeight: 700, color: COLORS.blanco }}>ANÁLISIS DE DISTRIBUCIÓN Y PROPORCIONES DE RALENTÍ</Text>
       </View>
-      
-      <View style={{ flexDirection: 'row', gap: 10, borderWidth: 0.5, borderColor: '#cbd5e1', borderRadius: 4, padding: 8, backgroundColor: '#ffffff', minHeight: 125, alignItems: 'center' }}>
-        
+
+      <View style={{ flexDirection: 'row', gap: 10, borderWidth: 0.5, borderColor: '#cbd5e1', borderRadius: 4, padding: 8, backgroundColor: '#ffffff', minHeight: 100, alignItems: 'center' }}>
+
         {/* Left Column: Pie Chart (Donut) */}
         <View style={{ flex: 1.2, alignItems: 'center', justifyContent: 'center', borderRightWidth: 0.5, borderRightColor: '#e2e8f0', borderStyle: 'solid', paddingRight: 10 }}>
-          <Text style={{ fontSize: 8.5, fontWeight: 'bold', color: COLORS.azul, marginBottom: 6 }}>Ralentí vs Horas Motor</Text>
-          
+          <Text style={{ fontSize: 8.5, fontWeight: 'bold', color: COLORS.azul, marginBottom: 4 }}>Ralentí vs Horas Motor</Text>
+
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
             {/* SVG Donut */}
-            <View style={{ width: 115, height: 115, position: 'relative', justifyContent: 'center', alignItems: 'center' }}>
-              <Svg width={115} height={115} viewBox="0 0 115 115" style={{ width: 115, height: 115 }}>
+            <View style={{ width: 92, height: 92, position: 'relative', justifyContent: 'center', alignItems: 'center' }}>
+              <Svg width={92} height={92} viewBox="0 0 115 115" style={{ width: 92, height: 92 }}>
                 {/* Background Full Circle (driving: blue) */}
                 <Circle
                   cx="57.5"
@@ -3576,7 +3540,7 @@ function ProportionsCharts({ data }: { data: RalentiPDFData }) {
                 {/* Center Mask to create high-definition donut holes */}
                 <Circle cx="57.5" cy="57.5" r="32" fill="#ffffff" />
               </Svg>
-              <View style={{ position: 'absolute', width: 115, height: 115, justifyContent: 'center', alignItems: 'center' }}>
+              <View style={{ position: 'absolute', width: 92, height: 92, justifyContent: 'center', alignItems: 'center' }}>
                 <Text style={{ fontSize: 11.5, fontWeight: 'bold', color: COLORS.negro }}>{pctRalentiChart.toFixed(0)}%</Text>
                 <Text style={{ fontSize: 5, color: COLORS.gris, textTransform: 'uppercase', fontWeight: 'bold', marginTop: 1 }}>Ralentí</Text>
               </View>
@@ -3587,8 +3551,8 @@ function ProportionsCharts({ data }: { data: RalentiPDFData }) {
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                 <View style={{ width: 8, height: 8, backgroundColor: '#3b82f6', borderRadius: 2 }} />
                 <View>
-                  <Text style={{ fontSize: 6, color: COLORS.gris, textTransform: 'uppercase', fontWeight: 'bold' }}>Horas Motor Encendido</Text>
-                  <Text style={{ fontSize: 7.5, fontWeight: 'bold', color: COLORS.negro, marginTop: 1 }}>{totalHorasMotorEncendido.toFixed(1)} h ({pctEncendidoChart.toFixed(0)}%)</Text>
+                  <Text style={{ fontSize: 6, color: COLORS.gris, textTransform: 'uppercase', fontWeight: 'bold' }}>Tiempo en Movimiento</Text>
+                  <Text style={{ fontSize: 7.5, fontWeight: 'bold', color: COLORS.negro, marginTop: 1 }}>{horasEnMovimiento.toFixed(1)} h ({pctMovimientoChart.toFixed(0)}%)</Text>
                 </View>
               </View>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
@@ -3663,7 +3627,7 @@ function OperationalSummaryTable({ data }: { data: RalentiPDFData }) {
 
         {/* Row 1 */}
         <View style={[base.tableRow, { paddingVertical: 3.5 }]}>
-          <Text style={[base.tableCell, { flex: 2, textAlign: 'left', paddingLeft: 8, fontSize: 6.8, fontWeight: 700 }]}>% Tiempo de ralentí &gt; 5 min</Text>
+          <Text style={[base.tableCell, { flex: 2, textAlign: 'left', paddingLeft: 8, fontSize: 6.8, fontWeight: 700 }]}>% Tiempo en ralentí (sobre motor encendido)</Text>
           <Text style={[base.tableCell, { flex: 1.2, fontSize: 6.8, fontWeight: 700 }]}>{pctRalenti.toFixed(1)}%</Text>
           <Text style={[base.tableCell, { flex: 1, fontSize: 6.8 }]}>&lt; 10%</Text>
           <Text style={[base.tableCell, { flex: 2.5, textAlign: 'right', paddingRight: 8, fontSize: 6.8, fontWeight: 700, color: deltaPct > 0 ? COLORS.rojo : COLORS.verde }]}>
@@ -3673,7 +3637,7 @@ function OperationalSummaryTable({ data }: { data: RalentiPDFData }) {
 
         {/* Row 2 */}
         <View style={[base.tableRow, base.tableRowAlt, { paddingVertical: 3.5 }]}>
-          <Text style={[base.tableCell, { flex: 2, textAlign: 'left', paddingLeft: 8, fontSize: 6.8, fontWeight: 700 }]}>Galones en ralentí &gt; 5 min</Text>
+          <Text style={[base.tableCell, { flex: 2, textAlign: 'left', paddingLeft: 8, fontSize: 6.8, fontWeight: 700 }]}>Galones consumidos en ralentí</Text>
           <Text style={[base.tableCell, { flex: 1.2, fontSize: 6.8, fontWeight: 700 }]}>{totalGalonesConsumidos.toFixed(1)} gal</Text>
           <Text style={[base.tableCell, { flex: 1, fontSize: 6.8 }]}>&lt; 37 gal</Text>
           <Text style={[base.tableCell, { flex: 2.5, textAlign: 'right', paddingRight: 8, fontSize: 6.8, fontWeight: 700, color: deltaGalones > 0 ? COLORS.rojo : COLORS.verde }]}>
@@ -3720,7 +3684,7 @@ function KeyDataInterpretationTable({ data, daysInPeriod }: { data: RalentiPDFDa
   return (
     <View style={{ marginBottom: 5 }} wrap={false}>
       <View style={{ backgroundColor: COLORS.azul, padding: '4 8', marginBottom: 4 }}>
-        <Text style={{ fontSize: 7.5, fontWeight: 700, color: COLORS.blanco }}>2. DATOS CLAVE CON INTERPRETACIÓN</Text>
+        <Text style={{ fontSize: 7.5, fontWeight: 700, color: COLORS.blanco }}>1. DATOS CLAVE CON INTERPRETACIÓN</Text>
       </View>
       <View style={{ border: '0.5px solid #cbd5e1', borderRadius: 4, overflow: 'hidden' }}>
         {/* Header */}
@@ -3847,7 +3811,7 @@ function SuggestedActionPlanTable() {
   return (
     <View style={{ marginBottom: 5 }} wrap={false}>
       <View style={{ backgroundColor: COLORS.azul, padding: '4 8', marginBottom: 4 }}>
-        <Text style={{ fontSize: 7.5, fontWeight: 700, color: COLORS.blanco }}>4. PLAN DE ACCIÓN SUGERIDO</Text>
+        <Text style={{ fontSize: 7.5, fontWeight: 700, color: COLORS.blanco }}>2. PLAN DE ACCIÓN SUGERIDO</Text>
       </View>
       <View style={{ border: '0.5px solid #cbd5e1', borderRadius: 4, overflow: 'hidden' }}>
         {/* Header */}
@@ -3889,7 +3853,7 @@ function SuggestedActionPlanTable() {
         {/* Row 4 */}
         <View style={[base.tableRow, base.tableRowAlt, { paddingVertical: 3.5 }]}>
           <Text style={[base.tableCell, { flex: 2, textAlign: 'left', paddingLeft: 8, fontSize: 6.8, fontWeight: 700 }]}>Análisis Consolidado Semanal</Text>
-          <Text style={[base.tableCell, { flex: 1.2, fontSize: 6.8 }]}>Gestión Activos</Text>
+          <Text style={[base.tableCell, { flex: 1.2, fontSize: 6.8 }]}>Coordinador de Flota Zona</Text>
           <Text style={[base.tableCell, { flex: 1, fontSize: 6.8 }]}>Quincenal</Text>
           <Text style={[base.tableCell, { flex: 1.2, fontSize: 6.8 }]}>Reporte Top 10</Text>
           <Text style={[base.tableCell, { flex: 2, textAlign: 'right', paddingRight: 8, fontSize: 6.8, color: COLORS.azul, fontWeight: 700 }]}>Focalización en unidades críticas</Text>
@@ -3905,11 +3869,13 @@ export function InformeRalentiPDF({ data }: { data: RalentiPDFData }) {
     pctRalenti, totalHorasMotorEncendido, totalHorasMotorRalenti,
     totalGalonesConsumidos, totalEventos,
     costTotal, costAvgDaily, co2Kg, treesEquivalent,
-    mayorEventoSegundos, promedioEventoSegundos, eventosMas30Min,
+    mayorEventoSegundos, mayorEventoConductor = 'No registra', promedioEventoSegundos, eventosMas30Min,
     riskLevel, fapRisk,
     topByTime, topByMax,
     providerCO2, dailyCO2Trend,
     contratoNombre = 'Todos los contratos',
+    clienteNombre = 'Todos los clientes',
+    tiposNombre = 'Todos los tipos',
     placaCritica = 'NINGUNO',
     tiempoCriticaSegundos = 0,
     fapProbability = 15,
@@ -3920,13 +3886,8 @@ export function InformeRalentiPDF({ data }: { data: RalentiPDFData }) {
   const daysInPeriod = Math.round((end.getTime() - start.getTime()) / (1000 * 3600 * 24)) + 1;
 
   const deltaPct = pctRalenti - 10;
-  const multPct = pctRalenti / 10;
-  
   const deltaGalones = totalGalonesConsumidos - 37;
-  const multGalones = totalGalonesConsumidos / 37;
-  
   const deltaCosto = costAvgDaily - 28000;
-  const multCosto = costAvgDaily / 28000;
 
   return (
     <Document title={`Informe de Ralentí — ${periodoLabel}`}>
@@ -3949,11 +3910,9 @@ export function InformeRalentiPDF({ data }: { data: RalentiPDFData }) {
 
         {/* Gerencial Summary Box */}
         <GerencialSummaryBox
-          riskLevel={riskLevel}
-          pctRalenti={pctRalenti}
-          totalEventos={totalEventos}
-          periodoLabel={periodoLabel}
           contratoNombre={contratoNombre}
+          clienteNombre={clienteNombre}
+          tiposNombre={tiposNombre}
         />
 
         {/* 4 KPIs Row */}
@@ -3965,38 +3924,30 @@ export function InformeRalentiPDF({ data }: { data: RalentiPDFData }) {
           <Page1KpiCard
             title="% Tiempo Ralentí"
             value={`${pctRalenti.toFixed(2)}%`}
-            subText={`Meta: 10.00% (${deltaPct > 0 ? '+' : ''}${deltaPct.toFixed(2)}% pp)`}
-            barPct={(pctRalenti / 30) * 100}
-            barColor={pctRalenti > 15 ? COLORS.rojo : pctRalenti >= 10 ? COLORS.naranja : EMERALD}
-            metaText={`${multPct.toFixed(1)}x de la meta`}
-            infoText="Fórmula: (Tiempo Ralentí > 5 min / Tiempo Motor Encendido Total) * 100. Meta < 10%."
+            subText="Meta: 10.00%"
+            valueColor={deltaPct > 0 ? COLORS.rojo : COLORS.negro}
+            infoText="Del tiempo que el motor estuvo encendido, qué parte pasó detenido sin avanzar. Entre más bajo, mejor aprovechamiento del vehículo."
           />
           <Page1KpiCard
             title="Galones Consumidos en Ralentí"
             value={`${totalGalonesConsumidos.toFixed(1)} Gal`}
-            subText={`Meta: 37.0 Gal (${deltaGalones > 0 ? '+' : ''}${deltaGalones.toFixed(1)} Gal)`}
-            barPct={(totalGalonesConsumidos / 100) * 100}
-            barColor={totalGalonesConsumidos > 50 ? COLORS.rojo : totalGalonesConsumidos > 37 ? COLORS.naranja : EMERALD}
-            metaText={`${multGalones.toFixed(1)}x de la meta`}
-            infoText="Fórmula: Tiempo Ralentí * Consumo Estimado por hora de motor estacionario. Meta < 37 Gal."
+            subText="Meta: 37.0 Gal"
+            valueColor={deltaGalones > 0 ? COLORS.rojo : COLORS.negro}
+            infoText="Combustible gastado con el vehículo detenido y el motor encendido. Es consumo que no produce ningún desplazamiento."
           />
           <Page1KpiCard
             title="Costo Promedio Diario"
             value={fmtCOP(costAvgDaily)}
-            subText={`Meta: $28k (${deltaCosto > 0 ? '+' : ''}${fmtCOP(deltaCosto)})`}
-            barPct={(costAvgDaily / 100000) * 100}
-            barColor={costAvgDaily > 40000 ? COLORS.rojo : costAvgDaily > 28000 ? COLORS.naranja : EMERALD}
-            metaText={`${multCosto.toFixed(1)}x de la meta`}
-            infoText="Fórmula: (Galones Consumidos en Ralentí * $9.922 COP de precio de combustible) / Días."
+            subText="Meta: $28k / día"
+            valueColor={deltaCosto > 0 ? COLORS.rojo : COLORS.negro}
+            infoText="Dinero que cuesta cada día, en promedio, el combustible quemado mientras el vehículo está detenido. Es gasto evitable."
           />
           <Page1KpiCard
             title="Riesgo Operacional"
             value={riskLevel}
             subText={`FAP/AdBlue: Riesgo ${fapRisk}`}
-            barPct={fapProbability}
-            barColor={riskLevel === 'Alto' ? COLORS.rojo : riskLevel === 'Medio' ? COLORS.naranja : EMERALD}
-            metaText={`${fapProbability}% Probabilidad falla`}
-            infoText="Propensión a colmatación acelerada de hollín en el DPF por temperaturas frías de combustión."
+            valueColor={riskLevel === 'Alto' ? COLORS.rojo : riskLevel === 'Medio' ? COLORS.naranja : COLORS.negro}
+            infoText="Riesgo para el motor y el filtro de partículas por operar mucho tiempo detenido. 'Alto' significa mayor probabilidad de fallas y mantenimiento."
           />
         </View>
 
@@ -4010,11 +3961,14 @@ export function InformeRalentiPDF({ data }: { data: RalentiPDFData }) {
           <View style={{ backgroundColor: COLORS.azul, padding: '3 6', marginBottom: 4 }}>
             <Text style={{ fontSize: 6.8, fontWeight: 700, color: '#ffffff' }}>DATOS CLAVE DEL PERÍODO</Text>
           </View>
+          <Text style={{ fontSize: 6, color: COLORS.gris, marginBottom: 4 }}>
+            Los tiempos se expresan en horas. El formato h:mm:ss corresponde a horas : minutos : segundos.
+          </Text>
           <View style={{ flexDirection: 'row', gap: 6 }} wrap={false}>
-            <Page1DataKeyCard label="Tiempo Ralentí Flota" value={`${totalHorasMotorRalenti.toFixed(1)} h`} sub={`De ${totalHorasMotorEncendido.toFixed(1)} h motor`} />
-            <Page1DataKeyCard label="Mayor Evento Único" value={fmtSecs(mayorEventoSegundos)} sub="Conductor crítico" />
-            <Page1DataKeyCard label="Promedio por Evento" value={fmtSecs(promedioEventoSegundos)} sub={`Total: ${totalEventos} eventos`} />
-            <Page1DataKeyCard label="Eventos > 30 Minutos" value={String(eventosMas30Min)} sub="Severidad crítica" />
+            <Page1DataKeyCard label="Tiempo Ralentí Flota" value={`${totalHorasMotorRalenti.toFixed(1)} h`} sub="Horas totales en ralentí" sub2={`De ${totalHorasMotorEncendido.toFixed(1)} h de motor encendido`} />
+            <Page1DataKeyCard label="Mayor Evento Único (h:mm:ss)" value={fmtSecs(mayorEventoSegundos)} sub={`≈ ${(mayorEventoSegundos / 3600).toFixed(1)} horas continuas`} sub2={`Conductor: ${mayorEventoConductor}`} />
+            <Page1DataKeyCard label="Promedio por Evento (h:mm:ss)" value={fmtSecs(promedioEventoSegundos)} sub={`≈ ${(promedioEventoSegundos / 3600).toFixed(1)} horas por evento`} sub2={`Total: ${totalEventos} eventos`} />
+            <Page1DataKeyCard label="Eventos > 30 Minutos" value={String(eventosMas30Min)} sub="Eventos de severidad crítica" />
           </View>
           <CriticalVehicleCard placa={placaCritica} tiempoSegundos={tiempoCriticaSegundos} totalHorasRalentiFlota={totalHorasMotorRalenti} />
         </View>
@@ -4024,8 +3978,10 @@ export function InformeRalentiPDF({ data }: { data: RalentiPDFData }) {
           galones={totalGalonesConsumidos}
           costTotal={costTotal}
           co2Kg={co2Kg}
-          fapProbability={fapProbability}
         />
+
+        {/* Análisis de Distribución y Proporciones de Ralentí */}
+        <ProportionsCharts data={data} />
 
         <ReportFooterDiario />
       </Page>
@@ -4039,38 +3995,10 @@ export function InformeRalentiPDF({ data }: { data: RalentiPDFData }) {
           <Text style={{ fontSize: 7.5, fontWeight: 700, color: '#ffffff' }}>RESUMEN OPERATIVO, DESVIACIONES Y PLAN DE ACCIÓN</Text>
         </View>
 
-        {/* 1. Operational Summary Table */}
-        <OperationalSummaryTable data={data} />
-
-        {/* 2. Key Data Interpretation Table */}
-        <KeyDataInterpretationTable data={data} daysInPeriod={daysInPeriod} />
-
-        {/* 3. Detailed Impact Table */}
-        <DetailedImpactTable data={data} daysInPeriod={daysInPeriod} />
-
-        {/* 4. Suggested Action Plan Table */}
-        <SuggestedActionPlanTable />
-
-        {/* Proportions Comparison Table */}
-        <ProportionsCharts data={data} />
-
-        <ReportFooterDiario />
-      </Page>
-
-      {/* ── PÁGINA 3: COMPORTAMIENTO DE CONDUCTORES E IMPACTO AMBIENTAL ── */}
-      <Page size="LETTER" orientation="portrait" style={[base.page, { padding: 20, paddingBottom: 40 }]}>
-        <ReportHeaderDiario title="Informe Ejecutivo de Ralentí de Flota — Torre de Control" />
-        
-        {/* Title banner */}
-        <View style={{ backgroundColor: COLORS.azul, padding: '4 8', marginBottom: 6 }} wrap={false}>
-          <Text style={{ fontSize: 7.5, fontWeight: 700, color: '#ffffff' }}>COMPORTAMIENTO DE CONDUCTORES E IMPACTO AMBIENTAL</Text>
-        </View>
-
-        {/* Top 10 Drivers Section */}
-        <View style={{ backgroundColor: COLORS.azul, padding: '4 8', marginBottom: 4, marginTop: 4 }} wrap={false}>
+        {/* Comportamiento de Conductores (Top 10) — reubicado a esta página */}
+        <View style={{ backgroundColor: COLORS.azul, padding: '4 8', marginBottom: 4 }} wrap={false}>
           <Text style={{ fontSize: 7, fontWeight: 700, color: COLORS.blanco }}>COMPORTAMIENTO DE CONDUCTORES (TOP 10)</Text>
         </View>
-        
         <View style={{ flexDirection: 'row', gap: 8, marginBottom: 6 }} wrap={false}>
           <Page2DriverBarChart
             title="Top 10 Conductores por Tiempo"
@@ -4083,17 +4011,15 @@ export function InformeRalentiPDF({ data }: { data: RalentiPDFData }) {
             type="max"
           />
         </View>
-
-        {/* Interpretation Box */}
         <Page2InterpretationBox topByTime={topByTime} topByMax={topByMax} />
 
-        {/* TENDENCIA DE EMISIONES E IMPACTO AMBIENTAL DETALLADO */}
-        <View style={{ backgroundColor: COLORS.azul, padding: '4 8', marginBottom: 4, marginTop: 6 }} wrap={false}>
-          <Text style={{ fontSize: 7, fontWeight: 700, color: COLORS.blanco }}>TENDENCIA DE EMISIONES E IMPACTO AMBIENTAL DETALLADO</Text>
-        </View>
+        {/* 1. Key Data Interpretation Table */}
+        <KeyDataInterpretationTable data={data} daysInPeriod={daysInPeriod} />
 
-        <CO2TrendSVGChart trendData={dailyCO2Trend} />
+        {/* 2. Suggested Action Plan Table */}
+        <SuggestedActionPlanTable />
 
+        {/* Impacto de Compensación Ambiental (reubicado desde la antigua página 3) */}
         <View style={{ marginTop: 4 }} wrap={false}>
           <Page3EnvironmentalBox co2Kg={co2Kg} treesEquivalent={treesEquivalent} />
         </View>
