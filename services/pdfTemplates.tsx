@@ -3004,6 +3004,7 @@ export interface RalentiPDFData {
   totalHorasMotorRalenti: number;
   totalGalonesConsumidos: number;
   totalRalentisExcesivos: number;
+  totalVehiculosEvaluados?: number;
   totalEventos: number;
   costTotal: number;
   costAvgDaily: number;
@@ -3099,8 +3100,14 @@ function GerencialSummaryBox({ contratoNombre, clienteNombre, tiposNombre }: { c
       <Text style={{ fontSize: 8, fontWeight: 'bold', color: COLORS.azul, marginBottom: 4, textTransform: 'uppercase' }}>
         Resumen Operativo
       </Text>
+      <Text style={{ fontSize: 7, color: COLORS.gris, marginBottom: 1 }}>
+        Informe generado para el cliente/grupo:
+      </Text>
+      <Text style={{ fontSize: 11, fontWeight: 'bold', color: COLORS.negro, marginBottom: 4 }}>
+        {clienteNombre}
+      </Text>
       <Text style={{ fontSize: 7, color: COLORS.negro, lineHeight: 1.5, textAlign: 'justify' }}>
-        Informe generado para el cliente/grupo {clienteNombre}, que abarca los contratos: {contratoNombre}. El análisis comprende los siguientes tipos de vehículo: {tiposNombre}.
+        Contratos: {contratoNombre}. El análisis comprende los siguientes tipos de vehículo: {tiposNombre}.
       </Text>
     </View>
   );
@@ -3144,38 +3151,6 @@ function CriticalVehicleCard({ placa, tiempoSegundos, totalHorasRalentiFlota }: 
 }
 
 // Helper: Page 1 Impact Panel
-function Page1ImpactPanel({
-  galones,
-  costTotal,
-  co2Kg,
-}: {
-  galones: number;
-  costTotal: number;
-  co2Kg: number;
-}) {
-  return (
-    <View style={{ backgroundColor: '#fdfdfd', borderWidth: 0.5, borderColor: '#cbd5e1', borderStyle: 'solid', borderRadius: 4, padding: 8, marginTop: 4 }} wrap={false}>
-      <Text style={{ fontSize: 9.5, fontWeight: 'bold', color: COLORS.azul, textTransform: 'uppercase', marginBottom: 6 }}>Panel de Impacto y Consecuencias</Text>
-
-      <View style={{ flexDirection: 'row', gap: 16 }}>
-        {/* Combustible */}
-        <View style={{ flex: 1, borderRightWidth: 0.5, borderRightColor: '#cbd5e1', borderStyle: 'solid', paddingRight: 10 }}>
-          <Text style={{ fontSize: 6.8, color: COLORS.gris, textTransform: 'uppercase', marginBottom: 4 }}>Consumo de Combustible en Ralentí</Text>
-          <Text style={{ fontSize: 13.5, fontWeight: 'bold', color: '#9a3412', marginBottom: 3 }}>{galones.toFixed(1)} Galones</Text>
-          <Text style={{ fontSize: 12.5, fontWeight: 'bold', color: COLORS.negro }}>{fmtCOP(costTotal)}</Text>
-        </View>
-
-        {/* Huella de Carbono */}
-        <View style={{ flex: 1 }}>
-          <Text style={{ fontSize: 6.8, color: COLORS.gris, textTransform: 'uppercase', marginBottom: 4 }}>Emisiones de CO₂ Generadas</Text>
-          <Text style={{ fontSize: 13.5, fontWeight: 'bold', color: '#166534', marginBottom: 3 }}>{(co2Kg / 1000).toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Toneladas</Text>
-          <Text style={{ fontSize: 9.5, color: COLORS.gris }}>Equivale a {co2Kg.toLocaleString('es-CO', { maximumFractionDigits: 0 })} kg de CO₂</Text>
-        </View>
-      </View>
-    </View>
-  );
-}
-
 const DRIVER_BAR_GRADIENT = [
   '#b91c1c', // 1 - rojo intenso
   '#dc2626', // 2 - rojo
@@ -3261,7 +3236,7 @@ function CO2TrendSVGChart({ trendData }: { trendData: Array<{ date: string; valu
     );
   }
 
-  // trendData.value is already cumulative CO₂ in kg — do NOT re-accumulate
+  // trendData.value is already cumulative CO2 in kg — do NOT re-accumulate
   const n = trendData.length;
   const values = trendData.map(d => d.value);
 
@@ -3336,7 +3311,7 @@ function CO2TrendSVGChart({ trendData }: { trendData: Array<{ date: string; valu
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
         <View>
           <Text style={{ fontSize: 8.5, fontWeight: 'bold', color: COLORS.azul, textTransform: 'uppercase' }}>
-            Tendencia de Emisión de CO₂ Acumulado (kg)
+            Tendencia de Emisión de CO2 Acumulado (kg)
           </Text>
           <View style={{ flexDirection: 'row', gap: 10, marginTop: 2 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
@@ -3459,20 +3434,20 @@ function Page3EnvironmentalBox({ co2Kg, treesEquivalent }: { co2Kg: number; tree
   return (
     <View style={{ backgroundColor: '#ecfdf5', borderWidth: 0.5, borderColor: '#a7f3d0', borderStyle: 'solid', borderRadius: 4, padding: 8 }} wrap={false}>
       <Text style={{ fontSize: 8.5, fontWeight: 'bold', color: '#047857', marginBottom: 6, textTransform: 'uppercase' }}>
-        Impacto de Compensación Ambiental
+        Impacto Ambiental
       </Text>
       <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
         <View style={{ flex: 1, backgroundColor: '#ffffff', borderRadius: 4, padding: 6, borderWidth: 0.5, borderColor: '#cbd5e1', borderStyle: 'solid', alignItems: 'center' }}>
-          <Text style={{ fontSize: 13.5, fontWeight: 'bold', color: '#15803d' }}>{co2Tons.toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Ton</Text>
-          <Text style={{ fontSize: 6.8, color: COLORS.gris, textTransform: 'uppercase', marginTop: 2 }}>Gases CO₂</Text>
+          <Text style={{ fontSize: 13.5, fontWeight: 'bold', color: '#15803d' }}>{co2Tons.toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Ton CO2</Text>
+          <Text style={{ fontSize: 6.8, color: COLORS.gris, textTransform: 'uppercase', marginTop: 2 }}>Emisiones de CO2</Text>
         </View>
         <View style={{ flex: 1, backgroundColor: '#ffffff', borderRadius: 4, padding: 6, borderWidth: 0.5, borderColor: '#cbd5e1', borderStyle: 'solid', alignItems: 'center' }}>
-          <Text style={{ fontSize: 13.5, fontWeight: 'bold', color: '#16a34a' }}>{Math.ceil(treesEquivalent)} Árboles</Text>
-          <Text style={{ fontSize: 6.8, color: COLORS.gris, textTransform: 'uppercase', marginTop: 2 }}>Compensación</Text>
+          <Text style={{ fontSize: 13.5, fontWeight: 'bold', color: '#16a34a' }}>{Math.ceil(treesEquivalent)} Árboles / Año</Text>
+          <Text style={{ fontSize: 6.8, color: COLORS.gris, textTransform: 'uppercase', marginTop: 2 }}>Árboles necesarios para absorber este CO2</Text>
         </View>
       </View>
       <Text style={{ fontSize: 6.5, color: '#065f46', lineHeight: 1.3, marginTop: 6 }}>
-        Nota ecológica: Un árbol absorbe 22 kg de CO₂/año. El ralentí excesivo anula este beneficio ambiental.
+        Nota ecológica: Un árbol absorbe 22 kg de CO2/año. El ralentí excesivo anula este beneficio ambiental.
       </Text>
     </View>
   );
@@ -3808,8 +3783,8 @@ function DetailedImpactTable({ data, daysInPeriod }: { data: RalentiPDFData; day
 
         {/* Row 4 */}
         <View style={[base.tableRow, base.tableRowAlt, { paddingVertical: 3.5 }]}>
-          <Text style={[base.tableCell, { flex: 1.8, textAlign: 'left', paddingLeft: 8, fontSize: 6.8, fontWeight: 700 }]}>Huella de Carbono (CO₂)</Text>
-          <Text style={[base.tableCell, { flex: 1, fontSize: 6.8, fontWeight: 700 }]}>{co2Kg.toFixed(0)} kg CO₂</Text>
+          <Text style={[base.tableCell, { flex: 1.8, textAlign: 'left', paddingLeft: 8, fontSize: 6.8, fontWeight: 700 }]}>Huella de Carbono (CO2)</Text>
+          <Text style={[base.tableCell, { flex: 1, fontSize: 6.8, fontWeight: 700 }]}>{co2Kg.toFixed(0)} kg CO2</Text>
           <Text style={[base.tableCell, { flex: 2.2, textAlign: 'right', paddingRight: 8, fontSize: 6.8, color: COLORS.gris }]}>
             {(co2Kg / 1000).toFixed(2)} Ton (Compensa: {Math.ceil(treesEquivalent)} árboles)
           </Text>
@@ -3879,7 +3854,7 @@ export function InformeRalentiPDF({ data }: { data: RalentiPDFData }) {
   const {
     periodoLabel, periodoInicio, periodoFin, fechaReporte,
     pctRalenti, totalHorasMotorEncendido, totalHorasMotorRalenti,
-    totalGalonesConsumidos, totalEventos,
+    totalGalonesConsumidos, totalEventos, totalVehiculosEvaluados = 0,
     costTotal, costAvgDaily, co2Kg, treesEquivalent,
     mayorEventoSegundos, mayorEventoConductor = 'No registra', promedioEventoSegundos, eventosMas30Min,
     riskLevel, fapRisk,
@@ -3903,7 +3878,7 @@ export function InformeRalentiPDF({ data }: { data: RalentiPDFData }) {
 
   return (
     <Document title={`Informe de Ralentí — ${periodoLabel}`}>
-      {/* ── PÁGINA 1: RESUMEN OPERACIONAL, KPIs Y RESUMEN GENERAL ── */}
+      {/* ── PÁGINA 1: RESUMEN OPERACIONAL, KPIs Y DATOS CLAVE DEL PERÍODO ── */}
       <Page size="LETTER" orientation="portrait" style={[base.page, { padding: 20, paddingBottom: 40 }]}>
         <ReportHeaderDiario title="Informe Ejecutivo de Ralentí de Flota — Torre de Control" />
 
@@ -3938,6 +3913,12 @@ export function InformeRalentiPDF({ data }: { data: RalentiPDFData }) {
         {/* Tarjetas KPI restantes (el % de ralentí queda representado por el donut superior) */}
         <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8 }} wrap={false}>
           <Page1KpiCard
+            title="Vehículos Evaluados"
+            value={String(totalVehiculosEvaluados)}
+            valueColor={COLORS.azul}
+            infoText="Cantidad de vehículos con datos de ralentí incluidos en el análisis del período."
+          />
+          <Page1KpiCard
             title="Galones Consumidos en Ralentí"
             value={`${totalGalonesConsumidos.toFixed(1)} Gal`}
             valueColor={deltaGalones > 0 ? COLORS.rojo : COLORS.negro}
@@ -3958,9 +3939,9 @@ export function InformeRalentiPDF({ data }: { data: RalentiPDFData }) {
           />
         </View>
 
-        {/* Title banner */}
-        <View style={{ backgroundColor: COLORS.azul, padding: '4 8', marginBottom: 4 }} wrap={false}>
-          <Text style={{ fontSize: 7.5, fontWeight: 700, color: '#ffffff' }}>RESUMEN GENERAL</Text>
+        {/* Impacto de Compensación Ambiental (reubicado debajo de KPIs) */}
+        <View style={{ marginBottom: 8 }} wrap={false}>
+          <Page3EnvironmentalBox co2Kg={co2Kg} treesEquivalent={treesEquivalent} />
         </View>
 
         {/* Datos Clave del Período (Full Width) */}
@@ -3980,24 +3961,12 @@ export function InformeRalentiPDF({ data }: { data: RalentiPDFData }) {
           <CriticalVehicleCard placa={placaCritica} tiempoSegundos={tiempoCriticaSegundos} totalHorasRalentiFlota={totalHorasMotorRalenti} />
         </View>
 
-        {/* Panel de Impacto (Full Width) */}
-        <Page1ImpactPanel
-          galones={totalGalonesConsumidos}
-          costTotal={costTotal}
-          co2Kg={co2Kg}
-        />
-
         <ReportFooterDiario />
       </Page>
 
       {/* ── PÁGINA 2: RESUMEN OPERATIVO, DESVIACIONES Y PLAN DE ACCIÓN ── */}
       <Page size="LETTER" orientation="portrait" style={[base.page, { padding: 20, paddingBottom: 40 }]}>
         <ReportHeaderDiario title="Informe Ejecutivo de Ralentí de Flota — Torre de Control" />
-        
-        {/* Title banner */}
-        <View style={{ backgroundColor: COLORS.azul, padding: '4 8', marginBottom: 6 }} wrap={false}>
-          <Text style={{ fontSize: 7.5, fontWeight: 700, color: '#ffffff' }}>RESUMEN OPERATIVO, DESVIACIONES Y PLAN DE ACCIÓN</Text>
-        </View>
 
         {/* Comportamiento de Conductores (Top 10) — reubicado a esta página */}
         <View style={{ backgroundColor: COLORS.azul, padding: '4 8', marginBottom: 4 }} wrap={false}>
@@ -4022,11 +3991,6 @@ export function InformeRalentiPDF({ data }: { data: RalentiPDFData }) {
 
         {/* 2. Suggested Action Plan Table */}
         <SuggestedActionPlanTable />
-
-        {/* Impacto de Compensación Ambiental (reubicado desde la antigua página 3) */}
-        <View style={{ marginTop: 4 }} wrap={false}>
-          <Page3EnvironmentalBox co2Kg={co2Kg} treesEquivalent={treesEquivalent} />
-        </View>
 
         <ReportFooterDiario />
       </Page>
