@@ -40,6 +40,18 @@ const getPrecioGalon = (tipo?: string | null): number => {
   return PRECIOS_GALON.find(f => f.test(t))?.precio ?? 11200;
 };
 
+// Umbral de "ralentí excesivo" (alerta) por proveedor satelital, en segundos — idéntico
+// al Informe por Período: Coltrack ≥10 min, Fagor ≥5 min (default 5 min). Las cifras de
+// excesos (conteo de alertas, tiempo >5 min, eventos >30 min) se calculan SOLO sobre los
+// eventos que superan el umbral nativo de su proveedor, no sobre el agregado de la tabla
+// ralentis_periodos (que incluye todos los ralentís, también los cortos).
+const UMBRAL_RALENTI_SEG: Record<string, number> = { COLTRACK: 600, FAGOR: 300 };
+const umbralRalentiSeg = (proveedor?: string | null): number =>
+  UMBRAL_RALENTI_SEG[(proveedor ?? '').toUpperCase().trim()] ?? 300;
+// Registros con conductor "Taller" = vehículos en mantenimiento; se excluyen por completo.
+const esConductorTaller = (nombre?: string | null): boolean =>
+  (nombre ?? '').toUpperCase().includes('TALLER');
+
 // ── Types ──
 interface VehicleOption {
   id: string;
@@ -61,10 +73,14 @@ interface PeriodoData {
   labelCorto: string;
   inicio: string;
   fin: string;
-  totalEventos: number;
+  totalEventos: number;          // nº de alertas de ralentí (eventos sobre umbral del proveedor)
   totalGalones: number;
   totalHorasEncendido: number;
   totalHorasRalenti: number;
+  horasConduccion: number;       // tiempo en movimiento = encendido − ralentí
+  horasRalentiMas5Min: number;   // tiempo en ralentí excesivo (eventos sobre umbral)
+  horasRalentiMenos5Min: number; // tiempo en ralentí no excesivo = total − >5min
+  eventosMas30Min: number;       // alertas con duración > 30 min
   pctRalenti: number;
   co2Kg: number;
   costoCOP: number;
@@ -85,6 +101,19 @@ function getPeriodoLabel(inicio: string): { label: string; labelCorto: string } 
     label: `${quincena} ${MESES_FULL[month - 1]} ${year}`,
     labelCorto: `${quincena} ${MESES_CORTO[month - 1]}`,
   };
+}
+
+// El módulo de ralentí trabaja SIEMPRE por quincenas: Q1 = día 1→15 y Q2 = día
+// 16→último día del mes (igual que el "Informe por Período"). En la misma tabla
+// (ralentis_periodos) conviven períodos de otra procedencia —p. ej. el informe
+// mensual usa ciclos tipo 29→28— que no siguen esa convención y distorsionan el
+// comparativo. Este guard deja pasar únicamente las quincenas reales.
+function isQuincenaPeriodo(inicio: string, fin: string): boolean {
+  const [yi, mi, di] = inicio.split('-').map(Number);
+  const [yf, mf, df] = fin.split('-').map(Number);
+  if (yi !== yf || mi !== mf) return false; // debe iniciar y terminar en el mismo mes
+  const ultimoDia = new Date(yi, mi, 0).getDate();
+  return (di === 1 && df === 15) || (di === 16 && df === ultimoDia);
 }
 function fmtPct(v: number, showSign = true): string {
   const sign = showSign && v > 0 ? '+' : '';
@@ -310,6 +339,7 @@ export const RalentiAnalisisGeneral: React.FC<{
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [allRows, setAllRows] = useState<any[]>([]);
+  const [allEvents, setAllEvents] = useState<any[]>([]);
 
   // Derived filter options from vehicles
   const clientOptions = useMemo(() => {
@@ -347,40 +377,47 @@ export const RalentiAnalisisGeneral: React.FC<{
 
   const hasFilter = selClients.length > 0 || selContracts.length > 0 || selTypes.length > 0;
 
-  // Fetch ALL periods — no date filter, completely independent
+  // Fetch ALL periods AND events — no date filter, completely independent.
+  // Los períodos dan las horas de motor/ralentí y galones; los eventos dan el
+  // desglose de excesos (tiempo >5 min, eventos >30 min) con la misma definición
+  // de umbral por proveedor que usa el Informe por Período.
   useEffect(() => {
     if (vehicles.length === 0) return;
     const load = async () => {
       setLoading(true);
       setError(null);
       try {
-        const FIELDS = 'vehiculo_id, periodo_inicio, periodo_fin, horas_motor_encendido, horas_motor_ralenti, consumo_combustible, ralentis_excesivos';
         const PAGE = 1000;
+        // Trae una tabla completa paginando en paralelo según el conteo exacto.
+        const fetchAll = async (table: string, fields: string): Promise<any[]> => {
+          const { count, error: countErr } = await supabase
+            .from(table)
+            .select(fields, { count: 'exact', head: true });
+          if (countErr) throw countErr;
+          const numPages = Math.max(1, Math.ceil((count ?? 0) / PAGE));
+          const pagePromises = Array.from({ length: numPages }, (_, i) =>
+            supabase
+              .from(table)
+              .select(fields)
+              .order('periodo_inicio', { ascending: true })
+              .range(i * PAGE, (i + 1) * PAGE - 1)
+          );
+          const results = await Promise.all(pagePromises);
+          for (const res of results) {
+            if (res.error) throw res.error;
+          }
+          return results.flatMap(r => r.data ?? []);
+        };
 
-        // 1. Get total count to know how many pages to fetch
-        const { count, error: countErr } = await supabase
-          .from('ralentis_periodos')
-          .select(FIELDS, { count: 'exact', head: true });
-        if (countErr) throw countErr;
+        const PERIODO_FIELDS = 'vehiculo_id, periodo_inicio, periodo_fin, horas_motor_encendido, horas_motor_ralenti, consumo_combustible, ralentis_excesivos';
+        const EVENTO_FIELDS = 'vehiculo_id, periodo_inicio, periodo_fin, duracion_segundos, proveedor, conductor_nombre';
 
-        const total = count ?? 0;
-        const numPages = Math.max(1, Math.ceil(total / PAGE));
-
-        // 2. Fetch all pages in parallel
-        const pagePromises = Array.from({ length: numPages }, (_, i) =>
-          supabase
-            .from('ralentis_periodos')
-            .select(FIELDS)
-            .order('periodo_inicio', { ascending: true })
-            .range(i * PAGE, (i + 1) * PAGE - 1)
-        );
-        const results = await Promise.all(pagePromises);
-        for (const res of results) {
-          if (res.error) throw res.error;
-        }
-
-        const allData = results.flatMap(r => r.data ?? []);
-        setAllRows(allData);
+        const [periodosData, eventosData] = await Promise.all([
+          fetchAll('ralentis_periodos', PERIODO_FIELDS),
+          fetchAll('ralentis_eventos', EVENTO_FIELDS),
+        ]);
+        setAllRows(periodosData);
+        setAllEvents(eventosData);
       } catch (e: any) {
         setError(e.message ?? 'Error al cargar datos');
       } finally {
@@ -392,9 +429,12 @@ export const RalentiAnalisisGeneral: React.FC<{
 
   // Compute aggregated periods whenever allRows or filters change
   const periods = useMemo((): PeriodoData[] => {
+    // Solo períodos quincenales reales (misma lógica que el Informe por Período);
+    // se descartan rangos de otra procedencia como los mensuales del informe mensual.
+    const quincenaRows = allRows.filter(r => isQuincenaPeriodo(r.periodo_inicio, r.periodo_fin));
     const rows = hasFilter
-      ? allRows.filter(r => filteredVehIds.has(String(r.vehiculo_id)))
-      : allRows;
+      ? quincenaRows.filter(r => filteredVehIds.has(String(r.vehiculo_id)))
+      : quincenaRows;
 
     const periodMap = new Map<string, typeof rows>();
     rows.forEach(r => {
@@ -403,10 +443,27 @@ export const RalentiAnalisisGeneral: React.FC<{
       periodMap.get(key)!.push(r);
     });
 
+    // Agregado de eventos por período: SOLO alertas (duración ≥ umbral del proveedor,
+    // excluyendo conductores "Taller"), igual que el Informe por Período. De aquí salen
+    // el conteo de alertas, el tiempo en ralentí >5 min y los eventos >30 min.
+    const eventAgg = new Map<string, { alertas: number; segMas5Min: number; eventosMas30Min: number }>();
+    allEvents.forEach(e => {
+      if (!isQuincenaPeriodo(e.periodo_inicio, e.periodo_fin)) return;
+      if (hasFilter && !filteredVehIds.has(String(e.vehiculo_id))) return;
+      if (esConductorTaller(e.conductor_nombre)) return;
+      const dur = Number(e.duracion_segundos) || 0;
+      if (dur < umbralRalentiSeg(e.proveedor)) return;
+      const key = `${e.periodo_inicio}_${e.periodo_fin}`;
+      const acc = eventAgg.get(key) ?? { alertas: 0, segMas5Min: 0, eventosMas30Min: 0 };
+      acc.alertas += 1;
+      acc.segMas5Min += dur;
+      if (dur > 1800) acc.eventosMas30Min += 1;
+      eventAgg.set(key, acc);
+    });
+
     const computed: PeriodoData[] = [];
     periodMap.forEach((pRows, key) => {
       const first = pRows[0];
-      const totalEventos = pRows.reduce((a, r) => a + (Number(r.ralentis_excesivos) || 0), 0);
       const totalGalones = pRows.reduce((a, r) => a + (Number(r.consumo_combustible) || 0), 0);
       const totalHorasEncendido = pRows.reduce((a, r) => a + (Number(r.horas_motor_encendido) || 0), 0);
       const totalHorasRalenti = pRows.reduce((a, r) => a + (Number(r.horas_motor_ralenti) || 0), 0);
@@ -420,11 +477,18 @@ export const RalentiAnalisisGeneral: React.FC<{
         costoCOP += gal * getPrecioGalon(fuel);
         vehSet.add(String(r.vehiculo_id));
       });
+
+      const ev = eventAgg.get(key) ?? { alertas: 0, segMas5Min: 0, eventosMas30Min: 0 };
+      const horasRalentiMas5Min = ev.segMas5Min / 3600;
+      const horasConduccion = Math.max(totalHorasEncendido - totalHorasRalenti, 0);
+      const horasRalentiMenos5Min = Math.max(totalHorasRalenti - horasRalentiMas5Min, 0);
+
       const labels = getPeriodoLabel(first.periodo_inicio);
       computed.push({
         key, ...labels,
         inicio: first.periodo_inicio, fin: first.periodo_fin,
-        totalEventos, totalGalones, totalHorasEncendido, totalHorasRalenti,
+        totalEventos: ev.alertas, totalGalones, totalHorasEncendido, totalHorasRalenti,
+        horasConduccion, horasRalentiMas5Min, horasRalentiMenos5Min, eventosMas30Min: ev.eventosMas30Min,
         pctRalenti, co2Kg, costoCOP,
         vehiculosActivos: vehSet.size,
         pctVsBaselineEventos: 0, pctVsBaselineGalones: 0, pctVsBaselineCO2: 0,
@@ -443,7 +507,7 @@ export const RalentiAnalisisGeneral: React.FC<{
       });
     }
     return computed;
-  }, [allRows, filteredVehIds, hasFilter, vehFuelMap]);
+  }, [allRows, allEvents, filteredVehIds, hasFilter, vehFuelMap]);
 
   // Auto-insights
   const insights = useMemo(() => {
@@ -621,9 +685,12 @@ export const RalentiAnalisisGeneral: React.FC<{
               <tr className="bg-[#003366] text-white text-[10px] font-bold uppercase tracking-wider">
                 <th className="py-3 px-4 rounded-tl-lg">Período</th>
                 <th className="py-3 px-3">Vehículos</th>
-                <th className="py-3 px-3">Eventos Excesivos</th>
-                <th className="py-3 px-3">Galones</th>
-                <th className="py-3 px-3">CO₂ (kg)</th>
+                <th className="py-3 px-3">H. Conducción</th>
+                <th className="py-3 px-3">Ralentí Total (h)</th>
+                <th className="py-3 px-3">Ralentí &lt;5 min (h)</th>
+                <th className="py-3 px-3">Ralentí &gt;5 min (h)</th>
+                <th className="py-3 px-3">Eventos &gt;5 min</th>
+                <th className="py-3 px-3">Eventos &gt;30 min</th>
                 <th className="py-3 px-3">% Ralentí</th>
                 <th className="py-3 px-3">Δ Eventos</th>
                 <th className="py-3 px-3 rounded-tr-lg">Δ Galones</th>
@@ -643,9 +710,12 @@ export const RalentiAnalisisGeneral: React.FC<{
                       </div>
                     </td>
                     <td className="py-3 px-3 text-slate-600 dark:text-slate-400">{p.vehiculosActivos}</td>
-                    <td className="py-3 px-3 font-bold text-slate-700 dark:text-slate-300">{p.totalEventos}</td>
-                    <td className="py-3 px-3 text-slate-700 dark:text-slate-300">{p.totalGalones.toFixed(2)}</td>
-                    <td className="py-3 px-3 text-slate-700 dark:text-slate-300">{p.co2Kg.toFixed(0)}</td>
+                    <td className="py-3 px-3 text-slate-700 dark:text-slate-300">{p.horasConduccion.toFixed(1)}</td>
+                    <td className="py-3 px-3 text-slate-700 dark:text-slate-300">{p.totalHorasRalenti.toFixed(1)}</td>
+                    <td className="py-3 px-3 text-slate-700 dark:text-slate-300">{p.horasRalentiMenos5Min.toFixed(1)}</td>
+                    <td className="py-3 px-3 font-semibold text-slate-700 dark:text-slate-300">{p.horasRalentiMas5Min.toFixed(1)}</td>
+                    <td className="py-3 px-3 font-bold text-slate-700 dark:text-slate-300">{p.totalEventos.toLocaleString('es-CO')}</td>
+                    <td className="py-3 px-3 text-slate-700 dark:text-slate-300">{p.eventosMas30Min.toLocaleString('es-CO')}</td>
                     <td className="py-3 px-3">
                       <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${p.pctRalenti < 10 ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400' : p.pctRalenti < 20 ? 'bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400' : 'bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-400'}`}>
                         {p.pctRalenti.toFixed(2)}%
