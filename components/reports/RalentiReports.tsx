@@ -426,6 +426,7 @@ export const RalentiReports: React.FC = () => {
     galonesPorCombustible: Record<string, number>;
     galonesSinTipo: number;
     vehiculosSinTipo: number;
+    totalVehiculosEvaluados: number;
   }>({
     totalHorasMotorEncendido: 0,
     totalHorasMotorRalenti: 0,
@@ -434,6 +435,7 @@ export const RalentiReports: React.FC = () => {
     galonesPorCombustible: {},
     galonesSinTipo: 0,
     vehiculosSinTipo: 0,
+    totalVehiculosEvaluados: 0,
   });
 
   // Detailed events from ralentis_eventos
@@ -582,6 +584,7 @@ export const RalentiReports: React.FC = () => {
             galonesPorCombustible: {},
             galonesSinTipo: 0,
             vehiculosSinTipo: 0,
+            totalVehiculosEvaluados: 0,
           });
           setEvents([]);
           setLoading(false);
@@ -725,6 +728,11 @@ export const RalentiReports: React.FC = () => {
       const prevSumRalenti = prevRepVehs.reduce((acc, r) => acc + (Number(r.horas_motor_ralenti) || 0), 0);
       const prevSumGalones = prevRepVehs.reduce((acc, r) => acc + (Number(r.consumo_combustible) || 0), 0);
 
+      // Vehículos evaluados: cantidad de vehículos distintos con datos en el período.
+      const totalVehiculosEvaluados = new Set(
+        filteredRepVehs.map((r: any) => String(r.vehiculo_id))
+      ).size;
+
       setSummaryMetrics({
         totalHorasMotorEncendido: sumEncendido,
         totalHorasMotorRalenti: sumRalenti,
@@ -733,6 +741,7 @@ export const RalentiReports: React.FC = () => {
         galonesPorCombustible,
         galonesSinTipo,
         vehiculosSinTipo,
+        totalVehiculosEvaluados,
       });
 
       setPrevSummaryMetrics({
@@ -1515,6 +1524,7 @@ export const RalentiReports: React.FC = () => {
               totalHorasMotorRalenti: summaryMetrics.totalHorasMotorRalenti,
               totalGalonesConsumidos: summaryMetrics.totalGalonesConsumidos,
               totalRalentisExcesivos: stats.totalRalentisExcesivos,
+              totalVehiculosEvaluados: summaryMetrics.totalVehiculosEvaluados,
               totalEventos: alertEvents.length,
               costTotal: stats.costTotal,
               costAvgDaily: stats.costAvgDaily,
