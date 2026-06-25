@@ -24,7 +24,22 @@ try {
   }
 } catch { /* .env.local no existe o no es legible */ }
 
-const PORT = 3001;
+const PORT = process.env.LOCAL_API_PORT || 3001;
+
+// ── Chat IA (núcleo compartido con api/chat.ts) ──
+const { runChat } = require('../api/_chatCore.cjs');
+const CHAT_SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || 'https://cmzeijcyykzdmvisojte.supabase.co';
+const CHAT_SUPABASE_KEY = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNtemVpamN5eWt6ZG12aXNvanRlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgwNzc5MTYsImV4cCI6MjA5MzY1MzkxNn0.qn5_sVmmZ1gb6YQCaO2RQYWRO-XwVTuLTY64LK8mAME';
+const CHAT_GEMINI_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
+
+function readBody(req) {
+  return new Promise((resolve) => {
+    let data = '';
+    req.on('data', chunk => { data += chunk; });
+    req.on('end', () => { try { resolve(JSON.parse(data || '{}')); } catch { resolve({}); } });
+    req.on('error', () => resolve({}));
+  });
+}
 
 // API Credentials (same as in fleetService.ts)
 const COLTRACK_API_URL = 'https://gps.coltrack.com/gps/api.jsp';
@@ -447,6 +462,22 @@ const server = http.createServer(async (req, res) => {
             const result = await fetchConductoresSheets();
             res.writeHead(result.success ? 200 : 500);
             res.end(JSON.stringify(result));
+        } else if (req.url === '/api/chat' && req.method === 'POST') {
+            const body = await readBody(req);
+            const messages = Array.isArray(body.messages) ? body.messages : [];
+            if (messages.length === 0) {
+                res.writeHead(400);
+                res.end(JSON.stringify({ error: 'Falta el historial de mensajes.' }));
+            } else {
+                const out = await runChat({
+                    messages,
+                    geminiApiKey: CHAT_GEMINI_KEY,
+                    supabaseUrl: CHAT_SUPABASE_URL,
+                    supabaseKey: CHAT_SUPABASE_KEY,
+                });
+                res.writeHead(out.error ? 502 : 200);
+                res.end(JSON.stringify(out));
+            }
         } else if (req.url === '/api/health') {
             res.writeHead(200);
             res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }));

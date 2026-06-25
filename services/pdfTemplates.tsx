@@ -4,7 +4,7 @@
 import React from 'react';
 import {
   Document, Page, Text, View, StyleSheet, Font, pdf,
-  Image, Svg, Circle, Line, Path,
+  Image, Svg, Circle, Line, Path, Polyline,
 } from '@react-pdf/renderer';
 import { ContratoOption, ReporteAlertasDiariasData, AlertaDiariaGps, ReporteConductorData, ReporteVehiculoData } from './reportService';
 
@@ -4002,6 +4002,424 @@ export async function descargarPDFRalenti(data: RalentiPDFData): Promise<void> {
   const blob = await pdf(<InformeRalentiPDF data={data} />).toBlob();
   const periodoSafe = data.periodoLabel.replace(/\s+/g, '_').replace(/[^a-z0-9_-]/gi, '');
   downloadBlob(blob, `Informe_Ralenti_${periodoSafe}_${data.periodoInicio}.pdf`);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ── Plantilla: Informe de Análisis General de Ralentí (comparativo multi-período) ─
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export interface AnalisisGeneralPeriodoPDF {
+  label: string;
+  labelCorto: string;
+  esBase: boolean;
+  esActual: boolean;
+  vehiculosActivos: number;
+  vehiculosConMotor: number;
+  totalHorasEncendido: number;
+  horasConduccion: number;
+  totalHorasRalenti: number;
+  horasRalentiMenos5Min: number;
+  horasRalentiMas5Min: number;
+  totalEventos: number;
+  eventosMas30Min: number;
+  pctRalenti: number;
+  totalGalones: number;
+  co2Kg: number;
+  costoCOP: number;
+  pctVsBaselineEventos: number;
+  pctVsBaselineGalones: number;
+}
+
+export interface AnalisisGeneralPDFData {
+  fechaReporte: string;
+  clienteNombre: string;
+  contratoNombre: string;
+  tiposNombre: string;
+  periodos: AnalisisGeneralPeriodoPDF[];
+  baselineLabel: string;
+  latestLabel: string;
+  mejorPeriodoLabel: string;
+  peorPeriodoLabel: string;
+  tendencia: 'mejora' | 'retroceso' | 'estable';
+  latestVsPrevPct: number;
+}
+
+function fmtPctSigned(v: number): string {
+  const s = v > 0 ? '+' : '';
+  return `${s}${v.toFixed(1)}%`;
+}
+
+// Tarjeta KPI gerencial reutilizable (Análisis General)
+function AgKpiCard({ title, value, sub, valueColor = COLORS.negro }: { title: string; value: string; sub?: string; valueColor?: string }) {
+  return (
+    <View style={{ flex: 1, backgroundColor: '#ffffff', borderRadius: 4, padding: 7, borderWidth: 0.5, borderColor: COLORS.grisBorde, borderStyle: 'solid', minHeight: 58, justifyContent: 'space-between' }} wrap={false}>
+      <Text style={{ fontSize: 6.8, fontWeight: 700, color: COLORS.gris, textTransform: 'uppercase' }}>{title}</Text>
+      <Text style={{ fontSize: 15, fontWeight: 700, color: valueColor, marginVertical: 2 }}>{value}</Text>
+      {sub ? <Text style={{ fontSize: 6.2, color: COLORS.gris }}>{sub}</Text> : null}
+    </View>
+  );
+}
+
+// Gráfico de barras verticales basado en Views (sin SVG) para react-pdf
+function AgBarChart({ title, data, color, format }: { title: string; data: { label: string; value: number; base?: boolean }[]; color: string; format: (v: number) => string }) {
+  const max = Math.max(...data.map(d => d.value), 1);
+  return (
+    <View style={{ flex: 1, backgroundColor: '#ffffff', borderWidth: 0.5, borderColor: COLORS.grisBorde, borderStyle: 'solid', borderRadius: 4, padding: 8 }} wrap={false}>
+      <Text style={{ fontSize: 7, fontWeight: 700, color: COLORS.azul, marginBottom: 6, textTransform: 'uppercase' }}>{title}</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: 78, gap: 5 }}>
+        {data.map((d, i) => {
+          const h = Math.max(3, (d.value / max) * 64);
+          return (
+            <View key={i} style={{ flex: 1, alignItems: 'center' }}>
+              <Text style={{ fontSize: 5.4, fontWeight: 700, color: COLORS.negro, marginBottom: 1 }}>{format(d.value)}</Text>
+              <View style={{ width: '64%', height: h, backgroundColor: d.base ? COLORS.azul : color, borderTopLeftRadius: 2, borderTopRightRadius: 2 }} />
+            </View>
+          );
+        })}
+      </View>
+      <View style={{ flexDirection: 'row', gap: 5, marginTop: 3, borderTopWidth: 0.5, borderTopColor: COLORS.sombra, paddingTop: 2 }}>
+        {data.map((d, i) => (
+          <Text key={i} style={{ flex: 1, fontSize: 5.2, color: COLORS.gris, textAlign: 'center' }}>{d.label}</Text>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+// Gráfico combinado: barras agrupadas (2 series) + línea de tendencia de % (SVG overlay)
+function AgComboChart({ title, data, barLabels, barColors }: {
+  title: string;
+  data: { label: string; bar0: number; bar1: number; line: number }[];
+  barLabels: [string, string];
+  barColors: [string, string];
+}) {
+  const PLOT_H = 66;
+  const barMax = Math.max(...data.flatMap(d => [d.bar0, d.bar1]), 1);
+  const lineVals = data.map(d => d.line);
+  const lmin = Math.min(...lineVals);
+  const lmax = Math.max(...lineVals);
+  const lrange = (lmax - lmin) || 1;
+  const lo = lmin - lrange * 0.35;
+  const hi = lmax + lrange * 0.35;
+  const yLine = (v: number) => PLOT_H - ((v - lo) / (hi - lo)) * PLOT_H;
+  const nP = data.length;
+  const pts = data.map((d, i) => `${(((i + 0.5) / nP) * 100).toFixed(2)},${yLine(d.line).toFixed(2)}`).join(' ');
+  return (
+    <View style={{ flex: 1, backgroundColor: '#ffffff', borderWidth: 0.5, borderColor: COLORS.grisBorde, borderStyle: 'solid', borderRadius: 4, padding: 8 }} wrap={false}>
+      <Text style={{ fontSize: 6.8, fontWeight: 700, color: COLORS.azul, marginBottom: 6 }}>{title}</Text>
+      <View style={{ position: 'relative', height: PLOT_H }}>
+        <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: PLOT_H }}>
+          {data.map((d, i) => (
+            <View key={i} style={{ flex: 1, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'center', gap: 2 }}>
+              <View style={{ width: 6, height: Math.max(2, (d.bar0 / barMax) * PLOT_H), backgroundColor: barColors[0], borderTopLeftRadius: 1, borderTopRightRadius: 1 }} />
+              <View style={{ width: 6, height: Math.max(2, (d.bar1 / barMax) * PLOT_H), backgroundColor: barColors[1], borderTopLeftRadius: 1, borderTopRightRadius: 1 }} />
+            </View>
+          ))}
+        </View>
+        <Svg style={{ position: 'absolute', top: 0, left: 0, right: 0, height: PLOT_H }} viewBox={`0 0 100 ${PLOT_H}`} preserveAspectRatio="none">
+          <Polyline points={pts} fill="none" stroke={COLORS.azul} strokeWidth={0.9} />
+        </Svg>
+      </View>
+      {/* Valores del % (línea de tendencia) */}
+      <View style={{ flexDirection: 'row', marginTop: 2 }}>
+        {data.map((d, i) => (
+          <Text key={i} style={{ flex: 1, fontSize: 5, fontWeight: 700, color: COLORS.azul, textAlign: 'center' }}>{d.line.toFixed(1)}%</Text>
+        ))}
+      </View>
+      <View style={{ flexDirection: 'row', borderTopWidth: 0.5, borderTopColor: COLORS.sombra, paddingTop: 2, marginTop: 1 }}>
+        {data.map((d, i) => (
+          <Text key={i} style={{ flex: 1, fontSize: 5.2, color: COLORS.gris, textAlign: 'center' }}>{d.label}</Text>
+        ))}
+      </View>
+      {/* Leyenda */}
+      <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+          <View style={{ width: 6, height: 6, backgroundColor: barColors[0], borderRadius: 1 }} />
+          <Text style={{ fontSize: 4.8, color: COLORS.gris }}>{barLabels[0]}</Text>
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+          <View style={{ width: 6, height: 6, backgroundColor: barColors[1], borderRadius: 1 }} />
+          <Text style={{ fontSize: 4.8, color: COLORS.gris }}>{barLabels[1]}</Text>
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+          <View style={{ width: 8, height: 1.5, backgroundColor: COLORS.azul }} />
+          <Text style={{ fontSize: 4.8, color: COLORS.gris }}>% Ralentí</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+// Columnas de la tabla comparativa
+const AG_COLS: { key: keyof AnalisisGeneralPeriodoPDF | 'periodo'; label: string; flex: number; align: 'left' | 'center' | 'right' }[] = [
+  { key: 'periodo', label: 'PERÍODO', flex: 2.5, align: 'left' },
+  { key: 'vehiculosActivos', label: 'VEH.', flex: 1, align: 'center' },
+  { key: 'totalHorasEncendido', label: 'H. MOTOR', flex: 1.2, align: 'right' },
+  { key: 'horasConduccion', label: 'H. CONDUC.', flex: 1.2, align: 'right' },
+  { key: 'totalHorasRalenti', label: 'RAL. TOTAL', flex: 1.2, align: 'right' },
+  { key: 'horasRalentiMenos5Min', label: 'RAL. <5', flex: 1, align: 'right' },
+  { key: 'horasRalentiMas5Min', label: 'RAL. >5', flex: 1, align: 'right' },
+  { key: 'totalEventos', label: 'EV. >5', flex: 1.1, align: 'right' },
+  { key: 'eventosMas30Min', label: 'EV. >30', flex: 1, align: 'right' },
+  { key: 'pctRalenti', label: '% RAL.', flex: 1, align: 'right' },
+  { key: 'pctVsBaselineEventos', label: 'Δ EV.', flex: 1, align: 'right' },
+  { key: 'pctVsBaselineGalones', label: 'Δ GAL.', flex: 1, align: 'right' },
+];
+
+function AgComparativeTable({ periodos }: { periodos: AnalisisGeneralPeriodoPDF[] }) {
+  return (
+    <View style={{ borderWidth: 0.5, borderColor: COLORS.grisBorde, borderStyle: 'solid', borderRadius: 3, overflow: 'hidden', marginBottom: 8 }}>
+      {/* Header */}
+      <View style={{ flexDirection: 'row', backgroundColor: COLORS.azul, paddingVertical: 4, paddingHorizontal: 2 }} fixed>
+        {AG_COLS.map(c => (
+          <Text key={c.key} style={{ flex: c.flex, color: COLORS.blanco, fontWeight: 700, fontSize: 5.4, textAlign: c.align, paddingHorizontal: 2 }}>{c.label}</Text>
+        ))}
+      </View>
+      {/* Rows */}
+      {periodos.map((p, i) => {
+        const bg = p.esBase ? '#eff6ff' : i % 2 === 1 ? COLORS.grisClaro : COLORS.blanco;
+        return (
+          <View key={i} style={{ flexDirection: 'row', backgroundColor: bg, paddingVertical: 3.5, paddingHorizontal: 2, borderBottomWidth: 0.5, borderBottomColor: COLORS.sombra }} wrap={false}>
+            {/* Período */}
+            <View style={{ flex: AG_COLS[0].flex, paddingHorizontal: 2, flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+              <Text style={{ fontSize: 5.6, fontWeight: 700, color: COLORS.negro }}>{p.label}</Text>
+              {p.esBase ? <Text style={{ fontSize: 4.6, fontWeight: 700, color: COLORS.blanco, backgroundColor: COLORS.azul, paddingHorizontal: 2, paddingVertical: 0.5, borderRadius: 2 }}>BASE</Text> : null}
+              {p.esActual && !p.esBase ? <Text style={{ fontSize: 4.6, fontWeight: 700, color: COLORS.gris, backgroundColor: COLORS.sombra, paddingHorizontal: 2, paddingVertical: 0.5, borderRadius: 2 }}>ACTUAL</Text> : null}
+            </View>
+            <Text style={{ flex: AG_COLS[1].flex, fontSize: 5.6, textAlign: 'center', color: COLORS.negro, paddingHorizontal: 2 }}>{p.vehiculosActivos}</Text>
+            <Text style={{ flex: AG_COLS[2].flex, fontSize: 5.6, textAlign: 'right', color: COLORS.negro, paddingHorizontal: 2 }}>{n(p.totalHorasEncendido, 1)}</Text>
+            <View style={{ flex: AG_COLS[3].flex, paddingHorizontal: 2 }}>
+              <Text style={{ fontSize: 5.6, textAlign: 'right', color: COLORS.negro }}>{n(p.horasConduccion, 1)}</Text>
+              {p.vehiculosConMotor < p.vehiculosActivos ? (
+                <Text style={{ fontSize: 4.4, textAlign: 'right', color: COLORS.amarillo }}>{p.vehiculosConMotor}/{p.vehiculosActivos} c/motor</Text>
+              ) : null}
+            </View>
+            <Text style={{ flex: AG_COLS[4].flex, fontSize: 5.6, textAlign: 'right', color: COLORS.negro, paddingHorizontal: 2 }}>{n(p.totalHorasRalenti, 1)}</Text>
+            <Text style={{ flex: AG_COLS[5].flex, fontSize: 5.6, textAlign: 'right', color: COLORS.negro, paddingHorizontal: 2 }}>{n(p.horasRalentiMenos5Min, 1)}</Text>
+            <Text style={{ flex: AG_COLS[6].flex, fontSize: 5.6, textAlign: 'right', color: COLORS.negro, fontWeight: 700, paddingHorizontal: 2 }}>{n(p.horasRalentiMas5Min, 1)}</Text>
+            <Text style={{ flex: AG_COLS[7].flex, fontSize: 5.6, textAlign: 'right', color: COLORS.negro, fontWeight: 700, paddingHorizontal: 2 }}>{n(p.totalEventos)}</Text>
+            <Text style={{ flex: AG_COLS[8].flex, fontSize: 5.6, textAlign: 'right', color: COLORS.negro, paddingHorizontal: 2 }}>{n(p.eventosMas30Min)}</Text>
+            <Text style={{ flex: AG_COLS[9].flex, fontSize: 5.6, textAlign: 'right', fontWeight: 700, color: p.pctRalenti < 20 ? COLORS.verde : p.pctRalenti < 50 ? COLORS.amarillo : COLORS.rojo, paddingHorizontal: 2 }}>{n(p.pctRalenti, 1)}%</Text>
+            <Text style={{ flex: AG_COLS[10].flex, fontSize: 5.6, textAlign: 'right', fontWeight: 700, color: p.esBase ? COLORS.gris : p.pctVsBaselineEventos < 0 ? COLORS.verde : COLORS.rojo, paddingHorizontal: 2 }}>{p.esBase ? '—' : fmtPctSigned(p.pctVsBaselineEventos)}</Text>
+            <Text style={{ flex: AG_COLS[11].flex, fontSize: 5.6, textAlign: 'right', fontWeight: 700, color: p.esBase ? COLORS.gris : p.pctVsBaselineGalones < 0 ? COLORS.verde : COLORS.rojo, paddingHorizontal: 2 }}>{p.esBase ? '—' : fmtPctSigned(p.pctVsBaselineGalones)}</Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+function AgSequentialTable({ periodos }: { periodos: AnalisisGeneralPeriodoPDF[] }) {
+  const rows = periodos.slice(1).map((p, i) => {
+    const prev = periodos[i];
+    const dEv = prev.totalEventos > 0 ? ((p.totalEventos - prev.totalEventos) / prev.totalEventos) * 100 : 0;
+    const dGal = prev.totalGalones > 0 ? ((p.totalGalones - prev.totalGalones) / prev.totalGalones) * 100 : 0;
+    const dCo2 = prev.co2Kg > 0 ? ((p.co2Kg - prev.co2Kg) / prev.co2Kg) * 100 : 0;
+    const tend = dEv < -2 ? 'MEJORA' : dEv > 2 ? 'RETROCESO' : 'ESTABLE';
+    const tendColor = dEv < -2 ? COLORS.verde : dEv > 2 ? COLORS.rojo : COLORS.gris;
+    return { label: `${prev.labelCorto} → ${p.labelCorto}`, dEv, dGal, dCo2, tend, tendColor };
+  });
+  const head = ['COMPARACIÓN', 'Δ EVENTOS', 'Δ GALONES', 'Δ CO₂', 'TENDENCIA'];
+  const flex = [2.2, 1, 1, 1, 1.2];
+  return (
+    <View style={{ borderWidth: 0.5, borderColor: COLORS.grisBorde, borderStyle: 'solid', borderRadius: 3, overflow: 'hidden' }}>
+      <View style={{ flexDirection: 'row', backgroundColor: COLORS.azul, paddingVertical: 3.5, paddingHorizontal: 4 }}>
+        {head.map((h, i) => (
+          <Text key={i} style={{ flex: flex[i], color: COLORS.blanco, fontWeight: 700, fontSize: 5.6, textAlign: i === 0 ? 'left' : 'center' }}>{h}</Text>
+        ))}
+      </View>
+      {rows.map((r, i) => (
+        <View key={i} style={{ flexDirection: 'row', backgroundColor: i % 2 === 1 ? COLORS.grisClaro : COLORS.blanco, paddingVertical: 3.5, paddingHorizontal: 4, borderBottomWidth: 0.5, borderBottomColor: COLORS.sombra }} wrap={false}>
+          <Text style={{ flex: flex[0], fontSize: 6, color: COLORS.negro, fontWeight: 700 }}>{r.label}</Text>
+          <Text style={{ flex: flex[1], fontSize: 6, textAlign: 'center', fontWeight: 700, color: r.dEv < 0 ? COLORS.verde : r.dEv > 0 ? COLORS.rojo : COLORS.gris }}>{fmtPctSigned(r.dEv)}</Text>
+          <Text style={{ flex: flex[2], fontSize: 6, textAlign: 'center', fontWeight: 700, color: r.dGal < 0 ? COLORS.verde : r.dGal > 0 ? COLORS.rojo : COLORS.gris }}>{fmtPctSigned(r.dGal)}</Text>
+          <Text style={{ flex: flex[3], fontSize: 6, textAlign: 'center', fontWeight: 700, color: r.dCo2 < 0 ? COLORS.verde : r.dCo2 > 0 ? COLORS.rojo : COLORS.gris }}>{fmtPctSigned(r.dCo2)}</Text>
+          <Text style={{ flex: flex[4], fontSize: 5.6, textAlign: 'center', fontWeight: 700, color: r.tendColor }}>{r.tend}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+export function InformeAnalisisGeneralPDF({ data }: { data: AnalisisGeneralPDFData }) {
+  const {
+    fechaReporte, clienteNombre, contratoNombre, tiposNombre,
+    periodos, baselineLabel, latestLabel, mejorPeriodoLabel, peorPeriodoLabel,
+    tendencia, latestVsPrevPct,
+  } = data;
+
+  const baseline = periodos[0];
+  const latest = periodos[periodos.length - 1];
+  const tendLabel = tendencia === 'mejora' ? 'FAVORABLE' : tendencia === 'retroceso' ? 'DE RETROCESO' : 'ESTABLE';
+  const tendColor = tendencia === 'mejora' ? COLORS.verde : tendencia === 'retroceso' ? COLORS.rojo : COLORS.amarillo;
+  const recomendacion =
+    tendencia === 'retroceso'
+      ? `Investigar las causas del aumento en ${latest.labelCorto} y reforzar los controles operativos para recuperar los niveles óptimos alcanzados en ${mejorPeriodoLabel}.`
+      : tendencia === 'mejora'
+        ? `Mantener y reforzar las prácticas actuales. Documentar e institucionalizar las medidas exitosas de ${latest.labelCorto} para sostener la mejora en períodos futuros.`
+        : `Continuar monitoreando la flota. Enfocar la gestión en los conductores con mayor tiempo de ralentí acumulado e implementar capacitaciones periódicas para consolidar mejoras.`;
+
+  return (
+    <Document title={`Análisis General de Ralentí — ${baselineLabel} a ${latestLabel}`}>
+      {/* ── PÁGINA 1: RESUMEN GERENCIAL, KPIs Y COMPARATIVO ── */}
+      <Page size="LETTER" orientation="portrait" style={[base.page, { padding: 20, paddingBottom: 40 }]}>
+        <ReportHeaderDiario title="Informe de Análisis General de Ralentí — Torre de Control" />
+
+        <View style={{ flexDirection: 'row', borderTopWidth: 1.5, borderTopColor: COLORS.azul, paddingTop: 6, marginBottom: 8 }} wrap={false}>
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 7.5, fontWeight: 700, color: COLORS.azul }}>Análisis Comparativo Multi-Período</Text>
+            <Text style={{ fontSize: 6.5, color: COLORS.gris, marginTop: 2 }}>Evolución del ralentí, eventos, consumo y emisiones frente a la línea base operativa</Text>
+          </View>
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={{ fontSize: 7, fontWeight: 700, color: COLORS.negro }}>{periodos.length} períodos · {baselineLabel} → {latestLabel}</Text>
+            <Text style={{ fontSize: 6, color: COLORS.gris }}>Línea base: {baselineLabel}</Text>
+            <Text style={{ fontSize: 6, color: COLORS.gris }}>Generado: {fmt(fechaReporte.slice(0, 10))}</Text>
+          </View>
+        </View>
+
+        <GerencialSummaryBox contratoNombre={contratoNombre} clienteNombre={clienteNombre} tiposNombre={tiposNombre} />
+
+        <View style={{ backgroundColor: COLORS.azul, padding: '4 8', marginBottom: 4 }} wrap={false}>
+          <Text style={{ fontSize: 7.5, fontWeight: 700, color: COLORS.blanco }}>INDICADORES CLAVE — PERÍODO ACTUAL ({latestLabel})</Text>
+        </View>
+        <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8 }} wrap={false}>
+          <AgKpiCard
+            title="Δ Eventos vs Base"
+            value={fmtPctSigned(latest.pctVsBaselineEventos)}
+            sub={`${n(baseline.totalEventos)} → ${n(latest.totalEventos)} eventos`}
+            valueColor={latest.pctVsBaselineEventos < 0 ? COLORS.verde : COLORS.rojo}
+          />
+          <AgKpiCard
+            title="CO₂ Período Actual"
+            value={`${(latest.co2Kg / 1000).toFixed(2)} t`}
+            sub={`${fmtPctSigned(((latest.co2Kg - baseline.co2Kg) / (baseline.co2Kg || 1)) * 100)} vs línea base`}
+            valueColor={COLORS.verde}
+          />
+          <AgKpiCard
+            title="Costo Combustible"
+            value={fmtCOP(latest.costoCOP)}
+            sub={`${n(latest.totalGalones, 1)} gal`}
+            valueColor={COLORS.negro}
+          />
+          <AgKpiCard
+            title="% Ralentí Actual"
+            value={`${n(latest.pctRalenti, 1)}%`}
+            sub={`Tendencia ${tendLabel.toLowerCase()}`}
+            valueColor={tendColor}
+          />
+        </View>
+
+        <View style={{ backgroundColor: COLORS.azul, padding: '4 8', marginBottom: 4 }} wrap={false}>
+          <Text style={{ fontSize: 7.5, fontWeight: 700, color: COLORS.blanco }}>COMPARATIVO POR PERÍODO VS LÍNEA BASE</Text>
+        </View>
+        <AgComparativeTable periodos={periodos} />
+        <Text style={{ fontSize: 5.6, color: COLORS.gris, lineHeight: 1.4, marginBottom: 6 }}>
+          Todas las cifras cubren la flota completa y cuadran entre sí (H. Motor − Ralentí Total = H. Conducción).
+          El indicador "n/total c/motor" señala cuántos vehículos reportan horas de motor encendido; en períodos con
+          cobertura baja, el % Ralentí del período se sobreestima. Δ Eventos y Δ Galones se miden contra la línea base ({baselineLabel}).
+        </Text>
+
+        {/* Gráficos combinados (barras + línea de % ralentí) */}
+        <View style={{ flexDirection: 'row', gap: 6 }} wrap={false}>
+          <AgComboChart
+            title="Horas: Conducción vs Ralentí >5 min · % Ralentí"
+            data={periodos.map(p => ({ label: p.labelCorto, bar0: p.horasConduccion, bar1: p.horasRalentiMas5Min, line: p.pctRalenti }))}
+            barLabels={['H. Conducción', 'Ralentí >5 min']}
+            barColors={[COLORS.verde, COLORS.naranja]}
+          />
+          <AgComboChart
+            title="Eventos: >5 min vs >30 min · % Ralentí"
+            data={periodos.map(p => ({ label: p.labelCorto, bar0: p.totalEventos, bar1: p.eventosMas30Min, line: p.pctRalenti }))}
+            barLabels={['Eventos >5 min', 'Eventos >30 min']}
+            barColors={[COLORS.azulClaro, COLORS.rojo]}
+          />
+        </View>
+
+        <ReportFooterDiario />
+      </Page>
+
+      {/* ── PÁGINA 2: ANÁLISIS VISUAL, TENDENCIA Y CONCLUSIONES ── */}
+      <Page size="LETTER" orientation="portrait" style={[base.page, { padding: 20, paddingBottom: 40 }]}>
+        <ReportHeaderDiario title="Informe de Análisis General de Ralentí — Torre de Control" />
+
+        <View style={{ backgroundColor: COLORS.azul, padding: '4 8', marginBottom: 6 }} wrap={false}>
+          <Text style={{ fontSize: 7.5, fontWeight: 700, color: COLORS.blanco }}>ANÁLISIS VISUAL POR PERÍODO</Text>
+        </View>
+        <View style={{ flexDirection: 'row', gap: 6, marginBottom: 6 }} wrap={false}>
+          <AgBarChart
+            title="Eventos de Ralentí"
+            data={periodos.map(p => ({ label: p.labelCorto, value: p.totalEventos, base: p.esBase }))}
+            color={COLORS.naranja}
+            format={v => n(v)}
+          />
+          <AgBarChart
+            title="Galones Consumidos"
+            data={periodos.map(p => ({ label: p.labelCorto, value: p.totalGalones, base: p.esBase }))}
+            color={COLORS.amarillo}
+            format={v => n(v, 0)}
+          />
+        </View>
+        <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8 }} wrap={false}>
+          <AgBarChart
+            title="CO₂ Emitido (kg)"
+            data={periodos.map(p => ({ label: p.labelCorto, value: p.co2Kg, base: p.esBase }))}
+            color={COLORS.verde}
+            format={v => n(v, 0)}
+          />
+          <AgBarChart
+            title="% Ralentí"
+            data={periodos.map(p => ({ label: p.labelCorto, value: p.pctRalenti, base: p.esBase }))}
+            color={COLORS.azulClaro}
+            format={v => `${n(v, 1)}%`}
+          />
+        </View>
+
+        <View style={{ backgroundColor: COLORS.azul, padding: '4 8', marginBottom: 4 }} wrap={false}>
+          <Text style={{ fontSize: 7.5, fontWeight: 700, color: COLORS.blanco }}>TENDENCIA SECUENCIAL (PERÍODO A PERÍODO)</Text>
+        </View>
+        <View style={{ marginBottom: 8 }}>
+          <AgSequentialTable periodos={periodos} />
+        </View>
+
+        <View style={{ backgroundColor: COLORS.azul, padding: '4 8', marginBottom: 4 }} wrap={false}>
+          <Text style={{ fontSize: 7.5, fontWeight: 700, color: COLORS.blanco }}>CONCLUSIONES Y RECOMENDACIÓN GERENCIAL</Text>
+        </View>
+        <View style={{ flexDirection: 'row', gap: 6, marginBottom: 6 }} wrap={false}>
+          <View style={{ flex: 1, backgroundColor: COLORS.verdeBg, borderWidth: 0.5, borderColor: COLORS.verde, borderStyle: 'solid', borderRadius: 4, padding: 7 }}>
+            <Text style={{ fontSize: 6.5, fontWeight: 700, color: COLORS.verde, textTransform: 'uppercase', marginBottom: 2 }}>Mejor Período</Text>
+            <Text style={{ fontSize: 9, fontWeight: 700, color: COLORS.negro }}>{mejorPeriodoLabel}</Text>
+            <Text style={{ fontSize: 6.2, color: COLORS.gris, marginTop: 1 }}>Menor % de ralentí del comparativo</Text>
+          </View>
+          <View style={{ flex: 1, backgroundColor: COLORS.rojoBg, borderWidth: 0.5, borderColor: COLORS.rojo, borderStyle: 'solid', borderRadius: 4, padding: 7 }}>
+            <Text style={{ fontSize: 6.5, fontWeight: 700, color: COLORS.rojo, textTransform: 'uppercase', marginBottom: 2 }}>Mayor Desviación</Text>
+            <Text style={{ fontSize: 9, fontWeight: 700, color: COLORS.negro }}>{peorPeriodoLabel}</Text>
+            <Text style={{ fontSize: 6.2, color: COLORS.gris, marginTop: 1 }}>Mayor % de ralentí del comparativo</Text>
+          </View>
+          <View style={{ flex: 1, backgroundColor: COLORS.grisClaro, borderWidth: 0.5, borderColor: tendColor, borderStyle: 'solid', borderRadius: 4, padding: 7 }}>
+            <Text style={{ fontSize: 6.5, fontWeight: 700, color: tendColor, textTransform: 'uppercase', marginBottom: 2 }}>Tendencia Reciente</Text>
+            <Text style={{ fontSize: 9, fontWeight: 700, color: COLORS.negro }}>{tendLabel}</Text>
+            <Text style={{ fontSize: 6.2, color: COLORS.gris, marginTop: 1 }}>{fmtPctSigned(latestVsPrevPct)} en eventos vs período anterior</Text>
+          </View>
+        </View>
+        <View style={{ backgroundColor: '#eff6ff', borderWidth: 0.5, borderColor: COLORS.azul, borderStyle: 'solid', borderRadius: 4, padding: 8 }} wrap={false}>
+          <Text style={{ fontSize: 6.8, fontWeight: 700, color: COLORS.azul, textTransform: 'uppercase', marginBottom: 3 }}>Recomendación Principal</Text>
+          <Text style={{ fontSize: 7, color: COLORS.negro, lineHeight: 1.5, textAlign: 'justify' }}>
+            El período actual ({latest.label}) presenta una variación de {fmtPctSigned(latest.pctVsBaselineEventos)} en eventos
+            de ralentí y {fmtPctSigned(latest.pctVsBaselineGalones)} en consumo de combustible frente a la línea base ({baselineLabel}).
+            {' '}{recomendacion}
+          </Text>
+        </View>
+
+        <ReportFooterDiario />
+      </Page>
+    </Document>
+  );
+}
+
+export async function descargarPDFAnalisisGeneral(data: AnalisisGeneralPDFData): Promise<void> {
+  const blob = await pdf(<InformeAnalisisGeneralPDF data={data} />).toBlob();
+  const safe = `${data.baselineLabel}_a_${data.latestLabel}`.replace(/\s+/g, '_').replace(/[^a-z0-9_-]/gi, '');
+  downloadBlob(blob, `Analisis_General_Ralenti_${safe}.pdf`);
 }
 
 

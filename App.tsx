@@ -24,6 +24,7 @@ import { UserManagement } from './components/UserManagement';
 import { ThemeToggle } from './components/ThemeToggle';
 import { UserGuideButton } from './components/UserGuide';
 import { Login } from './components/Login';
+import { AiChat } from './components/AiChat';
 import { Sidebar } from './components/Sidebar';
 import type { TabType } from './components/Sidebar';
 import { FleetManagement } from './components/FleetManagement';
@@ -633,6 +634,9 @@ export default function App() {
           </div>
         </main>
       </div>
+
+      {/* Asistente IA flotante — disponible en toda la app autenticada */}
+      <AiChat />
     </div>
   );
 }
