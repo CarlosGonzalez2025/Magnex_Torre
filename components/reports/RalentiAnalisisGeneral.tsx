@@ -14,8 +14,11 @@ import {
   Filter,
   X,
   ChevronDown,
+  Printer,
+  Loader2,
 } from 'lucide-react';
 import { supabase } from '../../services/supabaseClient';
+import { descargarPDFAnalisisGeneral, AnalisisGeneralPDFData } from '../../services/pdfTemplates';
 
 // ── CO₂ factors (kg/gal) — FECOC/UPME ──
 const CO2_FACTORES: { test: (t: string) => boolean; factor: number }[] = [
@@ -77,14 +80,15 @@ interface PeriodoData {
   totalGalones: number;
   totalHorasEncendido: number;
   totalHorasRalenti: number;
-  horasConduccion: number;       // tiempo en movimiento = encendido − ralentí
+  horasConduccion: number;       // tiempo en movimiento = encendido − ralentí (flota completa)
   horasRalentiMas5Min: number;   // tiempo en ralentí excesivo (eventos sobre umbral)
   horasRalentiMenos5Min: number; // tiempo en ralentí no excesivo = total − >5min
   eventosMas30Min: number;       // alertas con duración > 30 min
-  pctRalenti: number;
+  pctRalenti: number;            // ralentí/encendido sobre flota completa (igual que el Informe)
   co2Kg: number;
   costoCOP: number;
   vehiculosActivos: number;
+  vehiculosConMotor: number;     // veh. con horas_motor_encendido > 0 (cobertura del dato de motor)
   pctVsBaselineEventos: number;
   pctVsBaselineGalones: number;
   pctVsBaselineCO2: number;
@@ -312,6 +316,101 @@ const GroupedBarChart: React.FC<{
   );
 };
 
+// Gráfico combinado: barras agrupadas (escala izquierda) + línea de tendencia con su
+// PROPIA escala (derecha). Pensado para mezclar magnitudes distintas, p. ej. horas/eventos
+// en barras y el % de ralentí como línea sobrepuesta.
+const ComboBarLineChart: React.FC<{
+  data: { label: string; bars: number[]; line: number }[];
+  barLabels: string[];
+  barColors: string[];
+  lineLabel: string;
+  lineColor?: string;
+  formatBar?: (v: number) => string;
+  formatLine?: (v: number) => string;
+  chartHeight?: number;
+}> = ({
+  data, barLabels, barColors, lineLabel,
+  lineColor = '#003366',
+  formatBar = v => v.toFixed(0),
+  formatLine = v => v.toFixed(1) + '%',
+  chartHeight = 190,
+}) => {
+  if (!data.length) return null;
+  const nBars = barLabels.length;
+  const W = 520;
+  const padTop = 28;
+  const padBottom = 56;
+  const padSide = 20;
+  const barArea = W - padSide * 2;
+  const groupSlot = barArea / data.length;
+  const gap = 3;
+  const groupW = Math.min(96, groupSlot * 0.7);
+  const barW = (groupW - gap * (nBars - 1)) / nBars;
+
+  const barMax = Math.max(...data.flatMap(d => d.bars), 1);
+  const lineVals = data.map(d => d.line);
+  const lineMinRaw = Math.min(...lineVals);
+  const lineMaxRaw = Math.max(...lineVals);
+  const lineRange = lineMaxRaw - lineMinRaw || 1;
+  const lineMin = Math.max(0, lineMinRaw - lineRange * 0.4);
+  const lineMax = lineMaxRaw + lineRange * 0.45;
+
+  const yBar = (v: number) => padTop + chartHeight - (v / barMax) * chartHeight;
+  const yLine = (v: number) => padTop + chartHeight - ((v - lineMin) / (lineMax - lineMin)) * chartHeight;
+  const groupCenter = (gi: number) => padSide + gi * groupSlot + groupSlot / 2;
+  const linePts = data.map((d, gi) => `${groupCenter(gi)},${yLine(d.line)}`);
+  const legendGap = 150;
+
+  return (
+    <svg className="w-full" viewBox={`0 0 ${W} ${chartHeight + padTop + padBottom}`}>
+      <line x1={padSide} x2={W - padSide} y1={padTop + chartHeight} y2={padTop + chartHeight} stroke="#e2e8f0" strokeWidth="1.5" />
+      {data.map((group, gi) => {
+        const gx = padSide + gi * groupSlot + (groupSlot - groupW) / 2;
+        return (
+          <g key={gi}>
+            {group.bars.map((bv, bi) => {
+              const x = gx + bi * (barW + gap);
+              const y = yBar(bv);
+              const h = Math.max(2, padTop + chartHeight - y);
+              return (
+                <g key={bi}>
+                  <rect x={x} y={y} width={barW} height={h} rx={4} fill={barColors[bi]} />
+                  <text x={x + barW / 2} y={y - 5} textAnchor="middle" fontSize="8.5" fontWeight="700" fill={barColors[bi]}>
+                    {formatBar(bv)}
+                  </text>
+                </g>
+              );
+            })}
+            <text x={groupCenter(gi)} y={padTop + chartHeight + 16} textAnchor="middle" fontSize="9.5" fill="#64748b">
+              {group.label}
+            </text>
+          </g>
+        );
+      })}
+      <polyline points={linePts.join(' ')} fill="none" stroke={lineColor} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+      {data.map((d, gi) => (
+        <g key={`pt-${gi}`}>
+          <circle cx={groupCenter(gi)} cy={yLine(d.line)} r={3.5} fill="#fff" stroke={lineColor} strokeWidth="2" />
+          <text x={groupCenter(gi)} y={yLine(d.line) - 9} textAnchor="middle" fontSize="9" fontWeight="800" fill={lineColor}>
+            {formatLine(d.line)}
+          </text>
+        </g>
+      ))}
+      {barLabels.map((bl, bi) => (
+        <g key={`lg-${bi}`}>
+          <rect x={padSide + bi * legendGap} y={padTop + chartHeight + 34} width={10} height={10} rx={2} fill={barColors[bi]} />
+          <text x={padSide + bi * legendGap + 14} y={padTop + chartHeight + 43} fontSize="9.5" fill="#64748b">{bl}</text>
+        </g>
+      ))}
+      <g>
+        <line x1={padSide + nBars * legendGap} x2={padSide + nBars * legendGap + 16} y1={padTop + chartHeight + 39} y2={padTop + chartHeight + 39} stroke={lineColor} strokeWidth="2.5" />
+        <circle cx={padSide + nBars * legendGap + 8} cy={padTop + chartHeight + 39} r={3} fill="#fff" stroke={lineColor} strokeWidth="2" />
+        <text x={padSide + nBars * legendGap + 20} y={padTop + chartHeight + 43} fontSize="9.5" fill="#64748b">{lineLabel}</text>
+      </g>
+    </svg>
+  );
+};
+
 const TrendSparkline: React.FC<{ values: number[]; color?: string }> = ({ values, color = '#003366' }) => {
   if (values.length < 2) return null;
   const W = 80; const H = 24;
@@ -467,20 +566,28 @@ export const RalentiAnalisisGeneral: React.FC<{
       const totalGalones = pRows.reduce((a, r) => a + (Number(r.consumo_combustible) || 0), 0);
       const totalHorasEncendido = pRows.reduce((a, r) => a + (Number(r.horas_motor_encendido) || 0), 0);
       const totalHorasRalenti = pRows.reduce((a, r) => a + (Number(r.horas_motor_ralenti) || 0), 0);
-      const pctRalenti = totalHorasEncendido > 0 ? (totalHorasRalenti / totalHorasEncendido) * 100 : 0;
+      // % Ralentí y H. Conducción se calculan sobre la FLOTA COMPLETA, igual que el Informe
+      // por Período (su fuente de verdad): así la aritmética cuadra con las columnas mostradas
+      // (H. Motor Enc − Ralentí Total = Conducción) y ambos módulos coinciden.
+      // OJO: en períodos con baja cobertura de horas de motor, las filas con encendido=0 pero
+      // ralentí>0 (importaciones Fagor/excesos) inflan el % ralentí y deprimen la conducción.
+      // Por eso se conserva el indicador de cobertura (vehiculosConMotor) como señal de calidad.
       let co2Kg = 0; let costoCOP = 0;
       const vehSet = new Set<string>();
+      const vehMotorSet = new Set<string>();
       pRows.forEach(r => {
         const fuel = vehFuelMap.get(String(r.vehiculo_id)) || '';
         const gal = Number(r.consumo_combustible) || 0;
         co2Kg += gal * getCO2Factor(fuel);
         costoCOP += gal * getPrecioGalon(fuel);
         vehSet.add(String(r.vehiculo_id));
+        if ((Number(r.horas_motor_encendido) || 0) > 0) vehMotorSet.add(String(r.vehiculo_id));
       });
+      const pctRalenti = totalHorasEncendido > 0 ? (totalHorasRalenti / totalHorasEncendido) * 100 : 0;
+      const horasConduccion = Math.max(totalHorasEncendido - totalHorasRalenti, 0);
 
       const ev = eventAgg.get(key) ?? { alertas: 0, segMas5Min: 0, eventosMas30Min: 0 };
       const horasRalentiMas5Min = ev.segMas5Min / 3600;
-      const horasConduccion = Math.max(totalHorasEncendido - totalHorasRalenti, 0);
       const horasRalentiMenos5Min = Math.max(totalHorasRalenti - horasRalentiMas5Min, 0);
 
       const labels = getPeriodoLabel(first.periodo_inicio);
@@ -491,6 +598,7 @@ export const RalentiAnalisisGeneral: React.FC<{
         horasConduccion, horasRalentiMas5Min, horasRalentiMenos5Min, eventosMas30Min: ev.eventosMas30Min,
         pctRalenti, co2Kg, costoCOP,
         vehiculosActivos: vehSet.size,
+        vehiculosConMotor: vehMotorSet.size,
         pctVsBaselineEventos: 0, pctVsBaselineGalones: 0, pctVsBaselineCO2: 0,
       });
     });
@@ -526,6 +634,56 @@ export const RalentiAnalisisGeneral: React.FC<{
 
   const BAR_COLORS = ['#003366', '#f97316', '#10b981', '#6366f1', '#ec4899', '#f59e0b'];
   const barColors = periods.map((_, i) => BAR_COLORS[i % BAR_COLORS.length]);
+
+  // ── PDF export ──
+  const [exporting, setExporting] = useState(false);
+  const handleExportPDF = async () => {
+    if (periods.length < 2 || !insights) return;
+    setExporting(true);
+    try {
+      const clienteNombre = selClients.length ? selClients.join(', ') : 'Todos los clientes';
+      const contratoNombre = selContracts.length
+        ? selContracts.map(id => contractOptions.find(o => o.value === id)?.label ?? id).join(', ')
+        : 'Todos los contratos';
+      const tiposNombre = selTypes.length ? selTypes.join(', ') : 'Todos los tipos';
+      const data: AnalisisGeneralPDFData = {
+        fechaReporte: new Date().toISOString(),
+        clienteNombre, contratoNombre, tiposNombre,
+        periodos: periods.map((p, i) => ({
+          label: p.label,
+          labelCorto: p.labelCorto,
+          esBase: i === 0,
+          esActual: i === periods.length - 1,
+          vehiculosActivos: p.vehiculosActivos,
+          vehiculosConMotor: p.vehiculosConMotor,
+          totalHorasEncendido: p.totalHorasEncendido,
+          horasConduccion: p.horasConduccion,
+          totalHorasRalenti: p.totalHorasRalenti,
+          horasRalentiMenos5Min: p.horasRalentiMenos5Min,
+          horasRalentiMas5Min: p.horasRalentiMas5Min,
+          totalEventos: p.totalEventos,
+          eventosMas30Min: p.eventosMas30Min,
+          pctRalenti: p.pctRalenti,
+          totalGalones: p.totalGalones,
+          co2Kg: p.co2Kg,
+          costoCOP: p.costoCOP,
+          pctVsBaselineEventos: p.pctVsBaselineEventos,
+          pctVsBaselineGalones: p.pctVsBaselineGalones,
+        })),
+        baselineLabel: insights.baseline.label,
+        latestLabel: insights.latest.label,
+        mejorPeriodoLabel: insights.bestPeriodo.label,
+        peorPeriodoLabel: insights.worstPeriodo.label,
+        tendencia: insights.trending,
+        latestVsPrevPct: insights.latestVsPrevPct,
+      };
+      await descargarPDFAnalisisGeneral(data);
+    } catch (e) {
+      console.error('Error exportando PDF de Análisis General', e);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   // ── States ──
   if (loading) {
@@ -568,14 +726,25 @@ export const RalentiAnalisisGeneral: React.FC<{
           <span className="text-[10px] text-slate-400 dark:text-slate-500 font-normal ml-1">
             — Cubre todos los períodos disponibles en la base de datos
           </span>
-          {hasFilter && (
+          <div className="ml-auto flex items-center gap-3">
+            {hasFilter && (
+              <button
+                onClick={() => { setSelClients([]); setSelContracts([]); setSelTypes([]); }}
+                className="flex items-center gap-1 text-[10px] text-slate-400 hover:text-red-500 transition-colors font-normal"
+              >
+                <X className="w-3 h-3" /> Limpiar filtros
+              </button>
+            )}
             <button
-              onClick={() => { setSelClients([]); setSelContracts([]); setSelTypes([]); }}
-              className="ml-auto flex items-center gap-1 text-[10px] text-slate-400 hover:text-red-500 transition-colors font-normal"
+              onClick={handleExportPDF}
+              disabled={exporting || periods.length < 2}
+              title={periods.length < 2 ? 'Se requieren al menos 2 períodos para el informe' : 'Descargar informe en PDF'}
+              className="flex items-center gap-2 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-xs font-semibold shadow-sm transition-colors"
             >
-              <X className="w-3 h-3" /> Limpiar filtros
+              {exporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Printer className="w-3.5 h-3.5" />}
+              <span>{exporting ? 'Generando…' : 'Descargar PDF'}</span>
             </button>
-          )}
+          </div>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <MultiSelect
@@ -685,6 +854,7 @@ export const RalentiAnalisisGeneral: React.FC<{
               <tr className="bg-[#003366] text-white text-[10px] font-bold uppercase tracking-wider">
                 <th className="py-3 px-4 rounded-tl-lg">Período</th>
                 <th className="py-3 px-3">Vehículos</th>
+                <th className="py-3 px-3">H. Motor Enc. (h)</th>
                 <th className="py-3 px-3">H. Conducción</th>
                 <th className="py-3 px-3">Ralentí Total (h)</th>
                 <th className="py-3 px-3">Ralentí &lt;5 min (h)</th>
@@ -710,7 +880,18 @@ export const RalentiAnalisisGeneral: React.FC<{
                       </div>
                     </td>
                     <td className="py-3 px-3 text-slate-600 dark:text-slate-400">{p.vehiculosActivos}</td>
-                    <td className="py-3 px-3 text-slate-700 dark:text-slate-300">{p.horasConduccion.toFixed(1)}</td>
+                    <td className="py-3 px-3 text-slate-700 dark:text-slate-300">{p.totalHorasEncendido.toFixed(1)}</td>
+                    <td className="py-3 px-3 text-slate-700 dark:text-slate-300">
+                      {p.horasConduccion.toFixed(1)}
+                      {p.vehiculosConMotor < p.vehiculosActivos && (
+                        <span
+                          className="block text-[9px] text-amber-600 dark:text-amber-400 font-medium"
+                          title="Solo este número de vehículos reporta horas de motor encendido. Cuando la cobertura es baja, las filas con ralentí pero sin encendido sobreestiman el % Ralentí y subestiman la conducción de ese período."
+                        >
+                          {p.vehiculosConMotor}/{p.vehiculosActivos} c/motor
+                        </span>
+                      )}
+                    </td>
                     <td className="py-3 px-3 text-slate-700 dark:text-slate-300">{p.totalHorasRalenti.toFixed(1)}</td>
                     <td className="py-3 px-3 text-slate-700 dark:text-slate-300">{p.horasRalentiMenos5Min.toFixed(1)}</td>
                     <td className="py-3 px-3 font-semibold text-slate-700 dark:text-slate-300">{p.horasRalentiMas5Min.toFixed(1)}</td>
@@ -741,10 +922,51 @@ export const RalentiAnalisisGeneral: React.FC<{
             </tbody>
           </table>
         </div>
+        <p className="mt-3 text-[10px] text-slate-400 dark:text-slate-500 leading-relaxed flex items-start gap-1.5">
+          <Info className="w-3 h-3 shrink-0 mt-0.5" />
+          <span>
+            Todas las cifras cubren la flota completa y cuadran entre sí
+            (<strong>H. Motor Enc − Ralentí Total = H. Conducción</strong>), igual que el Informe por Período.
+            El indicador <span className="text-amber-600 dark:text-amber-400">n/total c/motor</span> señala cuántos
+            vehículos reportan horas de motor: con cobertura baja, el <strong>% Ralentí</strong> de ese período se sobreestima.
+          </span>
+        </p>
       </div>
 
-      {/* ── Charts 2×2 ── */}
+      {/* ── Charts grid ── */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Combinado 1: horas (conducción + ralentí >5 min) con % ralentí como línea */}
+        <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-6 shadow-sm">
+          <h4 className="font-bold text-slate-700 dark:text-slate-300 text-[11px] uppercase tracking-wider mb-4 flex items-center gap-2">
+            <Clock className="w-3.5 h-3.5 text-emerald-500" /> Horas: Conducción vs Ralentí &gt;5 min · % Ralentí
+          </h4>
+          <ComboBarLineChart
+            data={periods.map(p => ({ label: p.labelCorto, bars: [p.horasConduccion, p.horasRalentiMas5Min], line: p.pctRalenti }))}
+            barLabels={['H. Conducción', 'Ralentí >5 min (h)']}
+            barColors={['#10b981', '#f97316']}
+            lineLabel="% Ralentí"
+            lineColor="#003366"
+            formatBar={v => v.toFixed(0)}
+            formatLine={v => v.toFixed(1) + '%'}
+          />
+        </div>
+
+        {/* Combinado 2: eventos (>5 min + >30 min) con % ralentí como línea */}
+        <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-6 shadow-sm">
+          <h4 className="font-bold text-slate-700 dark:text-slate-300 text-[11px] uppercase tracking-wider mb-4 flex items-center gap-2">
+            <AlertTriangle className="w-3.5 h-3.5 text-rose-500" /> Eventos: &gt;5 min vs &gt;30 min · % Ralentí
+          </h4>
+          <ComboBarLineChart
+            data={periods.map(p => ({ label: p.labelCorto, bars: [p.totalEventos, p.eventosMas30Min], line: p.pctRalenti }))}
+            barLabels={['Eventos >5 min', 'Eventos >30 min']}
+            barColors={['#6366f1', '#ec4899']}
+            lineLabel="% Ralentí"
+            lineColor="#003366"
+            formatBar={v => Math.round(v).toLocaleString('es-CO')}
+            formatLine={v => v.toFixed(1) + '%'}
+          />
+        </div>
+
         <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-6 shadow-sm">
           <h4 className="font-bold text-slate-700 dark:text-slate-300 text-[11px] uppercase tracking-wider mb-4 flex items-center gap-2">
             <Activity className="w-3.5 h-3.5 text-indigo-500" /> Eventos de Ralentí por Período
