@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { LayoutDashboard, Map as MapIcon, RefreshCw, Search, Server, Wifi, Radio, AlertTriangle, XCircle, CloudOff, CheckCircle, Database, Bell, History, BarChart3, ClipboardCheck, Calendar, Settings, Users, MapPin, Home, Menu } from 'lucide-react';
+import { LayoutDashboard, Map as MapIcon, RefreshCw, Search, Server, Wifi, Radio, AlertTriangle, XCircle, CloudOff, CheckCircle, Database, Bell, History, BarChart3, ClipboardCheck, Calendar, Settings, Users, MapPin, Home, Menu, Satellite } from 'lucide-react';
 import { Vehicle, ApiSource, VehicleStatus, FilterType, StatusFilterType, Alert } from './types';
 import { AuthProvider, useAuth, ProtectedRoute } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
@@ -34,6 +34,7 @@ import { MonthlyReports } from './components/reports/MonthlyReports';
 import { ContractAnalysis } from './components/reports/ContractAnalysis';
 import { TelemetryProcessor } from './components/reports/TelemetryProcessor';
 import { RalentiReports } from './components/reports/RalentiReports';
+import { GeotabPanel } from './components/GeotabPanel';
 import { fetchFleetData, FleetResponse } from './services/fleetService';
 import { detectAlerts, saveAlertsToStorage, getAlertsFromStorage, getUnsavedAlerts, markAlertAsSent, markAlertAsSaved, cleanOldAlerts, processVehiclesForIdleDetection } from './services/alertService';
 import { saveAlertToDatabase, autoSaveAlert } from './services/databaseService';
@@ -82,7 +83,7 @@ export default function App() {
   const [showApiDetails, setShowApiDetails] = useState(false);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const isReportsTab = activeTab === 'daily-reports' || activeTab === 'monthly-reports' || activeTab === 'contract-analysis' || activeTab === 'telemetry-processor' || activeTab === 'ralenti-reports';
+  const isReportsTab = activeTab === 'daily-reports' || activeTab === 'monthly-reports' || activeTab === 'contract-analysis' || activeTab === 'telemetry-processor' || activeTab === 'ralenti-reports' || activeTab === 'geotab';
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -221,7 +222,7 @@ export default function App() {
         return (
           <span className="flex items-center text-xs font-medium text-purple-600 bg-purple-50 px-2 py-1 rounded-md border border-purple-100 dark:bg-purple-900/30 dark:text-purple-400 dark:border-purple-800">
             <Radio className="w-3 h-3 mr-1" /> APIs Directas
-            {vehicleCounts && ` (${vehicleCounts.coltrack + vehicleCounts.fagor} vehículos)`}
+            {vehicleCounts && ` (${vehicleCounts.coltrack + vehicleCounts.fagor + vehicleCounts.geotab} vehículos)`}
           </span>
         );
       case 'PARTIAL_DIRECT':
@@ -230,9 +231,11 @@ export default function App() {
             <AlertTriangle className="w-3 h-3 mr-1" /> Conexión Parcial
             {apiStatus && vehicleCounts && (
               <span className="ml-1">
-                ({apiStatus.coltrack === 'connected' ? `Coltrack: ${vehicleCounts.coltrack}` : ''}
-                {apiStatus.coltrack === 'connected' && apiStatus.fagor === 'connected' ? ', ' : ''}
-                {apiStatus.fagor === 'connected' ? `Fagor: ${vehicleCounts.fagor}` : ''})
+                ({[
+                  apiStatus.coltrack === 'connected' ? `Coltrack: ${vehicleCounts.coltrack}` : '',
+                  apiStatus.fagor === 'connected' ? `Fagor: ${vehicleCounts.fagor}` : '',
+                  apiStatus.geotab === 'connected' ? `Geotab: ${vehicleCounts.geotab}` : '',
+                ].filter(Boolean).join(', ')})
               </span>
             )}
           </span>
@@ -416,7 +419,8 @@ export default function App() {
                                               activeTab === 'monthly-reports' ? 'Informes Mensuales' :
                                               activeTab === 'contract-analysis' ? 'Análisis por Contrato' :
                                               activeTab === 'telemetry-processor' ? 'Procesador Satelital Directo' :
-                                              activeTab === 'ralenti-reports' ? 'Informe de Ralentí' : 'Magnex'}
+                                              activeTab === 'ralenti-reports' ? 'Informe de Ralentí' :
+                                              activeTab === 'geotab' ? 'Geotab — Telemetría' : 'Magnex'}
                 </h2>
                 <div className="ml-4 opacity-80 scale-90 origin-left">
                   {getStatusBadge()}
@@ -487,7 +491,7 @@ export default function App() {
 
                 {showApiDetails && (
                   <div className="px-4 pb-4 pt-2 border-t border-slate-100 dark:border-slate-700 animate-in slide-in-from-top-2 fade-in duration-200">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                       {/* Backend */}
                       <div className="flex items-center gap-3 p-3 bg-slate-50 dark:bg-slate-900/50 rounded-lg border border-slate-100 dark:border-slate-800">
                         <div className={`w-8 h-8 rounded-full flex items-center justify-center ${apiStatus.backend === 'connected' ? 'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400' : 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400'}`}>
@@ -519,6 +523,18 @@ export default function App() {
                           <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">FlotasNet</p>
                           <p className="text-xs text-slate-500 dark:text-slate-400">
                             {apiStatus.fagor === 'connected' ? 'Conectado' : 'Sin conexión'}
+                          </p>
+                        </div>
+                      </div>
+                      {/* Geotab */}
+                      <div className="flex items-center gap-3 p-3 bg-slate-50 dark:bg-slate-900/50 rounded-lg border border-slate-100 dark:border-slate-800">
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center ${apiStatus.geotab === 'connected' ? 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-slate-100 text-slate-400 dark:bg-slate-800'}`}>
+                          <Satellite className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Geotab</p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">
+                            {apiStatus.geotab === 'connected' ? `Conectado${vehicleCounts ? ` · ${vehicleCounts.geotab}` : ''}` : 'Sin conexión'}
                           </p>
                         </div>
                       </div>
@@ -630,6 +646,7 @@ export default function App() {
               {activeTab === 'contract-analysis' && <ContractAnalysis />}
               {activeTab === 'telemetry-processor' && <TelemetryProcessor />}
               {activeTab === 'ralenti-reports' && <RalentiReports />}
+              {activeTab === 'geotab' && <GeotabPanel />}
             </div>
           </div>
         </main>

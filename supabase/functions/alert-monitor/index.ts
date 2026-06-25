@@ -35,6 +35,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 const VERCEL_APP_URL = 'https://magnex-torre.vercel.app';
 const COLTRACK_API_URL = `${VERCEL_APP_URL}/api/coltrack`;
 const FAGOR_API_URL = `${VERCEL_APP_URL}/api/fagor`;
+const GEOTAB_API_URL = `${VERCEL_APP_URL}/api/geotab`;
 
 const ALERT_THRESHOLDS = {
   SPEED_LIMIT: 80,
@@ -282,6 +283,87 @@ async function fetchFagorData(): Promise<Vehicle[]> {
     return vehicles;
   } catch (error) {
     console.error('[Fagor] Error:', error);
+    return [];
+  }
+}
+
+/**
+ * Mapea el nombre de una regla de Geotab a (tipo, severidad) de nuestra app.
+ * Geotab ya calcula estos eventos vía sus reglas configuradas, así que NO
+ * adivinamos por texto como con Coltrack/Fagor: confiamos en ExceptionEvent.
+ */
+function mapGeotabRule(ruleName: string): { type: string; severity: string } | null {
+  const n = (ruleName || '').toLowerCase();
+
+  if (n.includes('exceso') && n.includes('velocidad')) return { type: 'Exceso de Velocidad', severity: 'critical' };
+  if (n.includes('speeding')) return { type: 'Exceso de Velocidad', severity: 'critical' };
+  if (n.includes('collision') || n.includes('colision') || n.includes('crash')) return { type: 'Colisión', severity: 'critical' };
+  if (n.includes('hard acceleration') || n.includes('aceleraci')) return { type: 'Aceleración Brusca', severity: 'high' };
+  if (n.includes('harsh brak') || n.includes('hard brak') || n.includes('frenada')) return { type: 'Frenada Brusca', severity: 'high' };
+  if (n.includes('cornering') || n.includes('curva')) return { type: 'Conducción Brusca', severity: 'high' };
+  if (n.includes('seat belt') || n.includes('cintur')) return { type: 'Cinturón de Seguridad', severity: 'medium' };
+  if (n.includes('idle') || n.includes('ralent')) return { type: 'Ralentí Excesivo', severity: 'medium' };
+
+  // Reglas no mapeadas: las guardamos con su nombre original como tipo.
+  if (ruleName) return { type: ruleName, severity: 'medium' };
+  return null;
+}
+
+/**
+ * Obtiene alertas de Geotab vía la función serverless de Vercel.
+ * El proxy entrega ExceptionEvent ya enriquecidos con placa y nombre de regla.
+ */
+async function fetchGeotabAlerts(): Promise<Alert[]> {
+  try {
+    console.log('[Geotab] Fetching alerts via Vercel serverless function...');
+
+    const response = await fetch(GEOTAB_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'alerts' })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Geotab serverless function error: ${response.status}`);
+    }
+
+    const result = await response.json();
+    if (!result.success || !result.data) {
+      throw new Error('Invalid response from Geotab serverless function');
+    }
+
+    const events: any[] = result.data.events || [];
+    const alerts: Alert[] = [];
+
+    for (const ev of events) {
+      const mapped = mapGeotabRule(ev.ruleName);
+      if (!mapped) continue;
+
+      const timestamp = parseGpsTimestamp(ev.activeFrom);
+
+      alerts.push({
+        // ev.id es único por evento -> idempotencia natural
+        alert_id: `geotab-${ev.id}`,
+        vehicle_id: `GEO-${ev.deviceId || ev.plate}`,
+        plate: ev.plate || 'DESCONOCIDO',
+        driver: 'Sin asignar',
+        type: mapped.type,
+        severity: mapped.severity,
+        timestamp,
+        location: 'Ver en Geotab',
+        speed: 0,
+        details: `Regla Geotab: ${ev.ruleName}`,
+        contract: null,
+        source: 'GEOTAB',
+        status: 'pending',
+        saved_by: 'Sistema (Auto)'
+      });
+    }
+
+    console.log(`[Geotab] Mapped ${alerts.length} alerts from ${events.length} exception events`);
+    return alerts;
+  } catch (error) {
+    console.error('[Geotab] Error:', error);
     return [];
   }
 }
@@ -599,23 +681,27 @@ serve(async (req) => {
 
     // Fetch data from APIs
     console.log('📡 Fetching fleet data...');
-    const [coltrackVehicles, fagorVehicles] = await Promise.all([
+    const [coltrackVehicles, fagorVehicles, geotabAlerts] = await Promise.all([
       fetchColtrackData(),
-      fetchFagorData()
+      fetchFagorData(),
+      fetchGeotabAlerts()
     ]);
 
     const allVehicles = [...coltrackVehicles, ...fagorVehicles];
     console.log(`📊 Total vehicles: ${allVehicles.length} (Coltrack: ${coltrackVehicles.length}, Fagor: ${fagorVehicles.length})`);
 
     // Detect alerts
+    // - Coltrack/Fagor: por umbrales/texto (detectAlerts)
+    // - Geotab: ExceptionEvent ya calculados por reglas (geotabAlerts)
     console.log('🔍 Detecting alerts...');
     const allAlerts: Alert[] = [];
     for (const vehicle of allVehicles) {
       const alerts = detectAlerts(vehicle);
       allAlerts.push(...alerts);
     }
+    allAlerts.push(...geotabAlerts);
 
-    console.log(`⚠️  Detected ${allAlerts.length} alerts`);
+    console.log(`⚠️  Detected ${allAlerts.length} alerts (Geotab: ${geotabAlerts.length})`);
 
     // Save alerts to database with intelligent deduplication
     console.log('💾 Saving alerts to database...');

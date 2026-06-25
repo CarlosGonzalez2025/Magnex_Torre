@@ -1,10 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-// El núcleo es CJS y se comparte con el servidor de desarrollo local.
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const { runChat } = require('./_chatCore.cjs');
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || 'https://cmzeijcyykzdmvisojte.supabase.co';
-const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
+const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY ||
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNtemVpamN5eWt6ZG12aXNvanRlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgwNzc5MTYsImV4cCI6MjA5MzY1MzkxNn0.qn5_sVmmZ1gb6YQCaO2RQYWRO-XwVTuLTY64LK8mAME';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -15,9 +13,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Método no permitido' });
 
   try {
+    if (!GEMINI_API_KEY) {
+      return res.status(502).json({ error: 'GEMINI_API_KEY no está configurada en Vercel (Settings → Environment Variables).' });
+    }
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
     const messages = Array.isArray(body.messages) ? body.messages : [];
     if (messages.length === 0) return res.status(400).json({ error: 'Falta el historial de mensajes.' });
+
+    // El núcleo es CJS y se comparte con el servidor de desarrollo local. Se carga con
+    // import() dinámico (compatible con el runtime ESM de Vercel) y dentro del try, de
+    // modo que cualquier fallo de carga devuelva JSON y no la página de error de Vercel.
+    // @ts-ignore — módulo CJS sin tipos
+    const mod: any = await import('./_chatCore.cjs');
+    const runChat = (mod && mod.default ? mod.default.runChat : mod.runChat);
 
     const out = await runChat({
       messages,
@@ -30,6 +38,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[api/chat]', msg);
-    return res.status(500).json({ error: msg });
+    return res.status(500).json({ error: `Fallo en el asistente: ${msg}` });
   }
 }
