@@ -431,13 +431,13 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
   };
 
   const getPlatformBadge = (source: string) => {
-    const isColtrack = source === 'COLTRACK';
+    const styles = source === 'COLTRACK'
+      ? 'bg-purple-100 text-purple-800 border border-purple-300'
+      : source === 'GEOTAB'
+        ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+        : 'bg-teal-100 text-teal-800 border border-teal-300';
     return (
-      <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
-        isColtrack
-          ? 'bg-purple-100 text-purple-800 border border-purple-300'
-          : 'bg-teal-100 text-teal-800 border border-teal-300'
-      }`}>
+      <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-bold ${styles}`}>
         {source}
       </span>
     );

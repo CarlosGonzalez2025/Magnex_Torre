@@ -26,7 +26,7 @@ export const FleetManagement: React.FC<FleetManagementProps> = ({ vehicles }) =>
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchText, setSearchText] = useState('');
-  const [platformFilter, setPlatformFilter] = useState<'ALL' | 'COLTRACK' | 'FAGOR' | 'NOT_MONITORED'>('ALL');
+  const [platformFilter, setPlatformFilter] = useState<'ALL' | 'COLTRACK' | 'FAGOR' | 'GEOTAB' | 'NOT_MONITORED'>('ALL');
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const { exportToExcel } = useExportToExcel();
 
@@ -54,6 +54,7 @@ export const FleetManagement: React.FC<FleetManagementProps> = ({ vehicles }) =>
       // Platform filter
       if (platformFilter === 'COLTRACK' && vehicle.platform !== ApiSource.COLTRACK) return false;
       if (platformFilter === 'FAGOR' && vehicle.platform !== ApiSource.FAGOR) return false;
+      if (platformFilter === 'GEOTAB' && vehicle.platform !== ApiSource.GEOTAB) return false;
       if (platformFilter === 'NOT_MONITORED' && vehicle.platform !== null) return false;
 
       // Text search
@@ -77,14 +78,16 @@ export const FleetManagement: React.FC<FleetManagementProps> = ({ vehicles }) =>
   const stats = useMemo(() => {
     const coltrackCount = enrichedFleetData.filter(v => v.platform === ApiSource.COLTRACK).length;
     const fagorCount = enrichedFleetData.filter(v => v.platform === ApiSource.FAGOR).length;
+    const geotabCount = enrichedFleetData.filter(v => v.platform === ApiSource.GEOTAB).length;
     const notMonitoredCount = enrichedFleetData.filter(v => !v.isMonitored).length;
 
     return {
       total: enrichedFleetData.length,
       coltrack: coltrackCount,
       fagor: fagorCount,
+      geotab: geotabCount,
       notMonitored: notMonitoredCount,
-      monitoredPercentage: Math.round(((coltrackCount + fagorCount) / enrichedFleetData.length) * 100) || 0
+      monitoredPercentage: Math.round(((coltrackCount + fagorCount + geotabCount) / enrichedFleetData.length) * 100) || 0
     };
   }, [enrichedFleetData]);
 
@@ -179,13 +182,13 @@ export const FleetManagement: React.FC<FleetManagementProps> = ({ vehicles }) =>
       );
     }
 
-    const isColtrack = platform === ApiSource.COLTRACK;
+    const platformStyles = platform === ApiSource.COLTRACK
+      ? 'bg-purple-100 text-purple-800 border border-purple-300'
+      : platform === ApiSource.GEOTAB
+        ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+        : 'bg-teal-100 text-teal-800 border border-teal-300';
     return (
-      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
-        isColtrack
-          ? 'bg-purple-100 text-purple-800 border border-purple-300'
-          : 'bg-teal-100 text-teal-800 border border-teal-300'
-      }`}>
+      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${platformStyles}`}>
         <CheckCircle className="w-3 h-3" />
         {platform}
       </span>
@@ -251,7 +254,7 @@ export const FleetManagement: React.FC<FleetManagementProps> = ({ vehicles }) =>
       </div>
 
       {/* Statistics Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
           <div className="flex items-center justify-between">
             <div>
@@ -282,6 +285,16 @@ export const FleetManagement: React.FC<FleetManagementProps> = ({ vehicles }) =>
           </div>
         </div>
 
+        <div className="bg-emerald-50 rounded-xl border border-emerald-200 p-4 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs text-emerald-700 font-medium">GEOTAB</p>
+              <p className="text-2xl font-bold text-emerald-900 mt-1">{stats.geotab}</p>
+            </div>
+            <CheckCircle className="w-8 h-8 text-emerald-500" />
+          </div>
+        </div>
+
         <div className="bg-gray-50 rounded-xl border border-gray-200 p-4 shadow-sm">
           <div className="flex items-center justify-between">
             <div>
@@ -299,7 +312,7 @@ export const FleetManagement: React.FC<FleetManagementProps> = ({ vehicles }) =>
               <p className="text-2xl font-bold text-green-900 mt-1">{stats.monitoredPercentage}%</p>
             </div>
             <div className="text-green-500 font-bold text-sm">
-              {stats.coltrack + stats.fagor}/{stats.total}
+              {stats.coltrack + stats.fagor + stats.geotab}/{stats.total}
             </div>
           </div>
         </div>
@@ -330,6 +343,7 @@ export const FleetManagement: React.FC<FleetManagementProps> = ({ vehicles }) =>
             <option value="ALL">Todas</option>
             <option value="COLTRACK">COLTRACK</option>
             <option value="FAGOR">FAGOR</option>
+            <option value="GEOTAB">GEOTAB</option>
             <option value="NOT_MONITORED">Sin GPS</option>
           </select>
         </div>
