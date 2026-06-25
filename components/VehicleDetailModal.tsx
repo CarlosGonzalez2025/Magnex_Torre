@@ -54,7 +54,9 @@ export const VehicleDetailModal: React.FC<VehicleDetailModalProps> = ({ vehicle,
                 <h3 className="font-semibold text-slate-900">Fuente API</h3>
               </div>
               <span className={`px-3 py-1.5 rounded text-sm font-semibold ${
-                vehicle.source === 'FAGOR' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'
+                vehicle.source === 'FAGOR' ? 'bg-blue-100 text-blue-800'
+                  : vehicle.source === 'GEOTAB' ? 'bg-orange-100 text-orange-800'
+                  : 'bg-green-100 text-green-800'
               }`}>
                 {vehicle.source}
               </span>

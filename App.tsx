@@ -571,6 +571,7 @@ export default function App() {
                   <option value="ALL">Todas las Fuentes</option>
                   <option value={ApiSource.FAGOR}>Fagor</option>
                   <option value={ApiSource.COLTRACK}>Coltrack</option>
+                  <option value={ApiSource.GEOTAB}>Geotab</option>
                 </select>
 
                 <select

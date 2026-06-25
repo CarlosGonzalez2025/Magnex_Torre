@@ -24,6 +24,22 @@ const coltrackIcon = new Icon({
   shadowSize: [41, 41]
 });
 
+const geotabIcon = new Icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-orange.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41]
+});
+
+// Selecciona el ícono del marcador según la plataforma de origen.
+const iconForSource = (source: ApiSource): Icon => {
+  if (source === ApiSource.FAGOR) return fagorIcon;
+  if (source === ApiSource.GEOTAB) return geotabIcon;
+  return coltrackIcon;
+};
+
 interface FleetMapProps {
   vehicles: Vehicle[];
 }
@@ -42,7 +58,7 @@ const FleetMap: React.FC<FleetMapProps> = ({ vehicles }) => {
           <Marker
             key={vehicle.id}
             position={[vehicle.latitude, vehicle.longitude]}
-            icon={vehicle.source === ApiSource.FAGOR ? fagorIcon : coltrackIcon}
+            icon={iconForSource(vehicle.source)}
           >
             <Popup maxWidth={350} className="vehicle-popup">
               <div className="p-2 min-w-[300px]">
@@ -58,7 +74,7 @@ const FleetMap: React.FC<FleetMapProps> = ({ vehicles }) => {
                         </div>
                       )}
                     </div>
-                    <span className={`text-xs px-3 py-1 rounded-full text-white font-semibold ${vehicle.source === ApiSource.FAGOR ? 'bg-blue-500' : 'bg-green-500'}`}>
+                    <span className={`text-xs px-3 py-1 rounded-full text-white font-semibold ${vehicle.source === ApiSource.FAGOR ? 'bg-blue-500' : vehicle.source === ApiSource.GEOTAB ? 'bg-orange-500' : 'bg-green-500'}`}>
                       <Radio className="w-3 h-3 inline mr-1" />
                       {vehicle.source}
                     </span>
