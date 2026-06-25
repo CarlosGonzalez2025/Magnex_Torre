@@ -21,11 +21,13 @@ export interface FleetResponse {
   apiStatus?: {
     coltrack: 'connected' | 'failed' | 'not_tested';
     fagor: 'connected' | 'failed' | 'not_tested';
+    geotab: 'connected' | 'failed' | 'not_tested';
     backend: 'connected' | 'failed' | 'not_tested';
   };
   vehicleCounts?: {
     coltrack: number;
     fagor: number;
+    geotab: number;
     total: number;
   };
 }
@@ -340,16 +342,71 @@ const fetchFagorViaAPI = async (): Promise<Vehicle[]> => {
   }
 };
 
+/**
+ * Attempts to fetch live fleet data from Geotab via serverless function.
+ * El proxy (api/geotab.ts) ya resuelve auth + federación y entrega los
+ * vehículos enriquecidos con placa desde DeviceStatusInfo.
+ */
+const fetchGeotabViaAPI = async (): Promise<Vehicle[]> => {
+  try {
+    const response = await fetch('/api/geotab', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'live' })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Geotab serverless function returned ${response.status}`);
+    }
+
+    const result = await response.json();
+
+    if (!result.success || !result.data?.vehicles) {
+      throw new Error('Invalid response from Geotab serverless function');
+    }
+
+    return result.data.vehicles.map((record: any): Vehicle => {
+      const speed = Number(record.speed) || 0;
+      const status = determineStatus(speed, !!record.isDriving);
+      return {
+        id: `GEO-${record.deviceId || record.plate}`,
+        plate: record.plate || 'UNKNOWN',
+        source: ApiSource.GEOTAB,
+        latitude: Number(record.latitude) || 0,
+        longitude: Number(record.longitude) || 0,
+        speed,
+        status,
+        driver: 'Sin Asignar',
+        fuelLevel: 0,
+        lastUpdate: record.dateTime || new Date().toISOString(),
+        location: record.latitude && record.longitude
+          ? `${Number(record.latitude).toFixed(5)}, ${Number(record.longitude).toFixed(5)}`
+          : 'Desconocido',
+        odometer: 0,
+        contract: 'No asignado',
+        event: record.isDriving ? 'Conduciendo' : '',
+        vehicleType: record.vehicleType || ''
+      };
+    });
+
+  } catch (error) {
+    console.warn('Geotab serverless function failed:', error);
+    return [];
+  }
+};
+
 
 export const fetchFleetData = async (): Promise<FleetResponse> => {
   // Initialize status tracking
   const apiStatus: {
     coltrack: 'connected' | 'failed' | 'not_tested';
     fagor: 'connected' | 'failed' | 'not_tested';
+    geotab: 'connected' | 'failed' | 'not_tested';
     backend: 'connected' | 'failed' | 'not_tested';
   } = {
     coltrack: 'not_tested',
     fagor: 'not_tested',
+    geotab: 'not_tested',
     backend: 'not_tested'
   };
 
@@ -371,6 +428,7 @@ export const fetchFleetData = async (): Promise<FleetResponse> => {
       // Count vehicles by source
       const coltrackCount = data.filter((v: Vehicle) => v.source === ApiSource.COLTRACK).length;
       const fagorCount = data.filter((v: Vehicle) => v.source === ApiSource.FAGOR).length;
+      const geotabCount = data.filter((v: Vehicle) => v.source === ApiSource.GEOTAB).length;
 
       return {
         data,
@@ -379,6 +437,7 @@ export const fetchFleetData = async (): Promise<FleetResponse> => {
         vehicleCounts: {
           coltrack: coltrackCount,
           fagor: fagorCount,
+          geotab: geotabCount,
           total: data.length
         }
       };
@@ -394,17 +453,20 @@ export const fetchFleetData = async (): Promise<FleetResponse> => {
   const results = await Promise.allSettled([
     fetchColtrackViaAPI(),
     fetchFagorViaAPI(),
+    fetchGeotabViaAPI(),
     fetchGoogleSheetsData()
   ]);
 
   const coltrackData = results[0].status === 'fulfilled' ? results[0].value : [];
   const fagorData = results[1].status === 'fulfilled' ? results[1].value : [];
-  const googleSheetsMap = results[2].status === 'fulfilled' ? results[2].value : {};
+  const geotabData = results[2].status === 'fulfilled' ? results[2].value : [];
+  const googleSheetsMap = results[3].status === 'fulfilled' ? results[3].value : {};
 
   apiStatus.coltrack = coltrackData.length > 0 ? 'connected' : 'failed';
   apiStatus.fagor = fagorData.length > 0 ? 'connected' : 'failed';
+  apiStatus.geotab = geotabData.length > 0 ? 'connected' : 'failed';
 
-  let combinedData = [...coltrackData, ...fagorData];
+  let combinedData = [...coltrackData, ...fagorData, ...geotabData];
 
   // Enriquecer vehículos con contratos de Google Sheets
   if (Object.keys(googleSheetsMap).length > 0) {
@@ -424,6 +486,7 @@ export const fetchFleetData = async (): Promise<FleetResponse> => {
       vehicleCounts: {
         coltrack: coltrackData.length,
         fagor: fagorData.length,
+        geotab: geotabData.length,
         total: combinedData.length
       }
     };
@@ -446,6 +509,7 @@ export const fetchFleetData = async (): Promise<FleetResponse> => {
     vehicleCounts: {
       coltrack: mockColtrackCount,
       fagor: mockFagorCount,
+      geotab: 0,
       total: mockData.length
     }
   };

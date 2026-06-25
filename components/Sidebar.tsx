@@ -29,10 +29,11 @@ import {
     FileBarChart2,
     Radio,
     Fuel,
+    Satellite,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
-export type TabType = 'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'history-analytics' | 'route-investigation' | 'batch-upload' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'users' | 'maintenance' | 'fleet' | 'alert-config' | 'daily-reports' | 'monthly-reports' | 'contract-analysis' | 'telemetry-processor' | 'ralenti-reports';
+export type TabType = 'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'history-analytics' | 'route-investigation' | 'batch-upload' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'users' | 'maintenance' | 'fleet' | 'alert-config' | 'daily-reports' | 'monthly-reports' | 'contract-analysis' | 'telemetry-processor' | 'ralenti-reports' | 'geotab';
 
 interface SidebarProps {
     activeTab: TabType;
@@ -117,6 +118,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 { id: 'contract-analysis', label: 'Análisis por Contrato', icon: TrendingUp },
                 { id: 'telemetry-processor', label: 'Procesador Satelital', icon: Radio },
                 { id: 'ralenti-reports', label: 'Informe de Ralentí', icon: Fuel },
+                { id: 'geotab', label: 'Geotab', icon: Satellite },
             ]
         },
     ];
