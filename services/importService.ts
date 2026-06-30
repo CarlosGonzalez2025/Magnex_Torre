@@ -716,6 +716,7 @@ async function upsertReporteConductor(
   conductor: { id: string; proyecto?: string | null; ibutton?: string | null; estado?: string | null },
   row: Record<string, unknown>,
   tipo: 'daily' | 'monthly',
+  fuente: string = 'PLANTILLA',
 ): Promise<void> {
   const periodo = periodoFromRow(row, tipo);
   const { error } = await supabase
@@ -741,9 +742,10 @@ async function upsertReporteConductor(
         estado_conductor: String(row.estado_conductor ?? conductor.estado ?? ''),
         proyecto: String(conductor.proyecto ?? ''),
         mes: periodo.mes,
+        fuente,
         fecha_reporte: new Date().toISOString().slice(0, 10),
       },
-      { onConflict: 'conductor_id,periodo_inicio,periodo_fin', ignoreDuplicates: false }
+      { onConflict: 'conductor_id,periodo_inicio,periodo_fin,fuente', ignoreDuplicates: false }
     );
 
   if (error) throw new Error(`reporte conductor: ${error.message}`);
@@ -754,6 +756,7 @@ async function upsertReporteVehiculo(
   row: Record<string, unknown>,
   ralenti: Record<string, unknown>,
   tipo: 'daily' | 'monthly',
+  fuente: string = 'PLANTILLA',
 ): Promise<void> {
   const periodo = periodoFromRow(row, tipo);
   const { error } = await supabase
@@ -785,9 +788,10 @@ async function upsertReporteVehiculo(
         consumo_combustible: num(ralenti.consumo_combustible),
         proyecto: String(vehiculo.cliente ?? ''),
         mes: periodo.mes,
+        fuente,
         fecha_reporte: new Date().toISOString().slice(0, 10),
       },
-      { onConflict: 'vehiculo_id,periodo_inicio,periodo_fin', ignoreDuplicates: false }
+      { onConflict: 'vehiculo_id,periodo_inicio,periodo_fin,fuente', ignoreDuplicates: false }
     );
 
   if (error) throw new Error(`reporte vehiculo: ${error.message}`);
@@ -796,7 +800,8 @@ async function upsertReporteVehiculo(
 async function insertOperacionConductor(
   datos: Record<string, unknown>[],
   tipo: 'daily' | 'monthly',
-  referenciaConductores?: Map<string, { cedula: string; ibutton?: string }> | string
+  referenciaConductores?: Map<string, { cedula: string; ibutton?: string }> | string,
+  fuente: string = 'PLANTILLA'
 ): Promise<WriteResult> {
   const omitidos: ValidationError[] = [];
   let insertados = 0;
@@ -887,14 +892,14 @@ async function insertOperacionConductor(
       if (error) throw new Error(`coltrack conductor ${cond.cedula}: ${error.message}`);
     }
 
-    await upsertReporteConductor(cond as { id: string; proyecto?: string | null; ibutton?: string | null; estado?: string | null }, rest, tipo);
+    await upsertReporteConductor(cond as { id: string; proyecto?: string | null; ibutton?: string | null; estado?: string | null }, rest, tipo, fuente);
     insertados++;
   }
 
   return { insertados, omitidos, pendientes: 0 };
 }
 
-async function insertOperacionVehiculo(datos: Record<string, unknown>[], tipo: 'daily' | 'monthly'): Promise<WriteResult> {
+async function insertOperacionVehiculo(datos: Record<string, unknown>[], tipo: 'daily' | 'monthly', fuente: string = 'PLANTILLA'): Promise<WriteResult> {
   const omitidos: ValidationError[] = [];
   let insertados = 0;
 
@@ -981,6 +986,7 @@ async function insertOperacionVehiculo(datos: Record<string, unknown>[], tipo: '
       coltrackRest,
       ralentisRest,
       tipo,
+      fuente,
     );
 
     // Si es importación mensual, también registrar ralentis en ralentis_periodos
@@ -1846,16 +1852,21 @@ async function upsertRalentisEventos(
 async function consolidarConBaseDeDatosVehiculos(
   nuevosRecords: any[],
   periodoInicio: string,
-  periodoFin: string
+  periodoFin: string,
+  fuente: string = 'COLTRACK'
 ): Promise<any[]> {
   // Solo obtenemos los IDs existentes para reutilizarlos en el upsert (UPDATE en lugar de INSERT).
   // NO acumulamos sobre los valores de la BD — los datos del nuevo import REEMPLAZAN los anteriores.
   // La acumulación previa causaba doble conteo al reimportar los mismos archivos.
+  // IMPORTANTE: filtramos por `fuente` para que cada plataforma reutilice SOLO su propia
+  // fila (modelo multiplataforma v18). Así Coltrack/Fagor/Geotab conviven como filas
+  // separadas del mismo vehículo/período y el informe las suma.
   const { data: dbRecords, error } = await supabase
     .from('reportes_vehiculos')
     .select('id, vehiculo_id')
     .eq('periodo_inicio', periodoInicio)
-    .eq('periodo_fin', periodoFin);
+    .eq('periodo_fin', periodoFin)
+    .eq('fuente', fuente);
 
   if (error) {
     console.error('Error cargando IDs de vehículos de la BD:', error);
@@ -1870,22 +1881,25 @@ async function consolidarConBaseDeDatosVehiculos(
     corregirMetricasVehiculo(nuevo);
     // Preservar el ID existente para que el upsert haga UPDATE, no INSERT duplicado
     const existingId = dbIdMap.get(nuevo.vehiculo_id);
-    return { ...nuevo, id: existingId ?? nuevo.id ?? generarUUID() };
+    return { ...nuevo, fuente, id: existingId ?? nuevo.id ?? generarUUID() };
   });
 }
 
 async function consolidarConBaseDeDatosConductores(
   nuevosRecords: any[],
   periodoInicio: string,
-  periodoFin: string
+  periodoFin: string,
+  fuente: string = 'COLTRACK'
 ): Promise<any[]> {
   // Solo obtenemos los IDs existentes para reutilizarlos en el upsert (UPDATE en lugar de INSERT).
   // NO acumulamos sobre los valores de la BD — los datos del nuevo import REEMPLAZAN los anteriores.
+  // Filtramos por `fuente` (modelo multiplataforma v18): cada plataforma reutiliza solo su fila.
   const { data: dbRecords, error } = await supabase
     .from('reportes_conductores')
     .select('id, conductor_id')
     .eq('periodo_inicio', periodoInicio)
-    .eq('periodo_fin', periodoFin);
+    .eq('periodo_fin', periodoFin)
+    .eq('fuente', fuente);
 
   if (error) {
     console.error('Error cargando IDs de conductores de la BD:', error);
@@ -1899,7 +1913,7 @@ async function consolidarConBaseDeDatosConductores(
   return nuevosRecords.map(nuevo => {
     corregirMetricasConductor(nuevo);
     const existingId = dbIdMap.get(nuevo.conductor_id);
-    return { ...nuevo, id: existingId ?? nuevo.id ?? generarUUID() };
+    return { ...nuevo, fuente, id: existingId ?? nuevo.id ?? generarUUID() };
   });
 }
 
@@ -2148,11 +2162,12 @@ export async function importarDatosPlanosColtrack(
         const consolidadosFinal = await consolidarConBaseDeDatosConductores(
           consolizados,
           periodoInicio,
-          periodoFin
+          periodoFin,
+          'COLTRACK'
         );
         const { error } = await supabase
           .from('reportes_conductores')
-          .upsert(consolidadosFinal, { onConflict: 'conductor_id,periodo_inicio,periodo_fin' });
+          .upsert(consolidadosFinal, { onConflict: 'conductor_id,periodo_inicio,periodo_fin,fuente' });
         if (error) throw new Error(`Error insertando conductores Coltrack: ${error.message}`);
         registrosInsertados += consolizados.length;
       }
@@ -2225,11 +2240,12 @@ export async function importarDatosPlanosColtrack(
         const consolizadosFinal = await consolidarConBaseDeDatosVehiculos(
           consolizados,
           periodoInicio,
-          periodoFin
+          periodoFin,
+          'COLTRACK'
         );
         const { error } = await supabase
           .from('reportes_vehiculos')
-          .upsert(consolizadosFinal, { onConflict: 'vehiculo_id,periodo_inicio,periodo_fin' });
+          .upsert(consolizadosFinal, { onConflict: 'vehiculo_id,periodo_inicio,periodo_fin,fuente' });
         if (error) throw new Error(`Error insertando vehículos Coltrack: ${error.message}`);
         // Guardar ralentís en tabla dedicada (idempotente por periodo)
         await upsertRalentisPeriodos(consolizadosFinal, periodoInicio, periodoFin);
@@ -3016,11 +3032,12 @@ export async function importarDatosPlanosFagor(
       const consolidadosFinal = await consolidarConBaseDeDatosConductores(
         consolizados,
         periodoInicio,
-        periodoFin
+        periodoFin,
+        'FAGOR'
       );
       const { error } = await supabase
         .from('reportes_conductores')
-        .upsert(consolidadosFinal, { onConflict: 'conductor_id,periodo_inicio,periodo_fin' });
+        .upsert(consolidadosFinal, { onConflict: 'conductor_id,periodo_inicio,periodo_fin,fuente' });
       if (error) throw new Error(`Error insertando conductores Fagor: ${error.message}`);
       registrosInsertados += consolizados.length;
     }
@@ -3353,11 +3370,12 @@ export async function importarDatosPlanosFagor(
       const consolizadosFinal = await consolidarConBaseDeDatosVehiculos(
         consolizados,
         periodoInicio,
-        periodoFin
+        periodoFin,
+        'FAGOR'
       );
       const { error } = await supabase
         .from('reportes_vehiculos')
-        .upsert(consolizadosFinal, { onConflict: 'vehiculo_id,periodo_inicio,periodo_fin' });
+        .upsert(consolizadosFinal, { onConflict: 'vehiculo_id,periodo_inicio,periodo_fin,fuente' });
       if (error) throw new Error(`Error insertando vehículos Fagor: ${error.message}`);
       // Guardar ralentís en tabla dedicada (idempotente por periodo)
       await upsertRalentisPeriodos(consolizadosFinal, periodoInicio, periodoFin);
@@ -3368,6 +3386,307 @@ export async function importarDatosPlanosFagor(
 
   } catch (err: any) {
     await supabase.from('cargas_excel').update({ estado_validacion: 'error' }).eq('id', cargaId);
+    throw err;
+  }
+}
+
+// ── Ingestor de Geotab (informes mensuales) ───────────────────────────────────
+// Procesa los DOS export crudos de MyGeotab (ambos a nivel vehículo, hoja "data"):
+//   • "Cumplimiento_y_Utilización": km, horas conducidas, tiempo en ralentí (HH:MM:SS).
+//   • "Scorecard": excesos 10–60 km/h, aceleraciones/frenadas, puntaje de riesgo.
+// Reglas de negocio (acordadas Jun 2026):
+//   1. SIN CO₂/combustible (Geotab no lo exporta).
+//   2. Independiente del informe de ralentí: escribe SOLO en reportes_*; NUNCA en
+//      ralentis_periodos/ralentis_eventos.
+//   3. Calificación propia UNIFICADA (comparable con Coltrack/Fagor), no el Puntaje
+//      crudo de Geotab: riesgo ponderado por severidad / km, mapeado a 0–100.
+//   4. fuente='GEOTAB' → suma con las otras plataformas en el informe (modelo v18).
+// Los conductores se imputan por la columna "Conductor actual" (vacío = no identificado).
+export async function importarDatosPlanosGeotab(
+  files: File[],
+  periodoInicio: string,
+  periodoFin: string,
+  usuarioId?: string
+): Promise<ImportResult> {
+  const erroresGlobales: ValidationError[] = [];
+  let registrosInsertados = 0;
+  const mes = periodoInicio.slice(0, 7);
+
+  // Factor de exigencia del semáforo (α). 0.3 = indulgente (acordado con el cliente).
+  const ALPHA_CALIFICACION = 0.3;
+
+  const normName = (name: string) =>
+    normalizeText(name).replace(/[^A-Z0-9\s]/g, '').trim().replace(/\s+/g, ' ');
+  const normPlate = (plate: string) =>
+    normalizeText(plate).replace(/[^A-Z0-9]/g, '').trim();
+
+  // "324:19:25" → 324.32 horas. Acepta también serial de Excel (fracción de día).
+  const parseTimeStringToHours = (timeStr: any): number => {
+    if (timeStr === undefined || timeStr === null || timeStr === '') return 0;
+    if (typeof timeStr === 'number') return timeStr * 24;
+    const parts = String(timeStr).trim().split(':');
+    if (parts.length === 3) {
+      return (parseInt(parts[0], 10) || 0) + (parseInt(parts[1], 10) || 0) / 60 + (parseInt(parts[2], 10) || 0) / 3600;
+    } else if (parts.length === 2) {
+      return (parseInt(parts[0], 10) || 0) + (parseInt(parts[1], 10) || 0) / 60;
+    }
+    return 0;
+  };
+
+  // Lee la hoja "data" detectando dinámicamente la fila de cabecera (Cumplimiento la
+  // trae en la fila 7 por un preámbulo; Scorecard en la fila 1).
+  const leerHojaData = (wb: XLSX.WorkBook): { headers: string[]; rows: any[][] } | null => {
+    const nombreData = wb.SheetNames.find(n => /^data$/i.test(n));
+    const sheet = nombreData ? wb.Sheets[nombreData] : null;
+    if (!sheet) return null;
+    const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: true }) as any[][];
+    let h = -1;
+    for (let i = 0; i < raw.length; i++) {
+      if ((raw[i] ?? []).some(c => normalizeHeader(String(c)) === 'VEHICULO')) { h = i; break; }
+    }
+    if (h < 0) return null;
+    return { headers: (raw[h] ?? []).map(c => String(c).trim()), rows: raw.slice(h + 1) };
+  };
+
+  // Índice de columna por cualquiera de los nombres candidatos (normalizados).
+  const colIdx = (headers: string[], ...candidates: string[]): number => {
+    const norm = headers.map(normalizeHeader);
+    for (const c of candidates) {
+      const i = norm.indexOf(normalizeHeader(c));
+      if (i >= 0) return i;
+    }
+    return -1;
+  };
+
+  // 1. Clasificar los archivos por su hoja "data": Cumplimiento vs Scorecard
+  let wbCump: XLSX.WorkBook | null = null;
+  let wbScore: XLSX.WorkBook | null = null;
+  for (const file of files) {
+    if (!/\.xls[xm]?$/i.test(file.name)) continue;
+    try {
+      const ab = await file.arrayBuffer();
+      const wb = XLSX.read(new Uint8Array(ab), { type: 'array' });
+      const d = leerHojaData(wb);
+      if (!d) continue;
+      if (colIdx(d.headers, 'Puntaje', 'Hard Acceleration', 'Exceso Velocidad 60 Km/h') >= 0) {
+        wbScore = wb;
+      } else if (colIdx(d.headers, 'Kilómetros conducidos', 'Horas conducidas', '% de utilización (días conducidos)') >= 0) {
+        wbCump = wb;
+      }
+    } catch { /* archivo no legible como workbook → se ignora */ }
+  }
+
+  if (!wbCump && !wbScore) {
+    throw new Error('No se detectó ningún archivo válido de Geotab. Se esperan los export "Cumplimiento_y_Utilización" y/o "Scorecard" con hoja "data".');
+  }
+
+  // 2. Fusionar por placa (cruce, NO suma: los dos archivos son del mismo período)
+  const porPlaca = new Map<string, any>();
+  const ensure = (placa: string) => {
+    const k = normPlate(placa);
+    if (!porPlaca.has(k)) {
+      porPlaca.set(k, {
+        placa: placa.trim().toUpperCase(), conductor: '', gps: '',
+        kms: 0, horas_conduccion: 0, horas_motor_ralenti: 0,
+        excesos_10_kph: 0, excesos_20_kph: 0, excesos_30_kph: 0,
+        excesos_40_kph: 0, excesos_50_kph: 0, excesos_60_kph: 0,
+        aceleraciones: 0, frenadas: 0, _hasCump: false,
+      });
+    }
+    return porPlaca.get(k);
+  };
+
+  if (wbCump) {
+    const d = leerHojaData(wbCump)!;
+    const iVeh = colIdx(d.headers, 'Vehículo'), iCond = colIdx(d.headers, 'Conductor actual'), iGps = colIdx(d.headers, 'GPS');
+    const iKm = colIdx(d.headers, 'Kilómetros conducidos'), iHoras = colIdx(d.headers, 'Horas conducidas'), iRal = colIdx(d.headers, 'Tiempo en ralentí');
+    for (const r of d.rows) {
+      const placa = String(r[iVeh] ?? '').trim();
+      if (!placa) continue;
+      const g = ensure(placa);
+      g._hasCump = true;
+      g.kms = num(r[iKm]);
+      g.horas_conduccion = parseTimeStringToHours(r[iHoras]);
+      g.horas_motor_ralenti = parseTimeStringToHours(r[iRal]);
+      if (iCond >= 0 && String(r[iCond]).trim()) g.conductor = String(r[iCond]).trim();
+      if (iGps >= 0) g.gps = String(r[iGps]).trim();
+    }
+  }
+
+  if (wbScore) {
+    const d = leerHojaData(wbScore)!;
+    const iVeh = colIdx(d.headers, 'Vehículo'), iCond = colIdx(d.headers, 'Conductor actual'), iGps = colIdx(d.headers, 'GPS');
+    const iKm = colIdx(d.headers, 'Distancia Km');
+    const i60 = colIdx(d.headers, 'Exceso Velocidad 60 Km/h'), i50 = colIdx(d.headers, 'Exceso Velocidad 50 Km/h');
+    const i40 = colIdx(d.headers, 'Exceso Velocidad 40 Km/h'), i30 = colIdx(d.headers, 'Exceso Velocidad 30 Km/h');
+    const i20 = colIdx(d.headers, 'Exceso Velocidad 20 Km/h'), i10 = colIdx(d.headers, 'Exceso Velocidad 10 Km/h');
+    const iAcc = colIdx(d.headers, 'Hard Acceleration'), iBrk = colIdx(d.headers, 'Harsh Braking');
+    for (const r of d.rows) {
+      const placa = String(r[iVeh] ?? '').trim();
+      if (!placa) continue;
+      const g = ensure(placa);
+      g.excesos_60_kph = num(r[i60]); g.excesos_50_kph = num(r[i50]);
+      g.excesos_40_kph = num(r[i40]); g.excesos_30_kph = num(r[i30]);
+      g.excesos_20_kph = num(r[i20]); g.excesos_10_kph = num(r[i10]);
+      g.aceleraciones = num(r[iAcc]); g.frenadas = num(r[iBrk]);
+      if (!g._hasCump) g.kms = num(r[iKm]); // km de Scorecard solo si no vino de Cumplimiento
+      if (!g.conductor && iCond >= 0 && String(r[iCond]).trim()) g.conductor = String(r[iCond]).trim();
+      if (!g.gps && iGps >= 0) g.gps = String(r[iGps]).trim();
+    }
+  }
+
+  // Calificación propia unificada (más alto = mejor), comparable con Coltrack/Fagor.
+  const calcCalificacion = (g: any): number | null => {
+    if (!(g.kms > 0)) return null; // vehículo sin operación en el período → sin nota
+    const riesgo =
+      (g.excesos_50_kph + g.excesos_60_kph) * 10 +   // Alto
+      (g.excesos_30_kph + g.excesos_40_kph) * 5 +    // Medio
+      (g.excesos_10_kph + g.excesos_20_kph + g.aceleraciones + g.frenadas) * 2; // Leve
+    const tasa = riesgo * 100 / g.kms;
+    return Math.max(0, Math.min(100, Math.round((100 - tasa * ALPHA_CALIFICACION) * 100) / 100));
+  };
+
+  // Registrar carga
+  const nombreCarga = `Geotab planos: ${files.map(f => f.name).join(', ')}`;
+  const { data: carga, error: errorCarga } = await supabase
+    .from('cargas_excel')
+    .insert({
+      usuario_id: isUuid(usuarioId) ? usuarioId : null,
+      tipo: 'monthly',
+      nombre_archivo: nombreCarga,
+      estado_validacion: 'procesado',
+    })
+    .select('id')
+    .single();
+  if (errorCarga) throw new Error(`No se pudo registrar la carga: ${errorCarga.message}`);
+  const cargaId = carga.id as string;
+
+  try {
+    // Cargar maestros
+    const dbVehiculos = await fetchAllRows(
+      supabase.from('vehiculos').select('id, placa, cliente, contrato_id, tipo_activo, lugar')
+    );
+    const dbConductores = await fetchAllRows(
+      supabase.from('conductores').select('id, nombres, cedula, ibutton, proyecto, estado')
+    );
+    const vehicPorPlaca = new Map<string, any>();
+    (dbVehiculos ?? []).forEach(v => vehicPorPlaca.set(normPlate(v.placa), v));
+    const conductPorCedula = new Map<string, any>();
+    const conductPorNombreNorm = new Map<string, any>();
+    (dbConductores ?? []).forEach(c => {
+      if (c.cedula) conductPorCedula.set(normCedula(c.cedula), c);
+      conductPorNombreNorm.set(normName(c.nombres), c);
+    });
+
+    const reportesVehiculos: any[] = [];
+    const reportesConductores: any[] = [];
+    const hoy = new Date().toISOString().slice(0, 10);
+
+    for (const g of porPlaca.values()) {
+      const veh = await asegurarVehiculoEnMaestro(g.placa, vehicPorPlaca, normPlate);
+      if (!veh) {
+        erroresGlobales.push({ fila: 0, columna: 'Vehiculo', mensaje: `No se pudo resolver ni crear el vehículo "${g.placa}". Fila omitida.` });
+        continue;
+      }
+      const calif = calcCalificacion(g);
+
+      reportesVehiculos.push({
+        vehiculo_id: veh.id,
+        contrato_id: veh.contrato_id ?? null,
+        periodo_inicio: periodoInicio,
+        periodo_fin: periodoFin,
+        calificacion: calif,
+        kms: g.kms,
+        horas_conduccion: g.horas_conduccion,
+        excesos_10_kph: g.excesos_10_kph,
+        excesos_20_kph: g.excesos_20_kph,
+        excesos_30_kph: g.excesos_30_kph,
+        excesos_40_kph: g.excesos_40_kph,
+        excesos_50_kph: g.excesos_50_kph,
+        excesos_60_kph: g.excesos_60_kph,
+        excesos_80_kph: 0, // Geotab no maneja bucket de 80 km/h
+        aceleraciones_bruscas: g.aceleraciones,
+        frenadas_bruscas: g.frenadas,
+        dispositivo_gps: 'GEOTAB',
+        base: String(veh.lugar ?? ''),
+        estado_gps: g.gps ? 'ACTIVO' : '',
+        // Ralentí informativo del MENSUAL (columna del informe de vehículos). NO se
+        // escribe en ralentis_periodos → el informe de ralentí queda independiente.
+        horas_motor_ralenti: g.horas_motor_ralenti,
+        km_recorridos_ralenti: 0,
+        horas_motor_encendido: 0,
+        consumo_combustible: 0, // sin CO₂ (Geotab no exporta combustible)
+        ralentis_excesivos: 0,
+        proyecto: String(veh.cliente ?? ''),
+        mes,
+        fecha_reporte: hoy,
+      });
+
+      // Conductor: solo si "Conductor actual" viene identificado
+      if (g.conductor && !esConductorNoIdentificado(g.conductor)) {
+        const cond = await asegurarConductorEnMaestro(
+          g.conductor, undefined, undefined, conductPorNombreNorm, conductPorCedula, normName
+        );
+        if (cond) {
+          reportesConductores.push({
+            conductor_id: cond.id,
+            periodo_inicio: periodoInicio,
+            periodo_fin: periodoFin,
+            calificacion: calif,
+            kms: g.kms,
+            horas_conduccion: g.horas_conduccion,
+            excesos_10_kph: g.excesos_10_kph,
+            excesos_20_kph: g.excesos_20_kph,
+            excesos_30_kph: g.excesos_30_kph,
+            excesos_40_kph: g.excesos_40_kph,
+            excesos_50_kph: g.excesos_50_kph,
+            excesos_60_kph: g.excesos_60_kph,
+            excesos_80_kph: 0,
+            aceleraciones_bruscas: g.aceleraciones,
+            frenadas_bruscas: g.frenadas,
+            ibutton: String(cond.ibutton ?? ''),
+            estado_conductor: String(cond.estado ?? 'ACTIVO'),
+            proyecto: String(cond.proyecto ?? ''),
+            mes,
+            fecha_reporte: hoy,
+          });
+        }
+      }
+    }
+
+    // Escritura: SOLO reportes_*, con fuente='GEOTAB' (suma con otras plataformas).
+    // NO se llama a upsertRalentisPeriodos → independencia del informe de ralentí.
+    if (reportesVehiculos.length > 0) {
+      const consol = consolidarReportesVehiculos(reportesVehiculos);
+      const final = await consolidarConBaseDeDatosVehiculos(consol, periodoInicio, periodoFin, 'GEOTAB');
+      const { error } = await supabase
+        .from('reportes_vehiculos')
+        .upsert(final, { onConflict: 'vehiculo_id,periodo_inicio,periodo_fin,fuente' });
+      if (error) throw new Error(`Error insertando vehículos Geotab: ${error.message}`);
+      registrosInsertados += consol.length;
+    }
+
+    if (reportesConductores.length > 0) {
+      const consol = consolidarReportesConductores(reportesConductores);
+      const final = await consolidarConBaseDeDatosConductores(consol, periodoInicio, periodoFin, 'GEOTAB');
+      const { error } = await supabase
+        .from('reportes_conductores')
+        .upsert(final, { onConflict: 'conductor_id,periodo_inicio,periodo_fin,fuente' });
+      if (error) throw new Error(`Error insertando conductores Geotab: ${error.message}`);
+      registrosInsertados += consol.length;
+    }
+
+    await supabase.from('cargas_excel').update({ estado_validacion: 'procesado' }).eq('id', cargaId);
+
+    return {
+      cargaId,
+      exito: erroresGlobales.length === 0,
+      registrosInsertados,
+      errores: erroresGlobales,
+    };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await supabase.from('cargas_excel').update({ estado_validacion: 'error', errores_json: [{ fila: 0, columna: '', mensaje: msg }] }).eq('id', cargaId);
     throw err;
   }
 }

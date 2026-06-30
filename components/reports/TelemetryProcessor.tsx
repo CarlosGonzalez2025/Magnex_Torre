@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { Upload, BarChart3, RefreshCw, FileText, Calendar, CheckCircle2, AlertTriangle, Info, ShieldAlert, FileSpreadsheet } from 'lucide-react';
-import { importarDatosPlanosColtrack, importarDatosPlanosFagor, importarExcelConsolidado, descargarPlantilla, ImportResult } from '../../services/importService';
+import { importarDatosPlanosColtrack, importarDatosPlanosFagor, importarDatosPlanosGeotab, importarExcelConsolidado, descargarPlantilla, ImportResult } from '../../services/importService';
 
 export const TelemetryProcessor: React.FC = () => {
-  const [plataforma, setPlataforma] = useState<'coltrack' | 'fagor' | 'plantilla'>('coltrack');
+  const [plataforma, setPlataforma] = useState<'coltrack' | 'fagor' | 'geotab' | 'plantilla'>('coltrack');
   const [files, setFiles] = useState<File[]>([]);
   const [uploadRange, setUploadRange] = useState({
     inicio: (() => {
@@ -67,6 +67,8 @@ export const TelemetryProcessor: React.FC = () => {
         importResult = await importarDatosPlanosColtrack(files, uploadRange.inicio, uploadRange.fin);
       } else if (plataforma === 'fagor') {
         importResult = await importarDatosPlanosFagor(files, uploadRange.inicio, uploadRange.fin);
+      } else if (plataforma === 'geotab') {
+        importResult = await importarDatosPlanosGeotab(files, uploadRange.inicio, uploadRange.fin);
       } else {
         importResult = await importarExcelConsolidado(files, uploadRange.inicio, uploadRange.fin);
       }
@@ -93,7 +95,7 @@ export const TelemetryProcessor: React.FC = () => {
           </div>
           <div>
             <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">Procesador Satelital Directo</h1>
-            <p className="text-sm text-slate-500 dark:text-slate-400">Ingesta y unificación automática de telemetrías crudas (Coltrack y Fagor)</p>
+            <p className="text-sm text-slate-500 dark:text-slate-400">Ingesta y unificación automática de telemetrías crudas (Coltrack, Fagor y Geotab)</p>
           </div>
         </div>
       </div>
@@ -126,6 +128,12 @@ export const TelemetryProcessor: React.FC = () => {
               className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-all ${plataforma === 'fagor' ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-sm border border-slate-200/30 dark:border-slate-700' : 'text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'}`}
             >
               Fagor (XLSX)
+            </button>
+            <button
+              onClick={() => { setPlataforma('geotab'); clearAllFiles(); }}
+              className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-all ${plataforma === 'geotab' ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-sm border border-slate-200/30 dark:border-slate-700' : 'text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'}`}
+            >
+              Geotab (XLSX)
             </button>
             <button
               onClick={() => { setPlataforma('plantilla'); clearAllFiles(); }}
@@ -170,6 +178,25 @@ export const TelemetryProcessor: React.FC = () => {
               </li>
             </ul>
             <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1 italic">Nota: Los km de un vehículo presente en varios grupos se suman automáticamente. El archivo de respaldo solo aplica para vehículos ausentes en el archivo principal.</p>
+          </div>
+        )}
+
+        {plataforma === 'geotab' && (
+          <div className="bg-slate-50 dark:bg-slate-900/50 p-4 rounded-xl border border-slate-200 dark:border-slate-700/50 text-xs space-y-2">
+            <strong className="text-sky-700 dark:text-sky-400 text-xs uppercase font-bold tracking-wide flex items-center gap-1.5">
+              📁 Archivos Solicitados para Geotab (export de MyGeotab):
+            </strong>
+            <ul className="list-disc pl-4 space-y-1 text-slate-600 dark:text-slate-300">
+              <li><strong>GA_..._Cumplimiento_y_Utilización_*.xlsx</strong> (Km, horas conducidas y tiempo en ralentí por vehículo)</li>
+              <li><strong>GA_..._Scorecard_*.xlsx</strong> (Excesos de velocidad 10–60 km/h, aceleraciones, frenadas y puntaje por vehículo)</li>
+            </ul>
+            <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1 italic">
+              Sube ambos archivos juntos: el sistema cruza por placa, lee la hoja <strong>data</strong> y calcula una calificación
+              propia comparable con Coltrack/Fagor. Los conductores se imputan por la columna <strong>“Conductor actual”</strong>
+              (los vehículos sin conductor identificado solo alimentan el informe de vehículos). Geotab <strong>no</strong> aporta
+              combustible/CO₂ y <strong>no</strong> afecta el informe de ralentí (procesos independientes). Si una placa también
+              viene en Coltrack o Fagor para el mismo período, sus valores se <strong>suman</strong> en el informe mensual.
+            </p>
           </div>
         )}
 
