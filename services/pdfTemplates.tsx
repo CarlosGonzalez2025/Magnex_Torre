@@ -4,7 +4,7 @@
 import React from 'react';
 import {
   Document, Page, Text, View, StyleSheet, Font, pdf,
-  Image, Svg, Circle, Line, Path, Polyline,
+  Image, Svg, Circle, Line, Path, Polyline, Rect,
 } from '@react-pdf/renderer';
 import { ContratoOption, ReporteAlertasDiariasData, AlertaDiariaGps, ReporteConductorData, ReporteVehiculoData } from './reportService';
 
@@ -3020,6 +3020,9 @@ export interface RalentiPDFData {
   topByMax: Array<{ name: string; totalTime: number; count: number; maxEvent: number }>;
   providerCO2: Array<{ name: string; co2Tons: number }>;
   dailyCO2Trend: Array<{ date: string; value: number }>;
+  // Comparativo de galones consumidos en ralentí a través de TODOS los períodos
+  // (no obedece al filtro de período del informe). Cada entrada es un período.
+  periodComparison?: Array<{ label: string; galones: number }>;
   contratoNombre?: string;
   clienteNombre?: string;
   tiposNombre?: string;
@@ -3428,8 +3431,188 @@ function CO2TrendSVGChart({ trendData }: { trendData: Array<{ date: string; valu
   );
 }
 
+// ── Gráfico combinado: barras de galones consumidos en ralentí por período +
+//    línea de tendencia con el % de variación período a período. ──────────────
+// IMPORTANTE: este gráfico es transversal a TODOS los períodos disponibles y NO
+// obedece al filtro de período del informe (a diferencia del resto del documento).
+function PeriodComparisonChart({ periods }: { periods: Array<{ label: string; galones: number }> }) {
+  if (!periods || periods.length < 2) {
+    return (
+      <View style={{ height: 150, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f8fafc', borderWidth: 0.5, borderColor: '#cbd5e1', borderStyle: 'solid', borderRadius: 4 }} wrap={false}>
+        <Text style={{ fontSize: 8.5, color: COLORS.gris }}>
+          Se requieren al menos dos períodos con datos para construir el comparativo histórico.
+        </Text>
+      </View>
+    );
+  }
+
+  const n = periods.length;
+  const galones = periods.map(p => p.galones);
+  const maxGal = Math.max(...galones, 1);
+
+  // Variación porcentual de cada período respecto al inmediatamente anterior.
+  // El primer período es la línea base (sin variación previa → null).
+  const variations: Array<number | null> = periods.map((p, i) => {
+    if (i === 0) return null;
+    const prev = periods[i - 1].galones;
+    if (prev <= 0) return null;
+    return ((p.galones - prev) / prev) * 100;
+  });
+  const varVals = variations.filter((v): v is number => v !== null);
+  const maxAbsVar = Math.max(...varVals.map(v => Math.abs(v)), 10);
+
+  // ── Dimensiones SVG ─────────────────────────────────────────────────────────
+  // PAD_T deja aire arriba para el valor de galones sobre cada barra; PAD_B deja
+  // espacio bajo la línea base para el rótulo del período (todo dentro del SVG).
+  const SVG_W = 524;
+  const SVG_H = 182;
+  const PAD_L = 4;
+  const PAD_R = 4;
+  const PAD_T = 24;
+  const PAD_B = 24;
+  const YAXIS_W = 30;
+  const plotW = SVG_W - PAD_L - PAD_R;
+  const plotH = SVG_H - PAD_T - PAD_B;
+  const slotW = plotW / n;
+  const barW = Math.min(slotW * 0.46, 34);
+
+  const yGal = (v: number) => PAD_T + (1 - v / maxGal) * plotH;
+  // Eje secundario (%): el 0 % se ancla en el centro del área de trazado y la
+  // amplitud ±maxAbsVar se reparte simétricamente arriba/abajo.
+  const zeroY = PAD_T + plotH * 0.5;
+  const yVar = (v: number) => zeroY - (v / maxAbsVar) * (plotH * 0.5 - 6);
+  const xCenter = (i: number) => PAD_L + slotW * i + slotW * 0.5;
+
+  // Trazo de la línea de variación (omitiendo el primer punto sin variación previa).
+  const linePts = variations
+    .map((v, i) => (v === null ? null : { x: xCenter(i), y: yVar(v), val: v, idx: i }))
+    .filter((p): p is { x: number; y: number; val: number; idx: number } => p !== null);
+  const lineD = linePts
+    .map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`)
+    .join(' ');
+
+  // Etiquetas eje Y (galones)
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map(pct => ({
+    val: maxGal * pct,
+    y: yGal(maxGal * pct),
+  }));
+
+  const fmtGal = (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v.toFixed(v >= 100 ? 0 : 1));
+  const fmtPct = (v: number) => `${v > 0 ? '+' : ''}${v.toFixed(0)}%`;
+
+  // Estadísticos de resumen
+  const firstGal = galones[0];
+  const lastGal = galones[n - 1];
+  const totalVarPct = firstGal > 0 ? ((lastGal - firstGal) / firstGal) * 100 : 0;
+  const avgGal = galones.reduce((s, v) => s + v, 0) / n;
+  const peakIdx = galones.indexOf(Math.max(...galones));
+
+  return (
+    <View style={{ borderWidth: 0.5, borderColor: '#cbd5e1', borderStyle: 'solid', borderRadius: 4, padding: 8, backgroundColor: '#ffffff' }} wrap={false}>
+      {/* ── Encabezado + leyenda ── */}
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+        <View style={{ flex: 1 }}>
+          <Text style={{ fontSize: 8.5, fontWeight: 'bold', color: COLORS.azul, textTransform: 'uppercase' }}>
+            Comparativo Histórico de Galones en Ralentí por Período
+          </Text>
+          <View style={{ flexDirection: 'row', gap: 12, marginTop: 2 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+              <View style={{ width: 9, height: 7, backgroundColor: COLORS.azul }} />
+              <Text style={{ fontSize: 5.8, color: COLORS.gris }}>Galones consumidos en ralentí</Text>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+              <View style={{ width: 12, height: 2, backgroundColor: COLORS.naranja }} />
+              <Text style={{ fontSize: 5.8, color: COLORS.gris }}>% de variación vs período anterior</Text>
+            </View>
+          </View>
+        </View>
+        <View style={{ backgroundColor: totalVarPct > 0 ? '#fef2f2' : '#ecfdf5', borderRadius: 3, padding: '3 6', borderWidth: 0.5, borderColor: totalVarPct > 0 ? '#fecaca' : '#a7f3d0', borderStyle: 'solid', alignItems: 'center' }}>
+          <Text style={{ fontSize: 5.5, color: COLORS.gris, fontWeight: 'bold', textTransform: 'uppercase' }}>Variación Total</Text>
+          <Text style={{ fontSize: 10, fontWeight: 'bold', color: totalVarPct > 0 ? COLORS.rojo : '#15803d' }}>{fmtPct(totalVarPct)}</Text>
+          <Text style={{ fontSize: 5, color: COLORS.gris }}>1er → último período</Text>
+        </View>
+      </View>
+
+      {/* ── Eje Y + SVG ── */}
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+        <View style={{ width: YAXIS_W, height: SVG_H, justifyContent: 'space-between', alignItems: 'flex-end', paddingRight: 3, paddingTop: PAD_T - 5, paddingBottom: PAD_B - 2 }}>
+          {yTicks.slice().reverse().map((t, i) => (
+            <Text key={i} style={{ fontSize: 5.5, color: COLORS.gris, lineHeight: 1 }}>{fmtGal(t.val)}</Text>
+          ))}
+        </View>
+
+        <Svg width={SVG_W} height={SVG_H} viewBox={`0 0 ${SVG_W} ${SVG_H}`}>
+          {/* Grilla horizontal */}
+          {yTicks.map((t, i) => (
+            <Line key={`g${i}`} x1={PAD_L} y1={t.y} x2={SVG_W - PAD_R} y2={t.y} stroke={i === 0 ? '#cbd5e1' : '#f1f5f9'} strokeWidth={i === 0 ? 1 : 0.7} />
+          ))}
+          {/* Línea de referencia 0 % (eje secundario) */}
+          <Line x1={PAD_L} y1={zeroY} x2={SVG_W - PAD_R} y2={zeroY} stroke="#fde68a" strokeWidth={0.8} strokeDasharray="3 2" />
+
+          {/* Barras de galones + valor sobre cada barra (dentro del gráfico) */}
+          {periods.map((p, i) => {
+            const h = (p.galones / maxGal) * plotH;
+            const x = xCenter(i) - barW / 2;
+            const y = PAD_T + plotH - h;
+            return (
+              <React.Fragment key={`b${i}`}>
+                <Rect x={x} y={y} width={barW} height={Math.max(h, 0.5)} rx={1.5} fill={i === peakIdx ? COLORS.rojo : COLORS.azul} opacity={i === peakIdx ? 0.92 : 0.78} />
+                <Text x={xCenter(i)} y={y - 4} textAnchor="middle" fill={i === peakIdx ? COLORS.rojo : COLORS.azul} style={{ fontSize: 7, fontWeight: 'bold' }}>
+                  {fmtGal(p.galones)}
+                </Text>
+              </React.Fragment>
+            );
+          })}
+
+          {/* Línea de variación % */}
+          {linePts.length >= 2 && <Path d={lineD} fill="none" stroke={COLORS.naranja} strokeWidth={1.6} />}
+          {linePts.map((p) => {
+            const above = p.y > PAD_T + 16; // si hay aire arriba, etiqueta arriba; si no, abajo
+            const labelY = above ? p.y - 9 : p.y + 12;
+            const txt = fmtPct(p.val);
+            const pillW = txt.length * 3.5 + 5;
+            return (
+              <React.Fragment key={`p${p.idx}`}>
+                {/* Fondo tipo píldora para legibilidad sobre las barras */}
+                <Rect x={p.x - pillW / 2} y={labelY - 5.5} width={pillW} height={8} rx={2} fill="#ffffff" opacity={0.88} />
+                <Text x={p.x} y={labelY} textAnchor="middle" fill={p.val > 0 ? COLORS.rojo : '#15803d'} style={{ fontSize: 6, fontWeight: 'bold' }}>
+                  {txt}
+                </Text>
+                <Circle cx={p.x} cy={p.y} r={2.4} fill={COLORS.naranja} stroke="#ffffff" strokeWidth={0.7} />
+              </React.Fragment>
+            );
+          })}
+
+          {/* Rótulo del período sobre la línea base (dentro del gráfico) */}
+          {periods.map((p, i) => (
+            <Text key={`x${i}`} x={xCenter(i)} y={SVG_H - 8} textAnchor="middle" fill={COLORS.gris} style={{ fontSize: 6 }}>
+              {p.label}
+            </Text>
+          ))}
+        </Svg>
+      </View>
+
+      {/* ── Barra de estadísticos ── */}
+      <View style={{ flexDirection: 'row', marginTop: 5, backgroundColor: '#f8fafc', borderRadius: 3, borderWidth: 0.5, borderColor: '#e2e8f0', borderStyle: 'solid' }}>
+        {([
+          { label: 'PERÍODOS COMPARADOS', val: String(n), color: COLORS.negro },
+          { label: 'PROMEDIO POR PERÍODO', val: `${fmtGal(avgGal)} Gal`, color: COLORS.gris },
+          { label: 'PICO MÁXIMO', val: `${fmtGal(galones[peakIdx])} Gal`, color: COLORS.rojo },
+          { label: 'ÚLTIMO PERÍODO', val: `${fmtGal(lastGal)} Gal`, color: COLORS.azul },
+          { label: 'VARIACIÓN TOTAL', val: fmtPct(totalVarPct), color: totalVarPct > 0 ? COLORS.rojo : '#15803d' },
+        ] as Array<{ label: string; val: string; color: string }>).map((item, i, arr) => (
+          <View key={i} style={{ flex: 1, alignItems: 'center', padding: '3 2', borderRightWidth: i < arr.length - 1 ? 0.5 : 0, borderRightColor: '#e2e8f0', borderStyle: 'solid' }}>
+            <Text style={{ fontSize: 5, color: COLORS.gris, textTransform: 'uppercase', textAlign: 'center' }}>{item.label}</Text>
+            <Text style={{ fontSize: 6.5, fontWeight: 'bold', color: item.color, textAlign: 'center', marginTop: 1 }}>{item.val}</Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
 // Helper: Page 3 Environmental Box
-function Page3EnvironmentalBox({ co2Kg, treesEquivalent }: { co2Kg: number; treesEquivalent: number }) {
+function Page3EnvironmentalBox({ co2Kg }: { co2Kg: number }) {
   const co2Tons = co2Kg / 1000;
   return (
     <View style={{ backgroundColor: '#ecfdf5', borderWidth: 0.5, borderColor: '#a7f3d0', borderStyle: 'solid', borderRadius: 4, padding: 8 }} wrap={false}>
@@ -3441,13 +3624,9 @@ function Page3EnvironmentalBox({ co2Kg, treesEquivalent }: { co2Kg: number; tree
           <Text style={{ fontSize: 13.5, fontWeight: 'bold', color: '#15803d' }}>{co2Tons.toLocaleString('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Ton CO2</Text>
           <Text style={{ fontSize: 6.8, color: COLORS.gris, textTransform: 'uppercase', marginTop: 2 }}>Emisiones de CO2</Text>
         </View>
-        <View style={{ flex: 1, backgroundColor: '#ffffff', borderRadius: 4, padding: 6, borderWidth: 0.5, borderColor: '#cbd5e1', borderStyle: 'solid', alignItems: 'center' }}>
-          <Text style={{ fontSize: 13.5, fontWeight: 'bold', color: '#16a34a' }}>{Math.ceil(treesEquivalent)} Árboles / Año</Text>
-          <Text style={{ fontSize: 6.8, color: COLORS.gris, textTransform: 'uppercase', marginTop: 2 }}>Árboles necesarios para absorber este CO2</Text>
-        </View>
       </View>
       <Text style={{ fontSize: 6.5, color: '#065f46', lineHeight: 1.3, marginTop: 6 }}>
-        Nota ecológica: Un árbol absorbe 22 kg de CO2/año. El ralentí excesivo anula este beneficio ambiental.
+        Nota ecológica: El ralentí excesivo genera emisiones de CO2 evitables y anula el beneficio ambiental.
       </Text>
     </View>
   );
@@ -3738,7 +3917,6 @@ function DetailedImpactTable({ data, daysInPeriod }: { data: RalentiPDFData; day
     fapProbability = 15,
     costAvgDaily = 0,
     co2Kg = 0,
-    treesEquivalent = 0,
   } = data;
 
   return (
@@ -3786,7 +3964,7 @@ function DetailedImpactTable({ data, daysInPeriod }: { data: RalentiPDFData; day
           <Text style={[base.tableCell, { flex: 1.8, textAlign: 'left', paddingLeft: 8, fontSize: 6.8, fontWeight: 700 }]}>Huella de Carbono (CO2)</Text>
           <Text style={[base.tableCell, { flex: 1, fontSize: 6.8, fontWeight: 700 }]}>{co2Kg.toFixed(0)} kg CO2</Text>
           <Text style={[base.tableCell, { flex: 2.2, textAlign: 'right', paddingRight: 8, fontSize: 6.8, color: COLORS.gris }]}>
-            {(co2Kg / 1000).toFixed(2)} Ton (Compensa: {Math.ceil(treesEquivalent)} árboles)
+            {(co2Kg / 1000).toFixed(2)} Ton de CO2
           </Text>
         </View>
       </View>
@@ -3855,11 +4033,12 @@ export function InformeRalentiPDF({ data }: { data: RalentiPDFData }) {
     periodoLabel, periodoInicio, periodoFin, fechaReporte,
     pctRalenti, totalHorasMotorEncendido, totalHorasMotorRalenti,
     totalGalonesConsumidos, totalEventos, totalVehiculosEvaluados = 0,
-    costTotal, costAvgDaily, co2Kg, treesEquivalent,
+    costTotal, costAvgDaily, co2Kg,
     mayorEventoSegundos, mayorEventoConductor = 'No registra', promedioEventoSegundos, eventosMas30Min,
     riskLevel, fapRisk,
     topByTime, topByMax,
     providerCO2, dailyCO2Trend,
+    periodComparison = [],
     contratoNombre = 'Todos los contratos',
     clienteNombre = 'Todos los clientes',
     tiposNombre = 'Todos los tipos',
@@ -3941,7 +4120,7 @@ export function InformeRalentiPDF({ data }: { data: RalentiPDFData }) {
 
         {/* Impacto de Compensación Ambiental (reubicado debajo de KPIs) */}
         <View style={{ marginBottom: 8 }} wrap={false}>
-          <Page3EnvironmentalBox co2Kg={co2Kg} treesEquivalent={treesEquivalent} />
+          <Page3EnvironmentalBox co2Kg={co2Kg} />
         </View>
 
         {/* Datos Clave del Período (Full Width) */}
@@ -3991,6 +4170,32 @@ export function InformeRalentiPDF({ data }: { data: RalentiPDFData }) {
 
         {/* 2. Suggested Action Plan Table */}
         <SuggestedActionPlanTable />
+
+        <ReportFooterDiario />
+      </Page>
+
+      {/* ── PÁGINA 3: COMPARATIVO HISTÓRICO DE GALONES EN RALENTÍ (TRANSVERSAL) ── */}
+      <Page size="LETTER" orientation="portrait" style={[base.page, { padding: 20, paddingBottom: 40 }]}>
+        <ReportHeaderDiario title="Informe Ejecutivo de Ralentí de Flota — Torre de Control" />
+
+        <View style={{ backgroundColor: COLORS.azul, padding: '4 8', marginBottom: 4 }} wrap={false}>
+          <Text style={{ fontSize: 7, fontWeight: 700, color: COLORS.blanco }}>EVOLUCIÓN DEL CONSUMO EN RALENTÍ ENTRE PERÍODOS</Text>
+        </View>
+        <Text style={{ fontSize: 6.3, color: COLORS.gris, marginBottom: 6, lineHeight: 1.35 }}>
+          Este comparativo es transversal a todo el histórico disponible y, a diferencia del resto del informe,
+          NO está restringido al período seleccionado: muestra los galones de combustible consumidos en ralentí
+          en cada período registrado. Las barras representan el consumo absoluto por período y la línea naranja
+          traza la tendencia del porcentaje de variación de cada período frente al inmediatamente anterior,
+          permitiendo identificar si el desperdicio por ralentí mejora o se deteriora en el tiempo.
+        </Text>
+
+        <PeriodComparisonChart periods={periodComparison} />
+
+        <Text style={{ fontSize: 6, color: COLORS.gris, marginTop: 6, lineHeight: 1.35 }}>
+          Interpretación: un valor de variación positivo (rojo) indica un aumento del combustible desperdiciado en
+          ralentí respecto al período previo; un valor negativo (verde) refleja una reducción. El período con mayor
+          consumo se resalta en rojo. Use esta lectura para evaluar el impacto de las acciones de control aplicadas.
+        </Text>
 
         <ReportFooterDiario />
       </Page>

@@ -849,6 +849,101 @@ export const RalentiReports: React.FC = () => {
     fetchData();
   }, [fetchData]);
 
+  // Comparativo de galones consumidos en ralentí a través de TODOS los períodos.
+  // A diferencia del resto del informe, este dataset IGNORA el filtro de período
+  // (year/month/quincena) y trae el histórico completo. Sí respeta los demás
+  // filtros de alcance (cliente/contrato/tipo/placa) para mantener la coherencia
+  // con el ámbito del informe. Se usa exclusivamente para el gráfico del PDF.
+  const fetchPeriodComparison = useCallback(async (): Promise<Array<{ label: string; galones: number }>> => {
+    const isClientFilterActive = selectedClients.length > 0 && selectedClients.length < clientOptions.length;
+    const isContractFilterActive = selectedContracts.length > 0 && selectedContracts.length < contracts.length;
+    const isTypeFilterActive = selectedVehicleTypes.length > 0 && selectedVehicleTypes.length < vehicleTypesOptions.length;
+    const hasFilters = isClientFilterActive || isContractFilterActive || isTypeFilterActive;
+
+    const rawClients = new Set<string>();
+    if (isClientFilterActive) {
+      selectedClients.forEach(c => {
+        vehicles.forEach(v => { if (v.cliente && v.cliente.trim() === c) rawClients.add(v.cliente); });
+      });
+    }
+    const rawTypes = new Set<string>();
+    if (isTypeFilterActive) {
+      selectedVehicleTypes.forEach(t => {
+        vehicles.forEach(v => { if (v.tipo_activo && v.tipo_activo.trim() === t) rawTypes.add(v.tipo_activo); });
+      });
+    }
+
+    const selectFields = hasFilters
+      ? 'periodo_inicio, periodo_fin, consumo_combustible, vehiculos!inner(contrato_id, tipo_activo, cliente)'
+      : 'periodo_inicio, periodo_fin, consumo_combustible';
+
+    // Paginado para superar el límite de 1000 filas por request (todo el histórico).
+    const pageSize = 1000;
+    const rows: any[] = [];
+    for (let page = 0; ; page++) {
+      const from = page * pageSize;
+      let q = supabase.from('ralentis_periodos')
+        .select(selectFields)
+        .order('periodo_inicio', { ascending: true })
+        .range(from, from + pageSize - 1);
+
+      if (placa) {
+        q = q.eq('vehiculo_id', placa);
+      } else if (hasFilters) {
+        if (isClientFilterActive) q = q.in('vehiculos.cliente', Array.from(rawClients));
+        if (isContractFilterActive) q = q.in('vehiculos.contrato_id', selectedContracts);
+        if (isTypeFilterActive) q = q.in('vehiculos.tipo_activo', Array.from(rawTypes));
+      }
+
+      const { data, error } = await q;
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      rows.push(...data);
+      if (data.length < pageSize) break;
+    }
+
+    // El módulo de ralentí trabaja SIEMPRE por quincenas: Q1 = 1→15 y Q2 = 16→fin
+    // de mes (igual que el "Informe por Período"). En ralentis_periodos conviven
+    // períodos de OTRA procedencia —el informe mensual usa ciclos tipo 29→28— que
+    // NO corresponden a ralentí y distorsionan el comparativo. Este guard deja pasar
+    // únicamente las quincenas reales (misma lógica que RalentiAnalisisGeneral).
+    const isQuincenaPeriodo = (inicio: string, fin: string): boolean => {
+      const [yi, mi, di] = inicio.split('-').map(Number);
+      const [yf, mf, df] = fin.split('-').map(Number);
+      if (!yi || !yf || yi !== yf || mi !== mf) return false; // debe iniciar y terminar en el mismo mes
+      const ultimoDia = new Date(yi, mi, 0).getDate();
+      return (di === 1 && df === 15) || (di === 16 && df === ultimoDia);
+    };
+
+    // Agrupar por período (par periodo_inicio/periodo_fin) y sumar galones,
+    // EXCLUYENDO todo lo que no sea una quincena de ralentí.
+    const byPeriod = new Map<string, { inicio: string; fin: string; galones: number }>();
+    rows.forEach((r: any) => {
+      const inicio = String(r.periodo_inicio ?? '').slice(0, 10);
+      const fin = String(r.periodo_fin ?? '').slice(0, 10);
+      if (!inicio || !fin || !isQuincenaPeriodo(inicio, fin)) return;
+      const key = `${inicio}|${fin}`;
+      const cur = byPeriod.get(key) ?? { inicio, fin, galones: 0 };
+      cur.galones += Number(r.consumo_combustible) || 0;
+      byPeriod.set(key, cur);
+    });
+
+    const mesesAbbr = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+    // Solo llegan quincenas válidas, por lo que el día de inicio basta para el rótulo.
+    const periodLabel = (inicio: string): string => {
+      const [year, month, day] = inicio.split('-').map(Number);
+      const mes = mesesAbbr[(month ?? 1) - 1] ?? '';
+      const yy = String(year).slice(2);
+      const q = day <= 15 ? 'Q1' : 'Q2';
+      return `${mes} ${q} '${yy}`;
+    };
+
+    return Array.from(byPeriod.values())
+      .sort((a, b) => a.inicio.localeCompare(b.inicio))
+      .map(p => ({ label: periodLabel(p.inicio), galones: Number(p.galones.toFixed(1)) }))
+      .slice(-12); // últimos 12 períodos para mantener el gráfico legible
+  }, [selectedClients, clientOptions, selectedContracts, contracts, selectedVehicleTypes, vehicleTypesOptions, placa, vehicles]);
+
   const daysInPeriod = useMemo(() => {
     if (quincena === '1') return 15;
     const lastDay = new Date(year, month, 0).getDate();
@@ -1514,6 +1609,16 @@ export const RalentiReports: React.FC = () => {
             const topByTimePDF = [...filteredDrivers].sort((a, b) => b.totalTime - a.totalTime).slice(0, 10);
             const topByMaxPDF = [...filteredDrivers].sort((a, b) => b.maxEvent - a.maxEvent).slice(0, 10);
 
+            // Comparativo histórico transversal (no obedece al filtro de período).
+            // Si falla, no se bloquea la generación del PDF: el gráfico mostrará un
+            // mensaje de datos insuficientes.
+            let periodComparison: Array<{ label: string; galones: number }> = [];
+            try {
+              periodComparison = await fetchPeriodComparison();
+            } catch (e) {
+              console.error('Error construyendo el comparativo de períodos para el PDF:', e);
+            }
+
             const data = {
               periodoLabel,
               periodoInicio: dateStart,
@@ -1540,6 +1645,7 @@ export const RalentiReports: React.FC = () => {
               topByMax: topByMaxPDF,
               providerCO2: providerCO2Data,
               dailyCO2Trend: dailyCO2Trend,
+              periodComparison,
               contratoNombre,
               clienteNombre,
               tiposNombre,
