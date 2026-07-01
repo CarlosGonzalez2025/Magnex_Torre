@@ -17,6 +17,7 @@ import {
   UltimaSync,
 } from '../../services/googleSheetsService';
 import { supabase } from '../../services/supabaseClient';
+import { fetchAllRows } from '../../services/reportService';
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
@@ -74,48 +75,50 @@ export const SheetsSyncPanel: React.FC = () => {
 
   const cargarPendientes = async () => {
     try {
-      const { data: dPending } = await supabase
-        .from('conductores')
-        .select('id, nombres, cedula, ibutton')
-        .eq('proyecto', 'PENDIENTE GOOGLE SHEETS');
-      
-      const { data: vPending } = await supabase
-        .from('vehiculos')
-        .select('id, placa, cliente')
-        .eq('cliente', 'PENDIENTE GOOGLE SHEETS');
+      const dPending = await fetchAllRows<{ id: string; nombres: string; cedula: string; ibutton: string }>(
+        supabase
+          .from('conductores')
+          .select('id, nombres, cedula, ibutton')
+          .eq('proyecto', 'PENDIENTE GOOGLE SHEETS')
+      );
+
+      const vPending = await fetchAllRows<{ id: string; placa: string; cliente: string }>(
+        supabase
+          .from('vehiculos')
+          .select('id, placa, cliente')
+          .eq('cliente', 'PENDIENTE GOOGLE SHEETS')
+      );
 
       // Obtener KMs para conductores pendientes
       const driverIds = (dPending ?? []).map(d => d.id);
       const driverKmsMap: Record<string, number> = {};
       if (driverIds.length > 0) {
-        const { data: dKms } = await supabase
-          .from('coltrack_datos_conductor')
-          .select('conductor_id, kms')
-          .in('conductor_id', driverIds);
-        
-        if (dKms) {
-          dKms.forEach(row => {
-            const id = row.conductor_id;
-            driverKmsMap[id] = (driverKmsMap[id] || 0) + Number(row.kms || 0);
-          });
-        }
+        const dKms = await fetchAllRows<{ conductor_id: string; kms: number }>(
+          supabase
+            .from('coltrack_datos_conductor')
+            .select('conductor_id, kms')
+            .in('conductor_id', driverIds)
+        );
+        dKms.forEach(row => {
+          const id = row.conductor_id;
+          driverKmsMap[id] = (driverKmsMap[id] || 0) + Number(row.kms || 0);
+        });
       }
 
       // Obtener KMs para vehículos pendientes
       const vehicleIds = (vPending ?? []).map(v => v.id);
       const vehicleKmsMap: Record<string, number> = {};
       if (vehicleIds.length > 0) {
-        const { data: vKms } = await supabase
-          .from('coltrack_datos_vehiculo')
-          .select('vehiculo_id, kms')
-          .in('vehiculo_id', vehicleIds);
-        
-        if (vKms) {
-          vKms.forEach(row => {
-            const id = row.vehiculo_id;
-            vehicleKmsMap[id] = (vehicleKmsMap[id] || 0) + Number(row.kms || 0);
-          });
-        }
+        const vKms = await fetchAllRows<{ vehiculo_id: string; kms: number }>(
+          supabase
+            .from('coltrack_datos_vehiculo')
+            .select('vehiculo_id, kms')
+            .in('vehiculo_id', vehicleIds)
+        );
+        vKms.forEach(row => {
+          const id = row.vehiculo_id;
+          vehicleKmsMap[id] = (vehicleKmsMap[id] || 0) + Number(row.kms || 0);
+        });
       }
 
       const driversWithKms = (dPending ?? []).map(c => ({

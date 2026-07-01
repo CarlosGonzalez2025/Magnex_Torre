@@ -21,6 +21,7 @@ import {
 } from '../services/auditService';
 import { saveAlertToDatabase } from '../services/databaseService';
 import { supabase } from '../services/supabaseClient';
+import { fetchAllRows } from '../services/reportService';
 import { Alert, AlertType, ApiSource, AlertSeverity } from '../types';
 import { useExportToExcel } from '../hooks/useExportToExcel';
 
@@ -135,11 +136,11 @@ export const BatchUpload: React.FC = () => {
       console.log('Cargando contratos desde la base maestra de vehiculos...');
       const contractsMap = new Map<string, string>();
 
-      const { data, error } = await supabase
-        .from('vehiculos')
-        .select('placa, estado, cliente, contratos(nombre)');
-
-      if (error) throw error;
+      const data = await fetchAllRows(
+        supabase
+          .from('vehiculos')
+          .select('placa, estado, cliente, contratos(nombre)')
+      );
 
       (data ?? []).forEach((vehicle: any) => {
         if (normalizeText(vehicle.estado) !== 'ACTIVO') return;

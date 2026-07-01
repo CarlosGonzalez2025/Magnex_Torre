@@ -81,6 +81,21 @@ async function fetchAllRows<T = any>(query: any): Promise<T[]> {
   return allRows;
 }
 
+// Indexa un conductor de la BD en el mapa por nombre normalizado. Cuando dos filas
+// comparten el mismo nombre (duplicados huérfanos "PENDIENTE GOOGLE SHEETS" creados
+// por asegurarConductorEnMaestro), se prefiere siempre la fila con contrato_id asignado
+// para que la telemetría importada no se le atribuya al duplicado sin contrato.
+function indexarConductorPorNombre(
+  map: Map<string, any>,
+  conductor: { nombres: string; contrato_id?: string | null },
+  normNameFn: (n: string) => string
+): void {
+  const key = normNameFn(conductor.nombres);
+  const existente = map.get(key);
+  if (existente && existente.contrato_id != null && conductor.contrato_id == null) return;
+  map.set(key, conductor);
+}
+
 function excelDateToISO(value: unknown): string | null {
   if (!value) return null;
   if (value instanceof Date && !isNaN(value.getTime())) return value.toISOString().slice(0, 10);
@@ -812,12 +827,12 @@ async function insertOperacionConductor(
   const dbConductores = await fetchAllRows(
     supabase
       .from('conductores')
-      .select('id, nombres, cedula, ibutton, proyecto, estado')
+      .select('id, nombres, cedula, ibutton, proyecto, estado, contrato_id')
   );
 
   const conductPorCedula = new Map();
   const conductPorNombreNorm = new Map();
-  
+
   const normName = (name: string) =>
     normalizeText(name)
       .replace(/[^A-Z0-9\s]/g, '')
@@ -826,7 +841,7 @@ async function insertOperacionConductor(
 
   (dbConductores ?? []).forEach(c => {
     if (c.cedula) conductPorCedula.set(normCedula(c.cedula), c);
-    conductPorNombreNorm.set(normName(c.nombres), c);
+    indexarConductorPorNombre(conductPorNombreNorm, c, normName);
   });
 
   for (const d of datos) {
@@ -2026,7 +2041,7 @@ export async function importarDatosPlanosColtrack(
     const dbConductores = await fetchAllRows(
       supabase
         .from('conductores')
-        .select('id, nombres, cedula, ibutton, proyecto, estado')
+        .select('id, nombres, cedula, ibutton, proyecto, estado, contrato_id')
     );
     const dbVehiculos = await fetchAllRows(
       supabase
@@ -2039,7 +2054,7 @@ export async function importarDatosPlanosColtrack(
     const conductPorNombreNorm = new Map();
     (dbConductores ?? []).forEach(c => {
       if (c.cedula) conductPorCedula.set(normCedula(c.cedula), c);
-      conductPorNombreNorm.set(normName(c.nombres), c);
+      indexarConductorPorNombre(conductPorNombreNorm, c, normName);
     });
 
     const vehicPorPlaca = new Map();
@@ -2778,7 +2793,7 @@ export async function importarDatosPlanosFagor(
     const dbConductores = await fetchAllRows(
       supabase
         .from('conductores')
-        .select('id, nombres, cedula, ibutton, proyecto, estado')
+        .select('id, nombres, cedula, ibutton, proyecto, estado, contrato_id')
     );
     const dbVehiculos = await fetchAllRows(
       supabase
@@ -2791,7 +2806,7 @@ export async function importarDatosPlanosFagor(
     const conductPorNombreNorm = new Map();
     (dbConductores ?? []).forEach(c => {
       if (c.cedula) conductPorCedula.set(normCedula(c.cedula), c);
-      conductPorNombreNorm.set(normName(c.nombres), c);
+      indexarConductorPorNombre(conductPorNombreNorm, c, normName);
     });
 
     const vehicPorPlaca = new Map();
@@ -3567,7 +3582,7 @@ export async function importarDatosPlanosGeotab(
       supabase.from('vehiculos').select('id, placa, cliente, contrato_id, tipo_activo, lugar')
     );
     const dbConductores = await fetchAllRows(
-      supabase.from('conductores').select('id, nombres, cedula, ibutton, proyecto, estado')
+      supabase.from('conductores').select('id, nombres, cedula, ibutton, proyecto, estado, contrato_id')
     );
     const vehicPorPlaca = new Map<string, any>();
     (dbVehiculos ?? []).forEach(v => vehicPorPlaca.set(normPlate(v.placa), v));
@@ -3575,7 +3590,7 @@ export async function importarDatosPlanosGeotab(
     const conductPorNombreNorm = new Map<string, any>();
     (dbConductores ?? []).forEach(c => {
       if (c.cedula) conductPorCedula.set(normCedula(c.cedula), c);
-      conductPorNombreNorm.set(normName(c.nombres), c);
+      indexarConductorPorNombre(conductPorNombreNorm, c, normName);
     });
 
     const reportesVehiculos: any[] = [];
