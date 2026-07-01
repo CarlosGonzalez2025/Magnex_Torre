@@ -10,7 +10,7 @@ function getLocalDateISO(): string {
   return `${year}-${month}-${day}`;
 }
 
-async function fetchAllRows<T = Record<string, unknown>>(query: any): Promise<T[]> {
+export async function fetchAllRows<T = Record<string, unknown>>(query: any): Promise<T[]> {
   const allRows: T[] = [];
   let from = 0;
 

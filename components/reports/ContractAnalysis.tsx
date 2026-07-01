@@ -3,6 +3,7 @@ import { BarChart3, FileText, RefreshCw, Download, Copy, Check, Calendar, Users,
 import {
   getConductores, getVehiculos, getContratos,
   listarReportesConductores, listarReportesVehiculos,
+  fetchAllRows,
 } from '../../services/reportService';
 import type { ConductorOption, ContratoOption, VehiculoOption } from '../../services/reportService';
 import { supabase } from '../../services/supabaseClient';
@@ -218,15 +219,19 @@ export const ContractAnalysis: React.FC = () => {
   // Carga de entidades marcadas como PENDIENTE GOOGLE SHEETS
   const cargarPendientes = async () => {
     try {
-      const { data: dPending } = await supabase
-        .from('conductores')
-        .select('id, nombres, cedula, ibutton')
-        .eq('proyecto', 'PENDIENTE GOOGLE SHEETS');
-      
-      const { data: vPending } = await supabase
-        .from('vehiculos')
-        .select('id, placa, cliente')
-        .eq('cliente', 'PENDIENTE GOOGLE SHEETS');
+      const dPending = await fetchAllRows(
+        supabase
+          .from('conductores')
+          .select('id, nombres, cedula, ibutton')
+          .eq('proyecto', 'PENDIENTE GOOGLE SHEETS')
+      );
+
+      const vPending = await fetchAllRows(
+        supabase
+          .from('vehiculos')
+          .select('id, placa, cliente')
+          .eq('cliente', 'PENDIENTE GOOGLE SHEETS')
+      );
 
       setPendingDrivers(dPending || []);
       setPendingVehicles(vPending || []);
