@@ -103,7 +103,7 @@ export const GeotabPanel: React.FC = () => {
           {loading ? 'Consultando…' : 'Actualizar'}
         </button>
         <p className="text-xs text-slate-400 ml-auto self-center max-w-xs">
-          Conteos en vivo desde Geotab. Km y horas desde el histórico sincronizado.
+          Conteos en vivo desde Geotab. Km y horas desde el histórico sincronizado (o en vivo si aún no hay sincronización).
         </p>
       </div>
 
@@ -161,7 +161,7 @@ export const GeotabPanel: React.FC = () => {
               {(!metrics || metrics.porVehiculo.length === 0) && !loading && (
                 <tr>
                   <td colSpan={5} className="px-4 py-8 text-center text-slate-400">
-                    Sin datos sincronizados para el período. Verifica que el cron geotab-sync esté corriendo.
+                    Sin viajes registrados para el período seleccionado.
                   </td>
                 </tr>
               )}
