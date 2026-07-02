@@ -72,6 +72,7 @@ export interface GeotabExceptionEvent {
   ruleName?: string;
   activeFrom?: string;
   activeTo?: string;
+  speed?: number; // velocidad máx (km/h) en la ventana, solo para exceso de velocidad
 }
 
 export interface Vehicle {

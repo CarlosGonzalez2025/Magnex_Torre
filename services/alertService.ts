@@ -279,6 +279,11 @@ export function buildGeotabAlerts(events: GeotabExceptionEvent[]): Alert[] {
     if (!mapped) return [];
     const severity = getSeverityForType(mapped.type, mapped.severity);
 
+    const speed = Math.round(Number(ev.speed) || 0);
+    const details = speed > 0
+      ? `Regla Geotab: ${ruleName} — ${speed} km/h`
+      : `Regla Geotab: ${ruleName}`;
+
     return [normalizeAlertTimestamp({
       id: `geotab-${ev.id}`,
       vehicleId: `GEO-${ev.deviceId || ev.plate || 'UNKNOWN'}`,
@@ -289,11 +294,11 @@ export function buildGeotabAlerts(events: GeotabExceptionEvent[]): Alert[] {
       location: 'Ver en Geotab',
       latitude: 0,
       longitude: 0,
-      speed: 0,
+      speed,
       driver: 'Sin asignar',
       source: ApiSource.GEOTAB,
       contract: 'No asignado',
-      details: `Regla Geotab: ${ruleName}`,
+      details,
       sent: false
     })];
   });

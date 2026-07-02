@@ -126,6 +126,53 @@ async function buildDeviceMap(): Promise<Record<string, any>> {
   return map;
 }
 
+/** ¿La regla es de exceso de velocidad? (para saber a qué eventos enriquecer velocidad) */
+function isSpeedingRule(ruleName: string): boolean {
+  const n = (ruleName || '').toLowerCase();
+  return (n.includes('exceso') && n.includes('velocidad')) || n.includes('speeding');
+}
+
+/**
+ * El ExceptionEvent no trae la velocidad. Para los eventos de exceso de
+ * velocidad consultamos LogRecord (GPS) en la ventana del evento y tomamos la
+ * velocidad máxima. Se resuelve en UNA sola petición con ExecuteMultiCall.
+ * Devuelve un mapa { eventId -> maxSpeedKmh }.
+ */
+async function speedByEventForSpeeding(
+  events: any[],
+  ruleMap: Record<string, string>
+): Promise<Record<string, number>> {
+  const targets = events.filter((e) => isSpeedingRule(ruleMap[e.rule?.id]) && e.device?.id);
+  // Tope para acotar el tamaño del multicall.
+  const capped = targets.slice(0, 300);
+  if (capped.length === 0) return {};
+
+  const nowIso = new Date().toISOString();
+  const calls = capped.map((e) => ({
+    method: 'Get',
+    params: {
+      typeName: 'LogRecord',
+      search: {
+        deviceSearch: { id: e.device.id },
+        fromDate: e.activeFrom,
+        toDate: e.activeTo || nowIso,
+      },
+    },
+  }));
+
+  const speedMap: Record<string, number> = {};
+  try {
+    const results: any[] = await call('ExecuteMultiCall', { calls });
+    results.forEach((logs: any[], idx: number) => {
+      const speeds = (logs || []).map((r) => Number(r.speed) || 0);
+      if (speeds.length) speedMap[capped[idx].id] = Math.max(...speeds);
+    });
+  } catch (err) {
+    console.error('speedByEventForSpeeding multicall failed:', err);
+  }
+  return speedMap;
+}
+
 /** DeviceStatusInfo -> filas tipo "vehículo en vivo". */
 function mapLiveVehicles(statuses: any[], deviceMap: Record<string, any>): any[] {
   return statuses.map((s) => {
@@ -193,6 +240,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const ruleMap: Record<string, string> = {};
         for (const r of rules) ruleMap[r.id] = r.name;
 
+        // Velocidad real (máx en la ventana) para los eventos de exceso de velocidad.
+        const speedMap = await speedByEventForSpeeding(events, ruleMap);
+
         const mappedEvents = events.map((e: any) => {
           const dev = deviceMap[e.device?.id] || {};
           return {
@@ -203,6 +253,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             ruleName: ruleMap[e.rule?.id] || e.rule?.id || 'Regla desconocida',
             activeFrom: e.activeFrom,
             activeTo: e.activeTo,
+            speed: speedMap[e.id] ?? 0,
           };
         });
 

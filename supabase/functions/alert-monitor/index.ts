@@ -342,6 +342,10 @@ async function fetchGeotabAlerts(): Promise<Alert[]> {
       if (!mapped) continue;
 
       const timestamp = parseGpsTimestamp(ev.activeFrom);
+      const speed = Math.round(Number(ev.speed) || 0);
+      const details = speed > 0
+        ? `Regla Geotab: ${ev.ruleName} — ${speed} km/h`
+        : `Regla Geotab: ${ev.ruleName}`;
 
       alerts.push({
         // ev.id es único por evento -> idempotencia natural
@@ -353,8 +357,8 @@ async function fetchGeotabAlerts(): Promise<Alert[]> {
         severity: mapped.severity,
         timestamp,
         location: 'Ver en Geotab',
-        speed: 0,
-        details: `Regla Geotab: ${ev.ruleName}`,
+        speed,
+        details,
         contract: null,
         source: 'GEOTAB',
         status: 'pending',
