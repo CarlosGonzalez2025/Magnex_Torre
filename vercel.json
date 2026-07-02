@@ -6,5 +6,11 @@
       "source": "/(.*)",
       "destination": "/index.html"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/geotab-sync",
+      "schedule": "0 * * * *"
+    }
   ]
 }
