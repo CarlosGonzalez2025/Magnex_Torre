@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Alert, AlertSeverity, AlertType } from '../types';
 import { AlertTriangle, AlertCircle, Bell, BellRing, Copy, CheckCircle, Clock, MapPin, User, Gauge, Save, FileDown, Search, MessageCircle } from 'lucide-react';
+import { CENTRO_ALERTAS_TYPES } from '../services/alertService';
 import { usePagination } from '../hooks/usePagination';
 import { PaginationControls } from './PaginationControls';
 import { useExportToExcel } from '../hooks/useExportToExcel';
@@ -15,6 +16,7 @@ interface AlertPanelProps {
 export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onSaveAlert }) => {
   const [selectedSeverity, setSelectedSeverity] = useState<'ALL' | AlertSeverity>('ALL');
   const [selectedType, setSelectedType] = useState<'ALL' | AlertType>('ALL');
+  const [selectedSource, setSelectedSource] = useState<'ALL' | string>('ALL');
   const [searchText, setSearchText] = useState('');
   const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -62,9 +64,14 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
     );
   };
 
-  const filteredAlerts = alerts.filter(alert => {
+  // El Centro de Alertas solo muestra estos tipos de alerta; el resto queda
+  // disponible en el historial / Auto-Guardadas, no aquí.
+  const visibleAlerts = alerts.filter(alert => CENTRO_ALERTAS_TYPES.includes(alert.type));
+
+  const filteredAlerts = visibleAlerts.filter(alert => {
     if (selectedSeverity !== 'ALL' && alert.severity !== selectedSeverity) return false;
     if (selectedType !== 'ALL' && alert.type !== selectedType) return false;
+    if (selectedSource !== 'ALL' && alert.source !== selectedSource) return false;
 
     // Búsqueda de texto en múltiples campos
     if (searchText) {
@@ -83,7 +90,8 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
     return true;
   });
 
-  const alertTypes = Array.from(new Set(alerts.map(a => a.type)));
+  const alertTypes = Array.from(new Set(visibleAlerts.map(a => a.type)));
+  const alertSources = Array.from(new Set(visibleAlerts.map(a => a.source))).filter(Boolean);
 
   // Hook de paginación
   const pagination = usePagination(filteredAlerts, {
@@ -154,6 +162,21 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
             <option value="ALL">Todos</option>
             {alertTypes.map(type => (
               <option key={type} value={type}>{type}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Filtro Fuente / Plataforma */}
+        <div className="flex items-center gap-2">
+          <label className="text-sm font-semibold text-slate-600">Plataforma:</label>
+          <select
+            value={selectedSource}
+            onChange={(e) => setSelectedSource(e.target.value)}
+            className="px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
+          >
+            <option value="ALL">Todas</option>
+            {alertSources.map(source => (
+              <option key={source} value={source}>{source}</option>
             ))}
           </select>
         </div>

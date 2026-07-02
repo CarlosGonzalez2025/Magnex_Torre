@@ -1,4 +1,4 @@
-import { Vehicle, Alert, AlertType, AlertSeverity, ApiSource } from '../types';
+import { Vehicle, Alert, AlertType, AlertSeverity, ApiSource, GeotabExceptionEvent } from '../types';
 import { saveIdleTimeRecord, saveIgnitionEvent } from './towerControlService';
 import { getAlertSeverityMap } from './alertSeverityConfigService';
 import { normalizeAlertTimestamp } from './dateNormalization';
@@ -9,6 +9,17 @@ const ALERT_THRESHOLDS = {
   IDLE_TIME_MINUTES: 10,
   LOW_FUEL: 15, // porcentaje
 };
+
+/**
+ * Tipos de alerta que se muestran en el Centro de Alertas (vista en vivo).
+ * El resto de tipos se sigue detectando y guardando, pero solo queda visible
+ * en el historial / Auto-Guardadas, no en el Centro de Alertas.
+ */
+export const CENTRO_ALERTAS_TYPES: AlertType[] = [
+  AlertType.SPEED_VIOLATION,
+  AlertType.GEOFENCE_EXIT,
+  AlertType.PANIC_BUTTON,
+];
 
 // 📋 Mapa de configuración de severidad (se carga desde Supabase)
 let severityConfigMap: Map<string, AlertSeverity> = new Map();
@@ -218,6 +229,77 @@ export function detectAlerts(vehicle: Vehicle): Alert[] {
 }
 
 /**
+ * Mapea el nombre de una regla de Geotab a (AlertType, severidad por defecto).
+ * Geotab ya calcula estos eventos con sus reglas, así que confiamos en el
+ * ExceptionEvent en vez de adivinar por texto como en detectAlerts().
+ * Reglas sin equivalente directo (curvas/cornering, cinturón) caen en
+ * GENERAL_ALERT conservando el nombre de la regla en los detalles.
+ */
+function mapGeotabRuleToType(ruleName: string): { type: AlertType; severity: AlertSeverity } | null {
+  const n = (ruleName || '').toLowerCase();
+
+  // Excluir fallas/diagnóstico de motor: no son alertas de conducción/seguridad
+  // para la torre en vivo. Siguen quedando en el historial (worker de backend).
+  if (n.includes('engine') || n.includes('fault') || n.includes('diagnostic') || n.includes('malfunction') || n.includes('dtc')) {
+    return null;
+  }
+
+  if (n.includes('exceso') && n.includes('velocidad')) return { type: AlertType.SPEED_VIOLATION, severity: AlertSeverity.CRITICAL };
+  if (n.includes('speeding')) return { type: AlertType.SPEED_VIOLATION, severity: AlertSeverity.CRITICAL };
+  if (n.includes('collision') || n.includes('colision') || n.includes('crash')) return { type: AlertType.COLLISION, severity: AlertSeverity.CRITICAL };
+  // Cubre "Hard Acceleration", "Harsh Acceleration (New)", etc.
+  if (n.includes('acceleration') || n.includes('aceleraci')) return { type: AlertType.HARSH_ACCELERATION, severity: AlertSeverity.HIGH };
+  // Cubre "Harsh Braking", "Harsh Braking (New)", "Hard Braking", "Frenada".
+  if (n.includes('brak') || n.includes('frenada')) return { type: AlertType.HARSH_BRAKING, severity: AlertSeverity.HIGH };
+  if (n.includes('idle') || n.includes('idling') || n.includes('ralent')) return { type: AlertType.IDLE_EXCESSIVE, severity: AlertSeverity.MEDIUM };
+
+  return { type: AlertType.GENERAL_ALERT, severity: AlertSeverity.MEDIUM };
+}
+
+/**
+ * Convierte los ExceptionEvent de Geotab (entregados por /api/geotab action:'alerts')
+ * en alertas de la app. El id es estable (`geotab-<eventId>`) para deduplicar de
+ * forma natural entre refrescos y para alinear con el alert_id que usa el worker
+ * de backend (alert-monitor), evitando duplicados en saved_alerts.
+ */
+export function buildGeotabAlerts(events: GeotabExceptionEvent[]): Alert[] {
+  if (!Array.isArray(events)) return [];
+
+  return events.flatMap(ev => {
+    const ruleName = ev.ruleName || '';
+    // Ignorar reglas sin nombre legible (Geotab devuelve el id crudo cuando la
+    // regla no está en el mapa de nombres, p.ej. "avrEaN0-ECECIfivL7Gdbbg"):
+    // no aportan como alerta de torre y ensucian el panel.
+    if (!ruleName || (/^[A-Za-z0-9_-]{16,}$/.test(ruleName) && !/\s/.test(ruleName))) {
+      return [];
+    }
+
+    const mapped = mapGeotabRuleToType(ruleName);
+    // null = regla de diagnóstico/motor excluida del panel en vivo.
+    if (!mapped) return [];
+    const severity = getSeverityForType(mapped.type, mapped.severity);
+
+    return [normalizeAlertTimestamp({
+      id: `geotab-${ev.id}`,
+      vehicleId: `GEO-${ev.deviceId || ev.plate || 'UNKNOWN'}`,
+      plate: ev.plate || 'DESCONOCIDO',
+      type: mapped.type,
+      severity,
+      timestamp: ev.activeFrom || new Date().toISOString(),
+      location: 'Ver en Geotab',
+      latitude: 0,
+      longitude: 0,
+      speed: 0,
+      driver: 'Sin asignar',
+      source: ApiSource.GEOTAB,
+      contract: 'No asignado',
+      details: `Regla Geotab: ${ruleName}`,
+      sent: false
+    })];
+  });
+}
+
+/**
  * Crea un objeto de alerta
  * IMPORTANTE: Usa vehicle.lastUpdate como timestamp para mantener la hora real del evento
  * y evitar que las alertas cambien de hora con cada actualización del sistema
@@ -259,8 +341,30 @@ export function saveAlertsToStorage(alerts: Alert[]): void {
     const existing = getAlertsFromStorage();
     const combined = [...alerts, ...existing].map(normalizeAlertTimestamp);
 
-    // Mantener solo las últimas 500 alertas
-    const limited = combined.slice(0, 500);
+    // Deduplicar por id conservando las banderas de estado (enviada/guardada)
+    // que pudieran existir en cualquiera de las copias. Necesario porque el
+    // llamador ya fusiona con las existentes: sin esto los duplicados crecerían.
+    const byId = new Map<string, Alert>();
+    for (const alert of combined) {
+      const prev = byId.get(alert.id);
+      if (!prev) {
+        byId.set(alert.id, alert);
+        continue;
+      }
+      byId.set(alert.id, {
+        ...alert,
+        sent: alert.sent || prev.sent,
+        sentAt: alert.sentAt || prev.sentAt,
+        sentBy: alert.sentBy || prev.sentBy,
+        saved: alert.saved || prev.saved,
+        savedToDatabase: (alert as any).savedToDatabase || (prev as any).savedToDatabase,
+        savedAt: (alert as any).savedAt || (prev as any).savedAt,
+      } as Alert);
+    }
+
+    // Sin límite artificial de 500: la retención real la controla cleanOldAlerts().
+    // Se mantiene un tope alto solo como salvaguarda contra la cuota de localStorage.
+    const limited = Array.from(byId.values()).slice(0, 5000);
 
     localStorage.setItem('fleet_alerts', JSON.stringify(limited));
   } catch (error) {
