@@ -298,11 +298,13 @@ function mapGeotabRule(ruleName: string): { type: string; severity: string } | n
   if (n.includes('exceso') && n.includes('velocidad')) return { type: 'Exceso de Velocidad', severity: 'critical' };
   if (n.includes('speeding')) return { type: 'Exceso de Velocidad', severity: 'critical' };
   if (n.includes('collision') || n.includes('colision') || n.includes('crash')) return { type: 'Colisión', severity: 'critical' };
-  if (n.includes('hard acceleration') || n.includes('aceleraci')) return { type: 'Aceleración Brusca', severity: 'high' };
-  if (n.includes('harsh brak') || n.includes('hard brak') || n.includes('frenada')) return { type: 'Frenada Brusca', severity: 'high' };
+  // Cubre "Hard Acceleration", "Harsh Acceleration (New)", etc.
+  if (n.includes('acceleration') || n.includes('aceleraci')) return { type: 'Aceleración Brusca', severity: 'high' };
+  // Cubre "Harsh Braking", "Harsh Braking (New)", "Hard Braking", "Frenada".
+  if (n.includes('brak') || n.includes('frenada')) return { type: 'Frenada Brusca', severity: 'high' };
   if (n.includes('cornering') || n.includes('curva')) return { type: 'Conducción Brusca', severity: 'high' };
   if (n.includes('seat belt') || n.includes('cintur')) return { type: 'Cinturón de Seguridad', severity: 'medium' };
-  if (n.includes('idle') || n.includes('ralent')) return { type: 'Ralentí Excesivo', severity: 'medium' };
+  if (n.includes('idle') || n.includes('idling') || n.includes('ralent')) return { type: 'Ralentí Excesivo', severity: 'medium' };
 
   // Reglas no mapeadas: las guardamos con su nombre original como tipo.
   if (ruleName) return { type: ruleName, severity: 'medium' };

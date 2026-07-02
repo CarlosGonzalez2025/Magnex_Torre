@@ -1,4 +1,4 @@
-import { Vehicle, ApiSource, VehicleStatus } from '../types';
+import { Vehicle, ApiSource, VehicleStatus, GeotabExceptionEvent } from '../types';
 import { generateMockVehicles } from './mockData';
 
 const BACKEND_API_URL = 'http://localhost:8000/api';
@@ -391,6 +391,41 @@ const fetchGeotabViaAPI = async (): Promise<Vehicle[]> => {
 
   } catch (error) {
     console.warn('Geotab serverless function failed:', error);
+    return [];
+  }
+};
+
+
+/**
+ * Obtiene los eventos de excepción (alertas por regla) de Geotab vía la función
+ * serverless de Vercel (action:'alerts').
+ *
+ * Se consulta aparte de fetchGeotabViaAPI porque el snapshot en vivo
+ * (posición/velocidad de DeviceStatusInfo) NO puede expresar los eventos que
+ * Geotab ya calcula con sus reglas (frenada, aceleración, colisión, ralentí…).
+ * El proxy comparte la sesión cacheada, así que la llamada extra es barata.
+ */
+export const fetchGeotabAlertsViaAPI = async (): Promise<GeotabExceptionEvent[]> => {
+  try {
+    const response = await fetch('/api/geotab', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'alerts' })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Geotab alerts serverless function returned ${response.status}`);
+    }
+
+    const result = await response.json();
+
+    if (!result.success || !result.data) {
+      throw new Error('Invalid response from Geotab alerts serverless function');
+    }
+
+    return Array.isArray(result.data.events) ? result.data.events : [];
+  } catch (error) {
+    console.warn('Geotab alerts serverless function failed:', error);
     return [];
   }
 };

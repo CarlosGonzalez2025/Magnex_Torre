@@ -35,8 +35,8 @@ import { ContractAnalysis } from './components/reports/ContractAnalysis';
 import { TelemetryProcessor } from './components/reports/TelemetryProcessor';
 import { RalentiReports } from './components/reports/RalentiReports';
 import { GeotabPanel } from './components/GeotabPanel';
-import { fetchFleetData, FleetResponse } from './services/fleetService';
-import { detectAlerts, saveAlertsToStorage, getAlertsFromStorage, getUnsavedAlerts, markAlertAsSent, markAlertAsSaved, cleanOldAlerts, processVehiclesForIdleDetection } from './services/alertService';
+import { fetchFleetData, FleetResponse, fetchGeotabAlertsViaAPI } from './services/fleetService';
+import { detectAlerts, buildGeotabAlerts, CENTRO_ALERTAS_TYPES, saveAlertsToStorage, getAlertsFromStorage, getUnsavedAlerts, markAlertAsSent, markAlertAsSaved, cleanOldAlerts, processVehiclesForIdleDetection } from './services/alertService';
 import { saveAlertToDatabase, autoSaveAlert } from './services/databaseService';
 import { useAutoCleanup } from './hooks/useAutoCleanup';
 import audioEngine from './services/alertSoundService';
@@ -125,18 +125,32 @@ export default function App() {
     await processVehiclesForIdleDetection(result.data);
 
     // Detect and process alerts
+    // - Coltrack/Fagor: se deducen del snapshot en vivo (velocidad + texto de evento)
     const newAlerts: Alert[] = [];
     result.data.forEach(vehicle => {
       const vehicleAlerts = detectAlerts(vehicle);
       newAlerts.push(...vehicleAlerts);
     });
 
-    // Combine with existing alerts from storage
-    const existingAlerts = getAlertsFromStorage();
-    const allAlerts = [...newAlerts, ...existingAlerts];
+    // - Geotab: los eventos NO se pueden deducir del snapshot; se traen los
+    //   ExceptionEvent ya calculados por sus reglas (última hora) vía /api/geotab.
+    let geotabAlerts: Alert[] = [];
+    try {
+      geotabAlerts = buildGeotabAlerts(await fetchGeotabAlertsViaAPI());
+    } catch (error) {
+      console.warn('No se pudieron obtener las alertas de Geotab:', error);
+    }
 
-    // Remove duplicates (same vehicle + same type within last 5 minutes)
-    const uniqueAlerts = allAlerts.filter((alert, index, self) => {
+    // Separar el almacenamiento previo: las alertas de excepción de Geotab
+    // (id `geotab-*`) son eventos discretos y NO deben pasar por el filtro de
+    // 5 min pensado para snapshots en vivo (las descartaría por antigüedad).
+    const existingAlerts = getAlertsFromStorage();
+    const existingLiveAlerts = existingAlerts.filter(a => !a.id.startsWith('geotab-'));
+    const existingGeotabAlerts = existingAlerts.filter(a => a.id.startsWith('geotab-'));
+
+    // Coltrack/Fagor + velocidad Geotab: dedup por (vehículo, tipo) en ventana de 5 min
+    const allLiveAlerts = [...newAlerts, ...existingLiveAlerts];
+    const uniqueLiveAlerts = allLiveAlerts.filter((alert, index, self) => {
       const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
       return index === self.findIndex(a =>
         a.vehicleId === alert.vehicleId &&
@@ -145,29 +159,47 @@ export default function App() {
       );
     });
 
-    saveAlertsToStorage(uniqueAlerts);
+    // Geotab (excepciones): dedup por id estable, reteniendo la última hora
+    // (misma ventana que consulta el proxy) para que se mantengan visibles.
+    const geotabCutoff = Date.now() - 60 * 60 * 1000;
+    const geotabById = new Map<string, Alert>();
+    for (const alert of [...existingGeotabAlerts, ...geotabAlerts]) {
+      if (new Date(alert.timestamp).getTime() >= geotabCutoff) {
+        geotabById.set(alert.id, alert);
+      }
+    }
+
+    // Alertas de Geotab realmente nuevas (no vistas en refrescos previos):
+    // solo estas disparan sonido y guardado, para no repetir en cada ciclo.
+    const knownGeotabIds = new Set(existingGeotabAlerts.map(a => a.id));
+    const newGeotabAlerts = geotabAlerts.filter(a => !knownGeotabIds.has(a.id));
+
+    const finalAlerts = [...uniqueLiveAlerts, ...geotabById.values()];
+
+    saveAlertsToStorage(finalAlerts);
     cleanOldAlerts(12); // Mantener alertas por 12 horas (turno operativo)
     setAlerts(getUnsavedAlerts());
 
     // 🆕 GUARDADO AUTOMÁTICO: Guardar TODAS las alertas nuevas en saved_alerts
     // Esto se hace en segundo plano sin bloquear la UI
-    if (newAlerts.length > 0) {
+    const newAlertsToPersist = [...newAlerts, ...newGeotabAlerts];
+    if (newAlertsToPersist.length > 0) {
       // 🔍 LOG DE DIAGNÓSTICO: Contar alertas críticas detectadas
-      const criticalAlerts = newAlerts.filter(a => a.severity === 'critical');
+      const criticalAlerts = newAlertsToPersist.filter(a => a.severity === 'critical');
       if (criticalAlerts.length > 0) {
-        console.log(`🚨 [DIAGNÓSTICO] Detectadas ${criticalAlerts.length} alertas CRÍTICAS de ${newAlerts.length} totales:`,
+        console.log(`🚨 [DIAGNÓSTICO] Detectadas ${criticalAlerts.length} alertas CRÍTICAS de ${newAlertsToPersist.length} totales:`,
           criticalAlerts.map(a => ({ plate: a.plate, type: a.type, severity: a.severity }))
         );
       }
 
       Promise.all(
-        newAlerts.map(alert => autoSaveAlert(alert))
+        newAlertsToPersist.map(alert => autoSaveAlert(alert))
       ).catch(error => {
         console.error('Error auto-guardando alertas en saved_alerts:', error);
       });
 
       // 🔊 SONIDOS: Reproducir sonido para cada alerta nueva
-      newAlerts.forEach(alert => {
+      newAlertsToPersist.forEach(alert => {
         audioEngine.playAlert(alert).catch(error => {
           console.error('Error reproduciendo sonido de alerta:', error);
         });
@@ -343,8 +375,10 @@ export default function App() {
     }
   };
 
+  // Solo cuenta críticas de los tipos visibles en el Centro de Alertas, para
+  // que el badge del menú coincida con lo que realmente se muestra allí.
   const criticalAlertsCount = useMemo(() =>
-    alerts.filter(a => a.severity === 'critical' && !a.sent).length,
+    alerts.filter(a => a.severity === 'critical' && !a.sent && CENTRO_ALERTAS_TYPES.includes(a.type)).length,
     [alerts]
   );
 

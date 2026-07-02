@@ -59,6 +59,21 @@ export interface Alert {
   saved?: boolean; // Si ya fue guardada en historial
 }
 
+/**
+ * Evento de excepción de Geotab (ya calculado por sus reglas), tal como lo
+ * entrega el proxy /api/geotab con action:'alerts'. Es la fuente de las
+ * alertas de Geotab: NO se deducen por texto como en Coltrack/Fagor.
+ */
+export interface GeotabExceptionEvent {
+  id: string;
+  plate?: string;
+  deviceId?: string;
+  ruleId?: string;
+  ruleName?: string;
+  activeFrom?: string;
+  activeTo?: string;
+}
+
 export interface Vehicle {
   id: string;
   plate: string;

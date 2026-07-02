@@ -32,6 +32,7 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
   // Filters
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'pending' | 'in_progress' | 'resolved'>('ALL');
   const [severityFilter, setSeverityFilter] = useState<'ALL' | 'critical' | 'high' | 'medium' | 'low'>('ALL');
+  const [sourceFilter, setSourceFilter] = useState<'ALL' | string>('ALL');
   const [movedFilter, setMovedFilter] = useState<'ALL' | 'MOVED' | 'NOT_MOVED'>('NOT_MOVED'); // Default: hide moved alerts
   const [searchText, setSearchText] = useState('');
   const [startDate, setStartDate] = useState('');
@@ -43,6 +44,9 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
     // 🔄 FILTRO DE ALERTAS MOVIDAS AL HISTORIAL
     if (movedFilter === 'MOVED' && !alert.moved_to_history) return false;
     if (movedFilter === 'NOT_MOVED' && alert.moved_to_history) return false;
+
+    // 🛰️ FILTRO POR FUENTE / PLATAFORMA
+    if (sourceFilter !== 'ALL' && alert.source !== sourceFilter) return false;
 
     // 🔍 BÚSQUEDA DE TEXTO - Mejorada con manejo de null/undefined
     if (searchText && searchText.trim()) {
@@ -94,6 +98,9 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
 
     return true;
   });
+
+  // Fuentes / plataformas disponibles en las alertas cargadas
+  const availableSources = Array.from(new Set(alerts.map(a => a.source))).filter(Boolean);
 
   // Hook de paginación
   const pagination = usePagination(filteredAndSearchedAlerts, {
@@ -517,6 +524,18 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
             <option value="high">⚠️ Altas</option>
             <option value="medium">📢 Medias</option>
             <option value="low">ℹ️ Bajas</option>
+          </select>
+
+          {/* Filtro Fuente / Plataforma */}
+          <select
+            value={sourceFilter}
+            onChange={(e) => setSourceFilter(e.target.value)}
+            className="px-2 py-1.5 text-xs border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-sky-500"
+          >
+            <option value="ALL">🛰️ Todas las plataformas</option>
+            {availableSources.map(source => (
+              <option key={source} value={source}>{source}</option>
+            ))}
           </select>
 
           {/* Filtro Movidas a Historial */}
