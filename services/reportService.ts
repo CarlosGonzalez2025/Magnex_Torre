@@ -273,6 +273,23 @@ function tieneGpsConfigurado(value: unknown): boolean {
   return Boolean(normalizado) && !['NO', 'N/A', 'NA', 'SIN GPS', 'NINGUNO', 'NO APLICA', '0'].includes(normalizado);
 }
 
+// Valores de "conductor" que representan la ausencia de un conductor registrado.
+const CONDUCTORES_SIN_IDENTIFICAR = [
+  'NO REGISTRA', 'NOREGISTRA', 'SIN CONDUCTOR', 'NO IDENTIFICADO', 'SIN IDENTIFICAR',
+  'N/A', 'NA', 'NINGUNO', 'DESCONOCIDO', 'SIN ASIGNAR', 'NO APLICA', 'SIN DATO',
+];
+
+/**
+ * Un conductor está identificado cuando su nombre es un valor real (registrado),
+ * no vacío ni un marcador de ausencia (N/A, "Sin conductor", "NO REGISTRA", etc.).
+ * La identificación se decide por el NOMBRE, no por el flag `conductor_identificado`
+ * de BD (que puede quedar en false aun habiendo conductor registrado).
+ */
+export function esConductorIdentificado(value: unknown): boolean {
+  const txt = normalizeText(value);
+  return Boolean(txt) && !CONDUCTORES_SIN_IDENTIFICAR.includes(txt);
+}
+
 function esMoto(tipo: unknown): boolean {
   return normalizeText(tipo).includes('MOTO');
 }
@@ -935,11 +952,14 @@ export async function getReporteAlertasDiarias(filtro: Pick<FiltroReporte, 'fech
     .filter(r => !!r.vehiculo_id && !!vehiculosActivos[String(r.vehiculo_id)])
     .map((r) => {
       const veh = vehiculosActivos[String(r.vehiculo_id)] ?? {};
+      const conductorNombre = String(r.conductor ?? '');
       return {
         id: String(r.id),
         placa: String(r.placa ?? veh.placa ?? ''),
-        conductor: String(r.conductor ?? ''),
-        conductor_identificado: Boolean(r.conductor_identificado),
+        conductor: conductorNombre,
+        // Identificación por nombre real, no por el flag de BD (que llega en false
+        // aun con conductor registrado y marcaba todo como "sin identificar").
+        conductor_identificado: esConductorIdentificado(conductorNombre),
         lugar: String(r.lugar ?? ''),
         latitud: Number(r.latitud ?? 0),
         longitud: Number(r.longitud ?? 0),
@@ -1103,6 +1123,22 @@ export async function listarAlertasDiarias(filtro: Pick<FiltroReporte, 'fechaIni
     .lte('fecha_dia', filtro.fechaFin)
     .not('vehiculo_id', 'is', null)
     .order('fecha', { ascending: false });
+  if (filtro.contratoId) q = q.eq('contrato_id', filtro.contratoId);
+  return fetchAllRows<Record<string, unknown>>(q);
+}
+
+/**
+ * Versión ligera para el overview de "Contratos con alertas": solo las columnas
+ * necesarias para agrupar (sin `raw_data` ni orden), lo que reduce drásticamente el
+ * payload frente a `listarAlertasDiarias` (que trae `select('*')`).
+ */
+export async function listarAlertasDiariasResumen(filtro: Pick<FiltroReporte, 'fechaInicio' | 'fechaFin' | 'contratoId'>) {
+  let q = supabase
+    .from('alertas_diarias_gps')
+    .select('contrato_id, contrato_nombre, placa, conductor, fecha_dia, infraccion_80_kmh, excesos_50_80_kmh, excesos_varios_parametros, frenadas_bruscas')
+    .gte('fecha_dia', filtro.fechaInicio)
+    .lte('fecha_dia', filtro.fechaFin)
+    .not('vehiculo_id', 'is', null);
   if (filtro.contratoId) q = q.eq('contrato_id', filtro.contratoId);
   return fetchAllRows<Record<string, unknown>>(q);
 }

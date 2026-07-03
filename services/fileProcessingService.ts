@@ -66,74 +66,82 @@ function parseNumeric(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+// Zona horaria operativa de la flota: Colombia (UTC-5, sin horario de verano).
+// Se usa solo para convertir timestamps que traen zona EXPLÍCITA (p.ej. Geotab en UTC)
+// al día/hora de la operación. Los archivos de FAGOR/COLTRACK ya vienen en hora local.
+const OPERACION_OFFSET_MIN = -5 * 60;
+
+const pad2 = (v: number) => String(v).padStart(2, '0');
+
+/** ISO "naive" (sin zona), preservando el reloj de pared: 'YYYY-MM-DDTHH:MM:SS'. */
+function isoLocal(y: number, mo: number, d: number, h = 0, mi = 0, s = 0): string {
+  return `${y}-${pad2(mo)}-${pad2(d)}T${pad2(h)}:${pad2(mi)}:${pad2(s)}`;
+}
+
+/** Instante absoluto → reloj de pared de la operación (UTC-5), formateado naive. */
+function instanteAOperacion(instant: Date): string {
+  const shifted = new Date(instant.getTime() + OPERACION_OFFSET_MIN * 60000);
+  return isoLocal(
+    shifted.getUTCFullYear(), shifted.getUTCMonth() + 1, shifted.getUTCDate(),
+    shifted.getUTCHours(), shifted.getUTCMinutes(), shifted.getUTCSeconds()
+  );
+}
+
+/** Date local → naive tomando sus componentes locales (sin pasar por UTC). */
+function fechaLocalNaive(d: Date): string {
+  return isoLocal(d.getFullYear(), d.getMonth() + 1, d.getDate(), d.getHours(), d.getMinutes(), d.getSeconds());
+}
+
+/**
+ * Convierte cualquier timestamp de plataforma a ISO "naive" (hora local de la
+ * operación, sin sufijo Z). Clave para que `fecha_dia = timestamp.slice(0,10)`
+ * refleje el día CALENDARIO correcto: nunca se aplica una conversión a UTC que
+ * corra el día (bug previo: eventos de la noche caían al día siguiente).
+ */
 function parseTimestampToISO(timestamp: unknown): string {
-  if (!timestamp) {
-    return new Date().toISOString();
+  if (timestamp === null || timestamp === undefined || timestamp === '') {
+    return fechaLocalNaive(new Date());
   }
 
+  // Date (xlsx/csv con cellDates): se toma su reloj de pared local, no UTC.
   if (timestamp instanceof Date && !isNaN(timestamp.getTime())) {
-    return timestamp.toISOString();
+    return fechaLocalNaive(timestamp);
   }
 
+  // Serial de Excel: SSF entrega el reloj de pared del archivo → naive directo.
   if (typeof timestamp === 'number' && Number.isFinite(timestamp)) {
-    const parsedDate = XLSX.SSF.parse_date_code(timestamp);
-    if (parsedDate) {
-      const dateObj = new Date(Date.UTC(
-        parsedDate.y,
-        parsedDate.m - 1,
-        parsedDate.d,
-        parsedDate.H,
-        parsedDate.M,
-        Math.floor(parsedDate.S)
-      ));
-      if (!isNaN(dateObj.getTime())) {
-        return dateObj.toISOString();
-      }
-    }
+    const d = XLSX.SSF.parse_date_code(timestamp);
+    if (d) return isoLocal(d.y, d.m, d.d, d.H ?? 0, d.M ?? 0, Math.floor(d.S ?? 0));
   }
 
-  const timestampStr = timestamp.toString().trim();
+  const s = timestamp.toString().trim();
 
-  // Intentar parsear formato DD/MM/YYYY HH:MM:SS (FAGOR)
-  const ddmmyyyyPattern = /^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{1,2}):(\d{1,2})$/;
-  const match = timestampStr.match(ddmmyyyyPattern);
-
-  if (match) {
-    const [, day, month, year, hours, minutes, seconds] = match;
-    // Crear fecha en formato ISO: YYYY-MM-DDTHH:MM:SS.000Z
-    const isoDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}T${hours.padStart(2, '0')}:${minutes.padStart(2, '0')}:${seconds.padStart(2, '0')}.000Z`;
-
-    // Validar que la fecha sea válida
-    const dateObj = new Date(isoDate);
-    if (!isNaN(dateObj.getTime())) {
-      return dateObj.toISOString();
-    }
+  // FAGOR: DD/MM/YYYY [HH:MM[:SS]] → hora local del archivo, naive directo.
+  const dmy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?$/);
+  if (dmy) {
+    return isoLocal(+dmy[3], +dmy[2], +dmy[1], +(dmy[4] ?? 0), +(dmy[5] ?? 0), +(dmy[6] ?? 0));
   }
 
-  // Intentar parsear formato YYYY-MM-DD HH:MM:SS o YYYY/MM/DD HH:MM:SS (COLTRACK / otros)
-  const yyyymmddPattern = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[\sT](\d{1,2}):(\d{2})(?::(\d{2}))?)?/;
-  const matchYMD = timestampStr.match(yyyymmddPattern);
-  if (matchYMD) {
-    const [, year, month, day, hours = '00', minutes = '00', seconds = '00'] = matchYMD;
-    const isoDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}T${hours.padStart(2, '0')}:${minutes.padStart(2, '0')}:${seconds.padStart(2, '0')}.000Z`;
-    const dateObj = new Date(isoDate);
-    if (!isNaN(dateObj.getTime())) {
-      return dateObj.toISOString();
-    }
+  // ISO con zona EXPLÍCITA (Z u offset), p.ej. Geotab en UTC → instante real → hora operación.
+  if (/^\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}.*(?:Z|[+-]\d{2}:?\d{2})$/.test(s)) {
+    const inst = new Date(s);
+    if (!isNaN(inst.getTime())) return instanteAOperacion(inst);
   }
 
-  // Intentar parsear como fecha ISO directa
-  try {
-    const dateObj = new Date(timestampStr);
-    if (!isNaN(dateObj.getTime())) {
-      return dateObj.toISOString();
-    }
-  } catch (e) {
-    console.warn('⚠️ No se pudo parsear timestamp:', timestampStr);
+  // COLTRACK / otros: YYYY-MM-DD o YYYY/MM/DD [HH:MM[:SS]] SIN zona → hora local, naive directo.
+  const ymd = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[\sT](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (ymd) {
+    return isoLocal(+ymd[1], +ymd[2], +ymd[3], +(ymd[4] ?? 0), +(ymd[5] ?? 0), +(ymd[6] ?? 0));
   }
 
-  // Fallback: fecha actual
-  return new Date().toISOString();
+  // Último recurso: si el string trae zona se convierte a operación; si no, componentes locales.
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) {
+    return /(?:Z|[+-]\d{2}:?\d{2})$/.test(s) ? instanteAOperacion(d) : fechaLocalNaive(d);
+  }
+
+  console.warn('⚠️ No se pudo parsear timestamp:', s);
+  return fechaLocalNaive(new Date());
 }
 
 // ==================== FAGOR PROCESSOR ====================
