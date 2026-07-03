@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Alert, AlertSeverity, AlertType } from '../types';
 import { AlertTriangle, AlertCircle, Bell, BellRing, Copy, CheckCircle, Clock, MapPin, User, Gauge, Save, FileDown, Search, MessageCircle } from 'lucide-react';
-import { CENTRO_ALERTAS_TYPES } from '../services/alertService';
+import { esAlertaVisibleCentroAlertas } from '../services/alertService';
 import { usePagination } from '../hooks/usePagination';
 import { PaginationControls } from './PaginationControls';
 import { useExportToExcel } from '../hooks/useExportToExcel';
@@ -64,9 +64,9 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
     );
   };
 
-  // El Centro de Alertas solo muestra estos tipos de alerta; el resto queda
-  // disponible en el historial / Auto-Guardadas, no aquí.
-  const visibleAlerts = alerts.filter(alert => CENTRO_ALERTAS_TYPES.includes(alert.type));
+  // El Centro de Alertas solo muestra ciertos tipos de alerta y, en excesos de
+  // velocidad, únicamente los >= 80 km/h. El resto queda en el historial.
+  const visibleAlerts = alerts.filter(esAlertaVisibleCentroAlertas);
 
   const filteredAlerts = visibleAlerts.filter(alert => {
     if (selectedSeverity !== 'ALL' && alert.severity !== selectedSeverity) return false;

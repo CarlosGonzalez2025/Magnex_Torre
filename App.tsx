@@ -36,7 +36,7 @@ import { TelemetryProcessor } from './components/reports/TelemetryProcessor';
 import { RalentiReports } from './components/reports/RalentiReports';
 import { GeotabPanel } from './components/GeotabPanel';
 import { fetchFleetData, FleetResponse, fetchGeotabAlertsViaAPI } from './services/fleetService';
-import { detectAlerts, buildGeotabAlerts, CENTRO_ALERTAS_TYPES, saveAlertsToStorage, getAlertsFromStorage, getUnsavedAlerts, markAlertAsSent, markAlertAsSaved, cleanOldAlerts, processVehiclesForIdleDetection } from './services/alertService';
+import { detectAlerts, buildGeotabAlerts, esAlertaVisibleCentroAlertas, saveAlertsToStorage, getAlertsFromStorage, getUnsavedAlerts, markAlertAsSent, markAlertAsSaved, cleanOldAlerts, processVehiclesForIdleDetection } from './services/alertService';
 import { saveAlertToDatabase, autoSaveAlert } from './services/databaseService';
 import { useAutoCleanup } from './hooks/useAutoCleanup';
 import audioEngine from './services/alertSoundService';
@@ -378,7 +378,7 @@ export default function App() {
   // Solo cuenta críticas de los tipos visibles en el Centro de Alertas, para
   // que el badge del menú coincida con lo que realmente se muestra allí.
   const criticalAlertsCount = useMemo(() =>
-    alerts.filter(a => a.severity === 'critical' && !a.sent && CENTRO_ALERTAS_TYPES.includes(a.type)).length,
+    alerts.filter(a => a.severity === 'critical' && !a.sent && esAlertaVisibleCentroAlertas(a)).length,
     [alerts]
   );
 
