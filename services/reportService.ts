@@ -326,17 +326,6 @@ export function clasificarAlertaDiaria(estado: unknown, velocidad: unknown): Cla
   return c;
 }
 
-/**
- * Filtro Postgres (`or`) para traer SOLO alertas reales (exceso de velocidad o
- * frenada) y excluir el ruido que no cuenta como alerta ("TDR Encendido/Apagado",
- * "GPS Adquirido", "Reconexion Equipo", etc.). Es un superconjunto de lo que
- * clasificarAlertaDiaria cuenta, así que NO cambia ningún total: solo reduce
- * drásticamente el volumen de filas (rendimiento). `*` es el comodín de PostgREST.
- */
-const FILTRO_SOLO_ALERTAS =
-  'estado.ilike.*exceso*,estado.ilike.*velocidad*,estado.ilike.*infracci*,' +
-  'estado.ilike.*limite*,estado.ilike.*speed*,estado.ilike.*frenad*,' +
-  'estado.ilike.*brake*,estado.ilike.*desaceler*';
 
 function esMoto(tipo: unknown): boolean {
   return normalizeText(tipo).includes('MOTO');
@@ -975,7 +964,6 @@ export async function getReporteAlertasDiarias(filtro: Pick<FiltroReporte, 'fech
     .gte('fecha_dia', filtro.fechaInicio)
     .lte('fecha_dia', filtro.fechaFin)
     .not('vehiculo_id', 'is', null)
-    .or(FILTRO_SOLO_ALERTAS)
     .order('fecha', { ascending: true });
 
   if (filtro.contratoId) q = q.eq('contrato_id', filtro.contratoId);
@@ -1177,7 +1165,6 @@ export async function listarAlertasDiarias(filtro: Pick<FiltroReporte, 'fechaIni
     .gte('fecha_dia', filtro.fechaInicio)
     .lte('fecha_dia', filtro.fechaFin)
     .not('vehiculo_id', 'is', null)
-    .or(FILTRO_SOLO_ALERTAS)
     .order('fecha', { ascending: false });
   if (filtro.contratoId) q = q.eq('contrato_id', filtro.contratoId);
   const rows = await fetchAllRows<Record<string, unknown>>(q);
@@ -1196,8 +1183,7 @@ export async function listarAlertasDiariasResumen(filtro: Pick<FiltroReporte, 'f
     .select('contrato_id, contrato_nombre, placa, conductor, estado, velocidad, fecha_dia')
     .gte('fecha_dia', filtro.fechaInicio)
     .lte('fecha_dia', filtro.fechaFin)
-    .not('vehiculo_id', 'is', null)
-    .or(FILTRO_SOLO_ALERTAS);
+    .not('vehiculo_id', 'is', null);
   if (filtro.contratoId) q = q.eq('contrato_id', filtro.contratoId);
   const rows = await fetchAllRows<Record<string, unknown>>(q);
   // Contadores recalculados desde nombre + velocidad (categoría al leer).
