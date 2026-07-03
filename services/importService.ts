@@ -4040,8 +4040,16 @@ export async function importarAlertasRaw(
       };
     });
 
+    // No guardar eventos que NO son alerta (TDR Encendido/Apagado, GPS Adquirido,
+    // Reconexión, etc.): mantienen la tabla liviana y rápida. Solo se registran los
+    // excesos de velocidad y las frenadas (los únicos que cuentan como alerta).
+    const datosAlerta = datosMapeados.filter(d =>
+      Number(d.infraccion_80_kmh) + Number(d.excesos_50_80_kmh) +
+      Number(d.excesos_varios_parametros) + Number(d.frenadas_bruscas) > 0
+    );
+
     // 5. Insertar registros usando el método existente insertAlertasDiarias
-    const insertResult = await insertAlertasDiarias(datosMapeados, 'daily', cargaId);
+    const insertResult = await insertAlertasDiarias(datosAlerta, 'daily', cargaId);
     
     // Actualizar estado de la carga
     const exito = insertResult.omitidos.length === 0;
