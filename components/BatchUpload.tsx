@@ -32,6 +32,11 @@ const normalizeText = (value: unknown) =>
     .trim()
     .toUpperCase();
 
+// La Auditor\u00eda de Flota solo muestra excesos de velocidad >= 80 km/h (faltas graves).
+// El parser marca is_grave = exceso >= 80. Se fuerza en todas las consultas; la carga
+// y el guardado de datos siguen igual (se conserva toda la informaci\u00f3n en la BD).
+const FILTRO_BASE = { isGrave: true } as const;
+
 export const BatchUpload: React.FC = () => {
   // ==================== STATE ====================
 
@@ -72,7 +77,6 @@ export const BatchUpload: React.FC = () => {
   const [selectedContracts, setSelectedContracts] = useState<string[]>([]);
   const [showContractDropdown, setShowContractDropdown] = useState(false);
   const [sourceFilter, setSourceFilter] = useState<'ALL' | 'FAGOR' | 'COLTRACK' | 'GEOTAB'>('ALL');
-  const [graveFilter, setGraveFilter] = useState<'ALL' | 'true' | 'false'>('ALL');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
 
@@ -175,9 +179,9 @@ export const BatchUpload: React.FC = () => {
   const loadSavedAlerts = async () => {
     setIsQuerying(true);
     console.log('⏳ Consultando alertas de batch_alerts...');
-    console.log('🔍 Cargando SIN FILTROS (todos los datos)');
-    
-    const result = await queryBatchAlerts({});
+    console.log('🔍 Cargando solo excesos >= 80 km/h (faltas graves)');
+
+    const result = await queryBatchAlerts({ ...FILTRO_BASE });
     if (result.success && result.data) {
       console.log(`✅ Alertas recibidas: ${result.data.length}`);
 
@@ -210,7 +214,7 @@ export const BatchUpload: React.FC = () => {
     setIsLoadingAnalysis(true);
     console.log('📊 Generando análisis detallado...');
 
-    const result = await getDetailedAuditAnalysis(customFilters || filters);
+    const result = await getDetailedAuditAnalysis({ ...(customFilters || filters), ...FILTRO_BASE });
     if (result.success && result.data) {
       setDetailedAnalysis(result.data);
       console.log('✅ Análisis detallado cargado:', result.data);
@@ -352,7 +356,6 @@ export const BatchUpload: React.FC = () => {
       setSelectedAlertTypes([]);
       setSelectedContracts([]);
       setSourceFilter('ALL');
-      setGraveFilter('ALL');
       setStartDate('');
       setEndDate('');
       setFilters({});
@@ -380,7 +383,8 @@ export const BatchUpload: React.FC = () => {
     if (alertTypeSearch.trim()) newFilters.alertType = alertTypeSearch.trim();
     if (selectedAlertTypes.length > 0) newFilters.alertTypes = selectedAlertTypes;
     if (sourceFilter !== 'ALL') newFilters.source = sourceFilter as 'FAGOR' | 'COLTRACK' | 'GEOTAB';
-    if (graveFilter !== 'ALL') newFilters.isGrave = graveFilter === 'true';
+    // Siempre restringido a excesos >= 80 km/h (faltas graves).
+    newFilters.isGrave = true;
     if (startDate) newFilters.startDate = new Date(startDate).toISOString();
     if (endDate) newFilters.endDate = new Date(endDate).toISOString();
 
@@ -443,7 +447,6 @@ export const BatchUpload: React.FC = () => {
     setSelectedAlertTypes([]);
     setSelectedContracts([]);
     setSourceFilter('ALL');
-    setGraveFilter('ALL');
     setStartDate('');
     setEndDate('');
     setFilters({});
@@ -656,6 +659,7 @@ export const BatchUpload: React.FC = () => {
           Auditoría de Flota
         </h1>
         <p className="text-purple-100 mt-2">Carga masiva de reportes GPS (FAGOR, COLTRACK y GEOTAB)</p>
+        <p className="text-purple-100 mt-1 text-sm font-medium">Muestra únicamente los excesos de velocidad iguales o superiores a 80 km/h de las 3 plataformas.</p>
       </div>
 
       {/* 🆕 PANEL DE ANÁLISIS DETALLADO */}
@@ -1039,19 +1043,6 @@ export const BatchUpload: React.FC = () => {
               <option value="FAGOR">FAGOR</option>
               <option value="COLTRACK">COLTRACK</option>
               <option value="GEOTAB">GEOTAB</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Faltas Graves</label>
-            <select
-              value={graveFilter}
-              onChange={(e) => setGraveFilter(e.target.value as any)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-            >
-              <option value="ALL">Todas</option>
-              <option value="true">Solo Graves</option>
-              <option value="false">Solo No Graves</option>
             </select>
           </div>
 

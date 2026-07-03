@@ -21,6 +21,18 @@ export const CENTRO_ALERTAS_TYPES: AlertType[] = [
   AlertType.PANIC_BUTTON,
 ];
 
+/**
+ * ¿La alerta debe verse en el Centro de Alertas (vista en vivo)?
+ * - Debe ser un tipo permitido (CENTRO_ALERTAS_TYPES).
+ * - Para EXCESOS DE VELOCIDAD solo se muestran los >= 80 km/h, de cualquier
+ *   plataforma. Los excesos menores siguen en el historial, no aquí.
+ */
+export function esAlertaVisibleCentroAlertas(alert: Alert): boolean {
+  if (!CENTRO_ALERTAS_TYPES.includes(alert.type)) return false;
+  if (alert.type === AlertType.SPEED_VIOLATION && Number(alert.speed ?? 0) < ALERT_THRESHOLDS.SPEED_LIMIT) return false;
+  return true;
+}
+
 // 📋 Mapa de configuración de severidad (se carga desde Supabase)
 let severityConfigMap: Map<string, AlertSeverity> = new Map();
 
