@@ -6,7 +6,7 @@ import {
   Document, Page, Text, View, StyleSheet, Font, pdf,
   Image, Svg, Circle, Line, Path, Polyline, Rect,
 } from '@react-pdf/renderer';
-import { ContratoOption, ReporteAlertasDiariasData, AlertaDiariaGps, ReporteConductorData, ReporteVehiculoData } from './reportService';
+import { ContratoOption, ReporteAlertasDiariasData, AlertaDiariaGps, ReporteConductorData, ReporteVehiculoData, esConductorIdentificado } from './reportService';
 
 const magnexLogo = new URL('../Magnex.png', import.meta.url).href;
 const orionLogo = new URL('../Orion.png', import.meta.url).href;
@@ -1411,7 +1411,7 @@ function AlertasTable({
       ) : rows.slice(0, 12).map((r, i) => (
         <View key={`${title}-${r.placa}-${i}`} style={[base.tableRow, i % 2 ? base.tableRowAlt : {}]} wrap={false}>
           <Text style={[base.tableCell, { flex: 1, fontWeight: 700 }]}>{r.placa}</Text>
-          <Text style={[base.tableCell, { flex: 2.3, textAlign: 'left' }]}>{r.conductor}</Text>
+          <Text style={[base.tableCell, { flex: 2.3, textAlign: 'left' }, !esConductorIdentificado(r.conductor) && { color: COLORS.rojo, fontWeight: 700 }]}>{r.conductor}</Text>
           <Text style={[base.tableCell, { flex: 0.8, color: r.total > 0 ? COLORS.rojo : COLORS.negro, fontWeight: 700 }]}>{n(r.total)}</Text>
           <Text style={[base.tableCell, { flex: 1 }]}>{r.tipo}</Text>
         </View>
@@ -2126,7 +2126,7 @@ export function InformeGerencialAlertasDiariasPDF({ data }: { data: ReporteAlert
               </View>
             ) : (
               topOffenders.map((r, i) => {
-                const isSinIdentificar = r.conductor.toUpperCase().includes('SIN IDENTIFICAR') || r.conductor.toUpperCase().includes('NO REGISTRA');
+                const isSinIdentificar = !esConductorIdentificado(r.conductor);
                 const condLabel = isSinIdentificar ? 'SIN IDENTIFICAR (iButton)' : mayuscula(r.conductor);
                 const condColor = isSinIdentificar ? '#dc2626' : '#0f172a';
                 const condWeight = isSinIdentificar ? '700' : '400';

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { CalendarDays, Upload, FileText, RefreshCw, Download, BarChart3 } from 'lucide-react';
+import { CalendarDays, Upload, FileText, RefreshCw, Download, BarChart3, Mail, FileSpreadsheet } from 'lucide-react';
 import { ExcelDropzone } from './ExcelDropzone';
 import { ReportsTable, ErroresTable } from './ReportsTable';
 import { importarExcel, importarAlertasRaw, ImportResult } from '../../services/importService';
@@ -8,12 +8,17 @@ import {
   getContratos,
   getReporteAlertasDiarias,
   listarAlertasDiarias,
+  listarAlertasDiariasResumen,
   listarAlertasDiariasPendientes,
+  esConductorIdentificado,
 } from '../../services/reportService';
 import { descargarPDFAlertasDiarias, descargarPDFAlertasDiariasGerencial } from '../../services/pdfTemplates';
 import type { ContratoOption } from '../../services/reportService';
+import { generarCorreoAlertasDiarias, type CorreoAlertas } from '../../services/dailyEmailTemplates';
+import { descargarExcelAlertasDiarias } from '../../services/dailyAlertsExcel';
+import { CorreoAlertasModal } from './CorreoAlertasModal';
 
-type Vista = 'historial' | 'subir';
+type Vista = 'historial' | 'analisis' | 'subir';
 
 const ayer = () => {
   const d = new Date();
@@ -45,6 +50,15 @@ export const DailyReports: React.FC = () => {
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
+  // Vista Análisis: alertas de TODOS los contratos en el rango (sin filtro de contrato).
+  const [analisisRows, setAnalisisRows] = useState<Record<string, unknown>[]>([]);
+  const [cargandoAnalisis, setCargandoAnalisis] = useState(false);
+  const [generandoCorreo, setGenerandoCorreo] = useState('');
+  const [generandoPDFContrato, setGenerandoPDFContrato] = useState('');
+  const [generandoExcelContrato, setGenerandoExcelContrato] = useState('');
+  const [correoModal, setCorreoModal] = useState<CorreoAlertas | null>(null);
+  const [correoContrato, setCorreoContrato] = useState('');
+
   useEffect(() => {
     getContratos().then(setContratos).catch(console.error);
   }, []);
@@ -72,6 +86,111 @@ export const DailyReports: React.FC = () => {
 
   useEffect(() => { cargarHistorial(); }, [cargarHistorial]);
 
+  // Carga de la vista Análisis (todos los contratos del rango)
+  const cargarAnalisis = useCallback(async () => {
+    setCargandoAnalisis(true);
+    try {
+      const data = await listarAlertasDiariasResumen({ fechaInicio, fechaFin });
+      setAnalisisRows(data as Record<string, unknown>[]);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setCargandoAnalisis(false);
+    }
+  }, [fechaInicio, fechaFin]);
+
+  useEffect(() => { if (vista === 'analisis') cargarAnalisis(); }, [vista, cargarAnalisis]);
+
+  // Nombre REAL del contrato por id (alertas_diarias_gps.contrato_nombre guarda la
+  // plataforma de GPS —COLTRACK/FAGOR—, no el contrato).
+  const contratosPorId = useMemo(() => new Map(contratos.map(c => [c.id, c.nombre])), [contratos]);
+
+  // Agrupa las alertas del rango por contrato; solo contratos con alertas.
+  const analisisPorContrato = useMemo(() => {
+    const grupos = new Map<string, {
+      contratoId: string; contrato: string;
+      infr80: number; exc50a80: number; excVarios: number; frenadas: number;
+      placas: Set<string>; sinIdentificar: Set<string>; total: number;
+    }>();
+    for (const r of analisisRows) {
+      const contratoId = String(r.contrato_id ?? '');
+      const contrato = contratosPorId.get(contratoId)
+        ?? (String(r.contrato_nombre ?? '').trim() || 'Sin contrato');
+      const key = contratoId || contrato;
+      const g = grupos.get(key) ?? {
+        contratoId, contrato,
+        infr80: 0, exc50a80: 0, excVarios: 0, frenadas: 0,
+        placas: new Set<string>(), sinIdentificar: new Set<string>(), total: 0,
+      };
+      g.infr80 += toNum(r.infraccion_80_kmh);
+      g.exc50a80 += toNum(r.excesos_50_80_kmh);
+      g.excVarios += toNum(r.excesos_varios_parametros);
+      g.frenadas += toNum(r.frenadas_bruscas);
+      if (r.placa) g.placas.add(String(r.placa));
+      if (!esConductorIdentificado(r.conductor)) g.sinIdentificar.add(`${r.placa}|${r.fecha_dia}`);
+      grupos.set(key, g);
+    }
+    return Array.from(grupos.values())
+      .map(g => ({ ...g, total: g.infr80 + g.exc50a80 + g.excVarios + g.frenadas, placasCount: g.placas.size, sinIdCount: g.sinIdentificar.size }))
+      .filter(g => g.total > 0)
+      .sort((a, b) => (b.infr80 > 0 ? 1 : 0) - (a.infr80 > 0 ? 1 : 0) || b.infr80 - a.infr80 || b.total - a.total);
+  }, [analisisRows, contratosPorId]);
+
+  // Generar el texto del correo para un contrato (cifras autoritativas via getReporteAlertasDiarias)
+  const handleGenerarCorreo = async (cId: string, nombre: string) => {
+    setGenerandoCorreo(cId || nombre);
+    try {
+      const data = await getReporteAlertasDiarias({ fechaInicio, fechaFin, contratoId: cId || undefined });
+      if (!data) {
+        alert('No se encontraron alertas GPS para el contrato en el rango seleccionado.');
+        return;
+      }
+      setCorreoModal(generarCorreoAlertasDiarias(data));
+      setCorreoContrato(data.contrato?.nombre ?? nombre);
+    } catch (err) {
+      console.error(err);
+      alert(`Error generando el texto del correo.\n\nDetalle: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setGenerandoCorreo('');
+    }
+  };
+
+  // Generar PDF diario para un contrato específico desde la lista de Análisis
+  const handleGenerarPDFContrato = async (cId: string) => {
+    setGenerandoPDFContrato(cId);
+    try {
+      const data = await getReporteAlertasDiarias({ fechaInicio, fechaFin, contratoId: cId || undefined });
+      if (!data) {
+        alert('No se encontraron alertas GPS para el contrato en el rango seleccionado.');
+        return;
+      }
+      await descargarPDFAlertasDiarias(data);
+    } catch (err) {
+      console.error(err);
+      alert(`Error generando el PDF.\n\nDetalle: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setGenerandoPDFContrato('');
+    }
+  };
+
+  // Descargar el detalle de alertas del contrato en Excel (mismas cifras que el PDF)
+  const handleGenerarExcelContrato = async (cId: string) => {
+    setGenerandoExcelContrato(cId);
+    try {
+      const data = await getReporteAlertasDiarias({ fechaInicio, fechaFin, contratoId: cId || undefined });
+      if (!data) {
+        alert('No se encontraron alertas GPS para el contrato en el rango seleccionado.');
+        return;
+      }
+      await descargarExcelAlertasDiarias(data);
+    } catch (err) {
+      console.error(err);
+      alert(`Error generando el Excel.\n\nDetalle: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setGenerandoExcelContrato('');
+    }
+  };
+
   const handleGenerar = async () => {
     setGenerando(true);
     try {
@@ -87,7 +206,7 @@ export const DailyReports: React.FC = () => {
       await descargarPDFAlertasDiarias(data);
     } catch (err) {
       console.error(err);
-      alert('Error generando el informe diario de alertas.');
+      alert(`Error generando el informe diario de alertas.\n\nDetalle: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setGenerando(false);
     }
@@ -108,7 +227,7 @@ export const DailyReports: React.FC = () => {
       await descargarPDFAlertasDiariasGerencial(data);
     } catch (err) {
       console.error(err);
-      alert('Error generando el informe gerencial de alertas.');
+      alert(`Error generando el informe gerencial de alertas.\n\nDetalle: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setGenerandoGerencial(false);
     }
@@ -136,8 +255,8 @@ export const DailyReports: React.FC = () => {
     if (historial.length === 0) return null;
     const rows = historial as Record<string, unknown>[];
     const placas = new Set(rows.map(r => String(r.placa ?? '')).filter(Boolean));
-    const conductoresId = new Set(rows.filter(r => r.conductor_identificado).map(r => String(r.conductor ?? '').toUpperCase().trim()).filter(Boolean));
-    const sinIbutton = new Set(rows.filter(r => !r.conductor_identificado).map(r => `${r.placa}|${r.fecha_dia}`));
+    const conductoresId = new Set(rows.filter(r => esConductorIdentificado(r.conductor)).map(r => String(r.conductor ?? '').toUpperCase().trim()).filter(Boolean));
+    const sinIbutton = new Set(rows.filter(r => !esConductorIdentificado(r.conductor)).map(r => `${r.placa}|${r.fecha_dia}`));
     const infracciones80 = rows.reduce((acc, r) => acc + toNum(r.infraccion_80_kmh), 0);
     const excesosVarios = rows.reduce((acc, r) => acc + toNum(r.excesos_varios_parametros), 0);
     const excesos50a80 = rows.reduce((acc, r) => acc + toNum(r.excesos_50_80_kmh), 0);
@@ -203,7 +322,8 @@ export const DailyReports: React.FC = () => {
   return (
     <div className="space-y-4 w-full mx-auto">
       <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 shadow-sm">
-        <div className="flex flex-col xl:flex-row xl:items-end gap-4 justify-between">
+        <div className="space-y-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3 min-w-[260px]">
             <div className="w-10 h-10 rounded-xl bg-blue-100 dark:bg-blue-950/40 flex items-center justify-center">
               <CalendarDays className="w-5 h-5 text-blue-600 dark:text-blue-400" />
@@ -212,6 +332,27 @@ export const DailyReports: React.FC = () => {
               <h1 className="text-xl font-bold text-slate-900 dark:text-slate-100">Informes Diarios de Alertas GPS</h1>
               <p className="text-sm text-slate-500 dark:text-slate-400">Reporte dia vencido por rango de fechas y contrato</p>
             </div>
+          </div>
+
+          <div className="flex gap-1 p-1 bg-slate-100 dark:bg-slate-900 rounded-lg">
+            {([
+              ['historial', 'Historial', CalendarDays],
+              ['analisis', 'Análisis', BarChart3],
+              ['subir', 'Subir Excel', Upload],
+            ] as const).map(([v, label, Icon]) => (
+              <button
+                key={v}
+                onClick={() => setVista(v)}
+                className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
+                  vista === v
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-slate-800/60'
+                }`}
+              >
+                <Icon className="w-4 h-4" /> {label}
+              </button>
+            ))}
+          </div>
           </div>
 
           {vista === 'historial' && (
@@ -249,14 +390,6 @@ export const DailyReports: React.FC = () => {
               </button>
             </div>
           )}
-
-          <button
-            onClick={() => setVista(v => v === 'historial' ? 'subir' : 'historial')}
-            className="self-start xl:self-end inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-sm font-medium text-slate-700 dark:text-slate-300 transition-colors whitespace-nowrap"
-          >
-            <Upload className="w-4 h-4" />
-            {vista === 'historial' ? 'Subir alertas Excel' : 'Ver historial'}
-          </button>
         </div>
       </div>
 
@@ -372,6 +505,109 @@ export const DailyReports: React.FC = () => {
             </div>
           )}
           {uploadResult && uploadResult.errores.length > 0 && <ErroresTable errores={uploadResult.errores} />}
+        </div>
+      ) : vista === 'analisis' ? (
+        <div className="space-y-4">
+          {/* Filtro de fechas */}
+          <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 flex flex-wrap items-end gap-3">
+            <div>
+              <label className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 block">Fecha inicio</label>
+              <input type="date" value={fechaInicio} onChange={(e) => setFechaInicio(e.target.value)} className="px-3 py-2 text-sm border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 block">Fecha fin</label>
+              <input type="date" value={fechaFin} min={fechaInicio} onChange={(e) => setFechaFin(e.target.value)} className="px-3 py-2 text-sm border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <button onClick={cargarAnalisis} disabled={cargandoAnalisis} className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-sm font-semibold transition-colors flex items-center gap-2">
+              <RefreshCw className={`w-4 h-4 ${cargandoAnalisis ? 'animate-spin' : ''}`} /> Actualizar
+            </button>
+          </div>
+
+          {/* Contratos con alertas en el periodo */}
+          <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <h2 className="font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                <BarChart3 className="w-4 h-4 text-blue-600" /> Contratos con alertas
+              </h2>
+              <span className="text-xs text-slate-500 dark:text-slate-400">{analisisPorContrato.length} contrato(s) con alertas en el periodo</span>
+            </div>
+
+            {cargandoAnalisis ? (
+              <div className="flex justify-center py-10"><div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" /></div>
+            ) : analisisPorContrato.length === 0 ? (
+              <div className="text-center py-10 text-slate-400 dark:text-slate-500 text-sm">No hay contratos con alertas en el periodo seleccionado.</div>
+            ) : (
+              <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-slate-800 text-white">
+                      <th className="text-left px-3 py-2.5 font-semibold">Contrato</th>
+                      <th className="px-2 py-2.5 font-semibold">≥80</th>
+                      <th className="px-2 py-2.5 font-semibold">50-80</th>
+                      <th className="px-2 py-2.5 font-semibold">10-40</th>
+                      <th className="px-2 py-2.5 font-semibold">Frenadas</th>
+                      <th className="px-2 py-2.5 font-semibold">Placas</th>
+                      <th className="px-2 py-2.5 font-semibold">Sin iButton</th>
+                      <th className="px-2 py-2.5 font-semibold text-right">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {analisisPorContrato.map((g, i) => (
+                      <tr key={g.contratoId || g.contrato} className={`border-t border-slate-100 dark:border-slate-800 ${g.infr80 > 0 ? 'bg-red-50/60 dark:bg-red-950/20' : i % 2 ? 'bg-slate-50/50 dark:bg-slate-800/20' : ''}`}>
+                        <td className="px-3 py-2 font-medium text-slate-700 dark:text-slate-200">
+                          {g.contrato}
+                          {g.infr80 > 0 && <span className="ml-2 inline-block px-1.5 py-0.5 rounded-full bg-red-100 dark:bg-red-950/40 text-red-700 dark:text-red-400 text-[9px] font-bold">CRÍTICO ≥80</span>}
+                        </td>
+                        <td className={`px-2 py-2 text-center font-bold ${g.infr80 > 0 ? 'text-red-600 dark:text-red-400' : 'text-slate-400'}`}>{g.infr80}</td>
+                        <td className="px-2 py-2 text-center text-amber-600 dark:text-amber-400">{g.exc50a80}</td>
+                        <td className="px-2 py-2 text-center text-slate-600 dark:text-slate-300">{g.excVarios}</td>
+                        <td className="px-2 py-2 text-center text-orange-500 dark:text-orange-400">{g.frenadas}</td>
+                        <td className="px-2 py-2 text-center text-slate-600 dark:text-slate-300">{g.placasCount}</td>
+                        <td className="px-2 py-2 text-center text-amber-500 dark:text-amber-400">{g.sinIdCount}</td>
+                        <td className="px-2 py-2">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              onClick={() => handleGenerarCorreo(g.contratoId, g.contrato)}
+                              disabled={!g.contratoId || generandoCorreo === (g.contratoId || g.contrato)}
+                              title={g.contratoId ? 'Generar texto del correo' : 'Contrato sin identificar: no disponible'}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold transition-colors"
+                            >
+                              {generandoCorreo === (g.contratoId || g.contrato)
+                                ? <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                : <Mail className="w-3.5 h-3.5" />}
+                              Correo
+                            </button>
+                            <button
+                              onClick={() => handleGenerarPDFContrato(g.contratoId)}
+                              disabled={!g.contratoId || generandoPDFContrato === g.contratoId}
+                              title={g.contratoId ? 'Generar PDF del contrato' : 'Contrato sin identificar: no disponible'}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 disabled:opacity-50 text-slate-700 dark:text-slate-200 font-semibold transition-colors"
+                            >
+                              {generandoPDFContrato === g.contratoId
+                                ? <div className="w-3 h-3 border-2 border-slate-500 border-t-transparent rounded-full animate-spin" />
+                                : <Download className="w-3.5 h-3.5" />}
+                              PDF
+                            </button>
+                            <button
+                              onClick={() => handleGenerarExcelContrato(g.contratoId)}
+                              disabled={!g.contratoId || generandoExcelContrato === g.contratoId}
+                              title={g.contratoId ? 'Descargar detalle de alertas en Excel' : 'Contrato sin identificar: no disponible'}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white font-semibold transition-colors"
+                            >
+                              {generandoExcelContrato === g.contratoId
+                                ? <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                : <FileSpreadsheet className="w-3.5 h-3.5" />}
+                              Excel
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       ) : (
         <div className="space-y-4">
@@ -512,6 +748,14 @@ export const DailyReports: React.FC = () => {
             )}
           </div>
         </div>
+      )}
+
+      {correoModal && (
+        <CorreoAlertasModal
+          correo={correoModal}
+          contratoNombre={correoContrato}
+          onClose={() => setCorreoModal(null)}
+        />
       )}
     </div>
   );

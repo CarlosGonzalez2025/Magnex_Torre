@@ -98,7 +98,10 @@ function indexarConductorPorNombre(
 
 function excelDateToISO(value: unknown): string | null {
   if (!value) return null;
-  if (value instanceof Date && !isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+  // Componentes LOCALES: evitar toISOString (UTC) que corre el día en zonas negativas.
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
+  }
   if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
   if (typeof value === 'string') {
     const trimmed = value.trim();
@@ -233,7 +236,10 @@ function normalizeText(value: unknown): string {
 
 function excelDateTimeToISO(value: unknown): string | null {
   if (!value) return null;
-  if (value instanceof Date && !isNaN(value.getTime())) return value.toISOString();
+  // Reloj de pared LOCAL (naive): evitar toISOString (UTC) que corre el día.
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}T${String(value.getHours()).padStart(2, '0')}:${String(value.getMinutes()).padStart(2, '0')}:${String(value.getSeconds()).padStart(2, '0')}`;
+  }
   if (typeof value === 'number') {
     const date = XLSX.SSF.parse_date_code(value);
     if (!date) return null;
