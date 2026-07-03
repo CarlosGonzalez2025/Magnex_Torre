@@ -340,7 +340,7 @@ function addDetalleConductores(workbook: ExcelJSType.Workbook, params: BuildPara
   const contratoNombre = new Map<string, string>(contratos.map(c => [c.id, c.nombre]));
   const ws = workbook.addWorksheet('Detalle Conductores');
 
-  const headers = ['Mes', 'Conductor', 'Cédula', 'Contrato', 'Proyecto', 'Calificación',
+  const headers = ['Mes', 'Conductor', 'Cédula', 'Contrato', 'Calificación',
     'Km', 'Horas', 'Exc.10', 'Exc.20', 'Exc.30', 'Exc.40', 'Exc.50', 'Exc.60', 'Exc.80',
     'Total excesos', 'Aceleraciones', 'Frenadas'];
   ws.getRow(1).values = headers;
@@ -354,7 +354,6 @@ function addDetalleConductores(workbook: ExcelJSType.Workbook, params: BuildPara
       String(cond?.nombres ?? '').toUpperCase(),
       String(cond?.cedula ?? ''),
       cId === SIN_CONTRATO ? 'Sin contrato' : (contratoNombre.get(cId) ?? cId),
-      String(row.proyecto ?? ''),
       num(row.calificacion),
       num(row.kms),
       num(row.horas_conduccion),

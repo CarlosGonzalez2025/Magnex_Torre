@@ -280,6 +280,15 @@ export function buildGeotabAlerts(events: GeotabExceptionEvent[]): Alert[] {
     const severity = getSeverityForType(mapped.type, mapped.severity);
 
     const speed = Math.round(Number(ev.speed) || 0);
+
+    // Centro de Alertas: para excesos de velocidad de Geotab solo se muestran
+    // los eventos con velocidad real >= 80 km/h. La velocidad la enriquece la API
+    // (máx. del LogRecord en la ventana del evento); los de menor magnitud —o sin
+    // velocidad resuelta— se omiten aquí, pero siguen en el historial del backend.
+    if (mapped.type === AlertType.SPEED_VIOLATION && speed < ALERT_THRESHOLDS.SPEED_LIMIT) {
+      return [];
+    }
+
     const details = speed > 0
       ? `Regla Geotab: ${ruleName} — ${speed} km/h`
       : `Regla Geotab: ${ruleName}`;
