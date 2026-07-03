@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { CalendarDays, Upload, FileText, RefreshCw, Download, BarChart3, Mail } from 'lucide-react';
+import { CalendarDays, Upload, FileText, RefreshCw, Download, BarChart3, Mail, FileSpreadsheet } from 'lucide-react';
 import { ExcelDropzone } from './ExcelDropzone';
 import { ReportsTable, ErroresTable } from './ReportsTable';
 import { importarExcel, importarAlertasRaw, ImportResult } from '../../services/importService';
@@ -15,6 +15,7 @@ import {
 import { descargarPDFAlertasDiarias, descargarPDFAlertasDiariasGerencial } from '../../services/pdfTemplates';
 import type { ContratoOption } from '../../services/reportService';
 import { generarCorreoAlertasDiarias, type CorreoAlertas } from '../../services/dailyEmailTemplates';
+import { descargarExcelAlertasDiarias } from '../../services/dailyAlertsExcel';
 import { CorreoAlertasModal } from './CorreoAlertasModal';
 
 type Vista = 'historial' | 'analisis' | 'subir';
@@ -54,6 +55,7 @@ export const DailyReports: React.FC = () => {
   const [cargandoAnalisis, setCargandoAnalisis] = useState(false);
   const [generandoCorreo, setGenerandoCorreo] = useState('');
   const [generandoPDFContrato, setGenerandoPDFContrato] = useState('');
+  const [generandoExcelContrato, setGenerandoExcelContrato] = useState('');
   const [correoModal, setCorreoModal] = useState<CorreoAlertas | null>(null);
   const [correoContrato, setCorreoContrato] = useState('');
 
@@ -168,6 +170,24 @@ export const DailyReports: React.FC = () => {
       alert(`Error generando el PDF.\n\nDetalle: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setGenerandoPDFContrato('');
+    }
+  };
+
+  // Descargar el detalle de alertas del contrato en Excel (mismas cifras que el PDF)
+  const handleGenerarExcelContrato = async (cId: string) => {
+    setGenerandoExcelContrato(cId);
+    try {
+      const data = await getReporteAlertasDiarias({ fechaInicio, fechaFin, contratoId: cId || undefined });
+      if (!data) {
+        alert('No se encontraron alertas GPS para el contrato en el rango seleccionado.');
+        return;
+      }
+      await descargarExcelAlertasDiarias(data);
+    } catch (err) {
+      console.error(err);
+      alert(`Error generando el Excel.\n\nDetalle: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setGenerandoExcelContrato('');
     }
   };
 
@@ -567,6 +587,17 @@ export const DailyReports: React.FC = () => {
                                 ? <div className="w-3 h-3 border-2 border-slate-500 border-t-transparent rounded-full animate-spin" />
                                 : <Download className="w-3.5 h-3.5" />}
                               PDF
+                            </button>
+                            <button
+                              onClick={() => handleGenerarExcelContrato(g.contratoId)}
+                              disabled={!g.contratoId || generandoExcelContrato === g.contratoId}
+                              title={g.contratoId ? 'Descargar detalle de alertas en Excel' : 'Contrato sin identificar: no disponible'}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white font-semibold transition-colors"
+                            >
+                              {generandoExcelContrato === g.contratoId
+                                ? <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                : <FileSpreadsheet className="w-3.5 h-3.5" />}
+                              Excel
                             </button>
                           </div>
                         </td>
