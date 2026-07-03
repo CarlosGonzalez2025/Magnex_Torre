@@ -67,18 +67,23 @@ function parseNumeric(value: unknown): number | null {
 }
 
 // Zona horaria operativa de la flota: Colombia (UTC-5, sin horario de verano).
-// Se usa solo para convertir timestamps que traen zona EXPLÍCITA (p.ej. Geotab en UTC)
-// al día/hora de la operación. Los archivos de FAGOR/COLTRACK ya vienen en hora local.
 const OPERACION_OFFSET_MIN = -5 * 60;
+// Sufijo de zona explícito para que el ISO represente un INSTANTE correcto en la
+// columna TIMESTAMPTZ y, a la vez, que `slice(0,10)` dé el día CALENDARIO local.
+const OPERACION_OFFSET_ISO = '-05:00';
 
 const pad2 = (v: number) => String(v).padStart(2, '0');
 
-/** ISO "naive" (sin zona), preservando el reloj de pared: 'YYYY-MM-DDTHH:MM:SS'. */
+/**
+ * ISO con offset de la operación (UTC-5): 'YYYY-MM-DDTHH:MM:SS-05:00'.
+ * Preserva el reloj de pared local (para `fecha_dia = slice(0,10)`) y guarda el
+ * instante correcto en TIMESTAMPTZ (evita el off-by-one por conversión a UTC).
+ */
 function isoLocal(y: number, mo: number, d: number, h = 0, mi = 0, s = 0): string {
-  return `${y}-${pad2(mo)}-${pad2(d)}T${pad2(h)}:${pad2(mi)}:${pad2(s)}`;
+  return `${y}-${pad2(mo)}-${pad2(d)}T${pad2(h)}:${pad2(mi)}:${pad2(s)}${OPERACION_OFFSET_ISO}`;
 }
 
-/** Instante absoluto → reloj de pared de la operación (UTC-5), formateado naive. */
+/** Instante absoluto → reloj de pared de la operación (UTC-5), con offset. */
 function instanteAOperacion(instant: Date): string {
   const shifted = new Date(instant.getTime() + OPERACION_OFFSET_MIN * 60000);
   return isoLocal(
@@ -87,16 +92,17 @@ function instanteAOperacion(instant: Date): string {
   );
 }
 
-/** Date local → naive tomando sus componentes locales (sin pasar por UTC). */
+/** Date local → toma sus componentes locales (sin pasar por UTC), con offset. */
 function fechaLocalNaive(d: Date): string {
   return isoLocal(d.getFullYear(), d.getMonth() + 1, d.getDate(), d.getHours(), d.getMinutes(), d.getSeconds());
 }
 
 /**
- * Convierte cualquier timestamp de plataforma a ISO "naive" (hora local de la
- * operación, sin sufijo Z). Clave para que `fecha_dia = timestamp.slice(0,10)`
- * refleje el día CALENDARIO correcto: nunca se aplica una conversión a UTC que
- * corra el día (bug previo: eventos de la noche caían al día siguiente).
+ * Convierte cualquier timestamp de plataforma a ISO con offset de la operación
+ * (UTC-5). Clave para que `fecha_dia = timestamp.slice(0,10)` refleje el día
+ * CALENDARIO local correcto y que el instante en TIMESTAMPTZ sea el real: nunca se
+ * aplica una conversión a UTC que corra el día (bug previo: eventos de la noche
+ * caían al día siguiente).
  */
 function parseTimestampToISO(timestamp: unknown): string {
   if (timestamp === null || timestamp === undefined || timestamp === '') {
@@ -329,11 +335,13 @@ function processFagorFile(workbook: XLSX.WorkBook): ProcessingResult {
       const alertTypeLower = normalizeText(alertType);
       const excessSpeedRaw = excessSpeedIndex >= 0 ? row[excessSpeedIndex] : null;
       const excessSpeedValue = parseNumeric(excessSpeedRaw);
-      const isGrave = (
+      const esExcesoVelocidad = (
         alertTypeLower.includes('alrm') &&
         alertTypeLower.includes('exceso') &&
         alertTypeLower.includes('velocidad')
       ) || (excessSpeedValue !== null && excessSpeedValue > 0);
+      // Falta grave = exceso de velocidad REAL >= 80 km/h, no solo por el tipo/columna.
+      const isGrave = esExcesoVelocidad && speed !== null && speed >= 80;
 
       if (isGrave) {
         gravesCount++;
@@ -449,10 +457,11 @@ function processColtrackFile(workbook: XLSX.WorkBook): ProcessingResult {
         continue; // Saltar filas sin placa
       }
 
-      // Detectar Falta Grave: "infraccion" (case insensitive)
+      // Falta grave = exceso de velocidad REAL >= 80 km/h (columna "Max kph"),
+      // no por el nombre del evento (p.ej. "Infraccion 30 Km/h" a 44 km/h NO es grave).
       const alertTypeLower = alertType ? alertType.toLowerCase() : '';
-      const isGrave = alertTypeLower.includes('infraccion') ||
-                      alertTypeLower.includes('infracción');
+      const esInfraccionVelocidad = alertTypeLower.includes('infraccion') || alertTypeLower.includes('infracción');
+      const isGrave = esInfraccionVelocidad && speed !== null && speed >= 80;
 
       if (isGrave) {
         gravesCount++;

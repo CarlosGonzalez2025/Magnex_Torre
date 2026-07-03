@@ -4018,29 +4018,23 @@ export async function importarAlertasRaw(
       let excesos_varios_parametros = 0;
       let frenadas_bruscas = 0;
 
-      // Clasificación de infracción de velocidad o frenada brusca
-      if (typeLower.includes('frenad') || typeLower.includes('brake') || typeLower.includes('desaceleracion') || typeLower.includes('desaceleración') || typeLower.includes('harsh brake') || alert.alert_type === 'HARSH_BRAKE') {
+      const esFrenada = typeLower.includes('frenad') || typeLower.includes('brake') || typeLower.includes('desaceleracion') || typeLower.includes('desaceleración') || alert.alert_type === 'HARSH_BRAKE';
+      const esExcesoVelocidad = typeLower.includes('exceso') || typeLower.includes('velocidad') || typeLower.includes('limite') || typeLower.includes('speed') || typeLower.includes('infraccion') || typeLower.includes('infracción') || typeLower.includes('alrm');
+
+      // La categoría del exceso se decide por la VELOCIDAD real (en COLTRACK la columna
+      // "Max kph"), NO por el nombre del evento. Así el dato es coherente: un evento a
+      // 44 km/h nunca cae en "Infracción >= 80 km/h".
+      if (esFrenada) {
         frenadas_bruscas = 1;
-      } else if (alert.is_grave) {
-        infraccion_80_kmh = 1;
-      } else if (typeLower.includes('exceso') || typeLower.includes('velocidad') || typeLower.includes('limite') || typeLower.includes('speed') || typeLower.includes('alrm')) {
+      } else if (esExcesoVelocidad) {
         const s = alert.speed ?? 0;
-        if (s >= 80 || typeLower.includes('80')) {
-          infraccion_80_kmh = 1;
-        } else if (s >= 50 && s < 80) {
-          excesos_50_80_kmh = 1;
-        } else if (s > 0 && s < 50) {
-          excesos_varios_parametros = 1;
-        } else {
-          if (typeLower.includes('50') || typeLower.includes('70')) {
-            excesos_50_80_kmh = 1;
-          } else {
-            excesos_varios_parametros = 1;
-          }
-        }
-      } else {
-        excesos_varios_parametros = 1;
+        if (s >= 80) infraccion_80_kmh = 1;
+        else if (s >= 50) excesos_50_80_kmh = 1;
+        else excesos_varios_parametros = 1;
       }
+      // Eventos que NO son exceso de velocidad ni frenada (p.ej. "TDR Encendido",
+      // "TDR Encendido-No GSM") quedan con todos los contadores en 0: no inflan el
+      // conteo de excesos. Se conservan como registro, pero no cuentan como alerta.
 
       return {
         _fila: index + 2,
