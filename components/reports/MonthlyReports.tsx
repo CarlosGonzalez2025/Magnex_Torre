@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { BarChart3, FileText, RefreshCw, Download } from 'lucide-react';
 import { ReportFilters, FiltroState } from './ReportFilters';
 import { ReportsTable, SemaforoBadge } from './ReportsTable';
 import { SheetsSyncPanel } from './SheetsSyncPanel';
 import {
-  getConductores, getVehiculos, getProyectos, getContratos,
+  getConductores, getVehiculos, getContratos,
   getReporteConductor, getReporteVehiculo,
   listarReportesConductores, listarReportesVehiculos,
 } from '../../services/reportService';
@@ -16,6 +16,7 @@ import {
   descargarConsolidadoVehiculosContrato,
 } from '../../services/pdfTemplates';
 import type { ConductorOption, ContratoOption, ReporteConductorData, ReporteVehiculoData, VehiculoOption } from '../../services/reportService';
+import { descargarExcelInformesMensuales } from '../../services/monthlyReportExport';
 
 const primerDiaMes = () => {
   const d = new Date();
@@ -36,7 +37,7 @@ const defaultFiltro: FiltroState = {
   vehiculoId: '',
   fechaInicio: primerDiaMes(),
   fechaFin: ultimoDiaMes(),
-  proyecto: '',
+  cliente: '',
   contratoId: '',
 };
 
@@ -111,7 +112,42 @@ export const MonthlyReports: React.FC = () => {
   const [conductores, setConductores] = useState<ConductorOption[]>([]);
   const [vehiculos, setVehiculos] = useState<VehiculoOption[]>([]);
   const [contratos, setContratos] = useState<ContratoOption[]>([]);
-  const [proyectos, setProyectos] = useState<string[]>([]);
+
+  // Clientes/grupos derivados de vehiculos.cliente (un cliente agrupa varios contratos).
+  const clientes = useMemo(() => {
+    const set = new Set<string>();
+    vehiculos.forEach(v => { const c = String(v.cliente ?? '').trim(); if (c) set.add(c); });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'es'));
+  }, [vehiculos]);
+
+  // cliente/grupo → contratos asociados (vía vehiculos.contrato_id)
+  const contratoIdsDeCliente = useCallback((cliente: string): string[] => {
+    if (!cliente) return [];
+    const ids = new Set<string>();
+    vehiculos.forEach(v => {
+      if (String(v.cliente ?? '').trim() === cliente && v.contrato_id) ids.add(String(v.contrato_id));
+    });
+    return Array.from(ids);
+  }, [vehiculos]);
+
+  // Contratos efectivos para las consultas: contrato específico > cliente/grupo > todos.
+  // Si el cliente no tiene contratos asociados, devuelve un centinela para no coincidir
+  // con nada (en vez de un array vacío, que el servicio interpretaría como "sin filtro").
+  const resolverContratoIds = useCallback((): string[] | undefined => {
+    if (filtro.contratoId) return [filtro.contratoId];
+    if (filtro.cliente) {
+      const ids = contratoIdsDeCliente(filtro.cliente);
+      return ids.length > 0 ? ids : ['__sin_contrato__'];
+    }
+    return undefined;
+  }, [filtro.contratoId, filtro.cliente, contratoIdsDeCliente]);
+
+  // Contratos visibles en el selector: los del cliente/grupo si hay uno seleccionado.
+  const contratosVisibles = useMemo(() => {
+    if (!filtro.cliente) return contratos;
+    const ids = new Set(contratoIdsDeCliente(filtro.cliente));
+    return contratos.filter(c => ids.has(c.id));
+  }, [contratos, filtro.cliente, contratoIdsDeCliente]);
 
   const [generando, setGenerando] = useState(false);
   const [generandoContrato, setGenerandoContrato] = useState(false);
@@ -129,10 +165,9 @@ export const MonthlyReports: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    Promise.all([getConductores(), getVehiculos(), getProyectos(), getContratos()]).then(([c, v, p, ct]) => {
+    Promise.all([getConductores(), getVehiculos(), getContratos()]).then(([c, v, ct]) => {
       setConductores(c);
       setVehiculos(v);
-      setProyectos(p);
       setContratos(ct);
     }).catch(console.error);
   }, []);
@@ -140,12 +175,12 @@ export const MonthlyReports: React.FC = () => {
   const cargarHistorial = useCallback(async () => {
     setCargandoHistorial(true);
     setSeleccionados(new Set());
+    const contratoIds = resolverContratoIds();
     try {
       if (filtro.tipo === 'conductor') {
         const data = await listarReportesConductores({
           conductorId: filtro.conductorId || undefined,
-          proyecto: filtro.proyecto || undefined,
-          contratoId: filtro.contratoId || undefined,
+          contratoIds,
           fechaInicio: filtro.fechaInicio,
           fechaFin: filtro.fechaFin,
         });
@@ -153,8 +188,7 @@ export const MonthlyReports: React.FC = () => {
       } else {
         const data = await listarReportesVehiculos({
           vehiculoId: filtro.vehiculoId || undefined,
-          proyecto: filtro.proyecto || undefined,
-          contratoId: filtro.contratoId || undefined,
+          contratoIds,
           fechaInicio: filtro.fechaInicio,
           fechaFin: filtro.fechaFin,
         });
@@ -165,7 +199,7 @@ export const MonthlyReports: React.FC = () => {
     } finally {
       setCargandoHistorial(false);
     }
-  }, [filtro.tipo, filtro.conductorId, filtro.vehiculoId, filtro.proyecto, filtro.contratoId, filtro.fechaInicio, filtro.fechaFin]);
+  }, [filtro.tipo, filtro.conductorId, filtro.vehiculoId, filtro.fechaInicio, filtro.fechaFin, resolverContratoIds]);
 
   useEffect(() => { cargarHistorial(); }, [cargarHistorial]);
 
@@ -178,7 +212,6 @@ export const MonthlyReports: React.FC = () => {
           conductorId: filtro.conductorId,
           fechaInicio: filtro.fechaInicio,
           fechaFin: filtro.fechaFin,
-          proyecto: filtro.proyecto || undefined,
         });
         if (data) await descargarPDFConductor(data);
         else alert('Sin datos para el período seleccionado.');
@@ -187,7 +220,6 @@ export const MonthlyReports: React.FC = () => {
           vehiculoId: filtro.vehiculoId,
           fechaInicio: filtro.fechaInicio,
           fechaFin: filtro.fechaFin,
-          proyecto: filtro.proyecto || undefined,
         });
         if (data) await descargarPDFVehiculo(data);
         else alert('Sin datos para el período seleccionado.');
@@ -331,6 +363,36 @@ export const MonthlyReports: React.FC = () => {
     }
   };
 
+  // Exportación a Excel de informes mensuales (Resumen HSE-F-144 + detalle con contrato resuelto).
+  // Trae conductores y vehículos del período (independiente del toggle) para un resumen completo,
+  // más el período anterior para la comparativa "Aumento excesos vs período anterior".
+  const handleExportExcel = useCallback(async () => {
+    const prev = obtenerPeriodoAnterior(filtro.fechaInicio, filtro.fechaFin);
+    const contratoIds = resolverContratoIds();
+    const baseFiltro = {
+      contratoIds,
+      fechaInicio: filtro.fechaInicio,
+      fechaFin: filtro.fechaFin,
+    };
+
+    const [conductorRows, vehiculoRows, conductorRowsPrev] = await Promise.all([
+      listarReportesConductores(baseFiltro),
+      listarReportesVehiculos(baseFiltro),
+      listarReportesConductores({ ...baseFiltro, fechaInicio: prev.fechaInicio, fechaFin: prev.fechaFin }),
+    ]);
+
+    await descargarExcelInformesMensuales({
+      filtro,
+      contratos,
+      conductores,
+      vehiculos,
+      contratoIdsScope: contratoIds,
+      conductorRows: conductorRows as Record<string, unknown>[],
+      vehiculoRows: vehiculoRows as Record<string, unknown>[],
+      conductorRowsPrev: conductorRowsPrev as Record<string, unknown>[],
+    });
+  }, [filtro, contratos, conductores, vehiculos, resolverContratoIds]);
+
   const toggleSeleccion = (id: string) => {
     setSeleccionados(prev => {
       const next = new Set(prev);
@@ -451,8 +513,8 @@ export const MonthlyReports: React.FC = () => {
             onChange={(f) => { setFiltro(f); setSeleccionados(new Set()); }}
             conductores={conductores}
             vehiculos={vehiculos}
-            contratos={contratos}
-            proyectos={proyectos}
+            contratos={contratosVisibles}
+            clientes={clientes}
             modo="monthly"
             onGenerar={handleGenerar}
             onGenerarContrato={handleContrato}
@@ -462,10 +524,11 @@ export const MonthlyReports: React.FC = () => {
 
           {/* ── Panel de análisis de datos ── */}
           {!cargandoHistorial && historial.length > 0 && (() => {
+            // Alcance de flota/personas según el filtro (contrato específico o cliente/grupo).
+            const idsScope = resolverContratoIds();
+            const enScope = (id: unknown) => !idsScope || (id != null && idsScope.includes(String(id)));
             if (filtro.tipo === 'conductor') {
-              const vehFiltrados = filtro.contratoId
-                ? vehiculos.filter(v => v.contrato_id === filtro.contratoId)
-                : vehiculos;
+              const vehFiltrados = vehiculos.filter(v => enScope(v.contrato_id));
               const motos = vehFiltrados.filter(v => esMoto(v.tipo_activo));
               const vehReg = vehFiltrados.filter(v => !esMoto(v.tipo_activo));
               const kmTotal = historial.reduce((acc, r) => acc + Number(r.kms ?? 0), 0);
@@ -486,9 +549,7 @@ export const MonthlyReports: React.FC = () => {
                 </div>
               );
             } else {
-              const condFiltrados = filtro.contratoId
-                ? conductores.filter(c => c.contrato_id === filtro.contratoId)
-                : conductores;
+              const condFiltrados = conductores.filter(c => enScope(c.contrato_id));
               const motosH = historial.filter(r => esMoto((r.vehiculos as Record<string, unknown>)?.tipo_activo));
               const vehRegH = historial.filter(r => !esMoto((r.vehiculos as Record<string, unknown>)?.tipo_activo));
               const kmTotal = historial.reduce((acc, r) => acc + Number(r.kms ?? 0), 0);
@@ -553,6 +614,7 @@ export const MonthlyReports: React.FC = () => {
                 data={historial}
                 emptyMessage="No hay informes para el período seleccionado. Carga los datos desde el Procesador Satelital."
                 exportFileName={`informes_mensuales_${filtro.tipo}_${filtro.fechaInicio}_${filtro.fechaFin}`}
+                onExport={handleExportExcel}
               />
             )}
           </div>

@@ -35,6 +35,8 @@ export interface FiltroReporte {
   fechaFin: string;      // YYYY-MM-DD
   proyecto?: string;
   contratoId?: string;
+  /** Conjunto de contratos (p.ej. los asociados a un cliente/grupo). Aplica filtro `in`. */
+  contratoIds?: string[];
   reporteId?: string;
 }
 
@@ -612,11 +614,13 @@ async function listarReportesConductoresDesdeColtrack(filtro: Partial<FiltroRepo
     .select('*, conductores!inner(id, nombres, cedula, proyecto, contrato_id, estado)')
     .order('fecha', { ascending: false });
 
+  const contratoIds = filtro.contratoIds?.filter(Boolean) ?? [];
   if (filtro.conductorId) q = q.eq('conductor_id', filtro.conductorId);
   if (filtro.fechaInicio) q = q.gte('fecha', filtro.fechaInicio);
   if (filtro.fechaFin) q = q.lte('fecha', filtro.fechaFin);
   if (filtro.proyecto) q = q.eq('conductores.proyecto', filtro.proyecto);
   if (filtro.contratoId) q = q.eq('conductores.contrato_id', filtro.contratoId);
+  else if (contratoIds.length > 0) q = q.in('conductores.contrato_id', contratoIds);
 
   const data = await fetchAllRows<Record<string, unknown>>(q);
 
@@ -700,7 +704,9 @@ async function listarReportesConductoresDesdeColtrack(filtro: Partial<FiltroRepo
 
 export async function listarReportesConductores(filtro: Partial<FiltroReporte> & { mes?: string }) {
   // Incluir 'estado' en el select para poder filtrar inactivos del lado del cliente también
-  const select = filtro.contratoId
+  const contratoIds = filtro.contratoIds?.filter(Boolean) ?? [];
+  const usaContratoJoin = Boolean(filtro.contratoId) || contratoIds.length > 0;
+  const select = usaContratoJoin
     ? '*, conductores!inner(nombres, cedula, contrato_id, estado)'
     : '*, conductores(nombres, cedula, contrato_id, estado)';
   let q = supabase
@@ -711,6 +717,7 @@ export async function listarReportesConductores(filtro: Partial<FiltroReporte> &
   if (filtro.conductorId) q = q.eq('conductor_id', filtro.conductorId);
   if (filtro.proyecto) q = q.eq('proyecto', filtro.proyecto);
   if (filtro.contratoId) q = q.eq('conductores.contrato_id', filtro.contratoId);
+  else if (contratoIds.length > 0) q = q.in('conductores.contrato_id', contratoIds);
   // Excluir conductores inactivos: no deben aparecer en informes mensuales
   q = q.eq('conductores.estado', 'ACTIVO');
   if (filtro.fechaInicio && filtro.fechaFin) {
@@ -734,7 +741,9 @@ export async function listarReportesConductores(filtro: Partial<FiltroReporte> &
 }
 
 async function listarReportesVehiculosDesdeColtrack(filtro: Partial<FiltroReporte>): Promise<Record<string, unknown>[]> {
-  const select = filtro.contratoId
+  const contratoIds = filtro.contratoIds?.filter(Boolean) ?? [];
+  const usaContratoJoin = Boolean(filtro.contratoId) || contratoIds.length > 0;
+  const select = usaContratoJoin
     ? '*, vehiculos!inner(id, placa, marca, tipo_activo, contrato_id, estado, lugar, cliente)'
     : '*, vehiculos(id, placa, marca, tipo_activo, contrato_id, estado, lugar, cliente)';
   let q = supabase
@@ -747,6 +756,7 @@ async function listarReportesVehiculosDesdeColtrack(filtro: Partial<FiltroReport
   if (filtro.fechaFin) q = q.lte('fecha', filtro.fechaFin);
   if (filtro.proyecto) q = q.eq('vehiculos.cliente', filtro.proyecto);
   if (filtro.contratoId) q = q.eq('vehiculos.contrato_id', filtro.contratoId);
+  else if (contratoIds.length > 0) q = q.in('vehiculos.contrato_id', contratoIds);
 
   const data = await fetchAllRows<Record<string, unknown>>(q);
 
@@ -858,6 +868,7 @@ async function listarReportesVehiculosDesdeColtrack(filtro: Partial<FiltroReport
 
 export async function listarReportesVehiculos(filtro: Partial<FiltroReporte> & { mes?: string }) {
   // Incluir 'estado' en el select para poder filtrar inactivos del lado del cliente también
+  const contratoIds = filtro.contratoIds?.filter(Boolean) ?? [];
   let q = supabase
     .from('reportes_vehiculos')
     .select('*, vehiculos(placa, marca, tipo_activo, estado), contratos(nombre)')
@@ -866,6 +877,7 @@ export async function listarReportesVehiculos(filtro: Partial<FiltroReporte> & {
   if (filtro.vehiculoId) q = q.eq('vehiculo_id', filtro.vehiculoId);
   if (filtro.proyecto) q = q.eq('proyecto', filtro.proyecto);
   if (filtro.contratoId) q = q.eq('contrato_id', filtro.contratoId);
+  else if (contratoIds.length > 0) q = q.in('contrato_id', contratoIds);
   // Excluir vehículos inactivos: no deben aparecer en informes mensuales
   q = q.eq('vehiculos.estado', 'ACTIVO');
   if (filtro.fechaInicio && filtro.fechaFin) {

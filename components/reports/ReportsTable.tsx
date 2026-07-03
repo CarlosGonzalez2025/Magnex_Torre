@@ -50,6 +50,8 @@ interface ReportsTableProps {
   maxRows?: number;
   exportFileName?: string;
   includeDateContractSheet?: boolean;
+  /** Si se define, reemplaza la exportación GPS por defecto (recibe las filas ya ordenadas). */
+  onExport?: (sortedRows: Record<string, unknown>[]) => void | Promise<void>;
 }
 
 const COLORS = {
@@ -77,10 +79,12 @@ export const ReportsTable: React.FC<ReportsTableProps> = ({
   maxRows,
   exportFileName = 'reporte',
   includeDateContractSheet = true,
+  onExport,
 }) => {
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [page, setPage] = useState(0);
+  const [exportando, setExportando] = useState(false);
 
   const rowsPerPage = 20;
 
@@ -446,6 +450,20 @@ export const ReportsTable: React.FC<ReportsTableProps> = ({
       return;
     }
 
+    // Exportación específica del consumidor (p.ej. informes mensuales) en vez de la GPS por defecto
+    if (onExport) {
+      setExportando(true);
+      try {
+        await onExport(sorted);
+      } catch (err) {
+        console.error(err);
+        alert('Error al exportar a Excel.');
+      } finally {
+        setExportando(false);
+      }
+      return;
+    }
+
     const ExcelJSModule = await import('exceljs');
     const workbook = new ExcelJSModule.Workbook();
     workbook.creator = 'Magnex Torre';
@@ -474,11 +492,14 @@ export const ReportsTable: React.FC<ReportsTableProps> = ({
         <button
           type="button"
           onClick={handleExport}
-          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-green-600 hover:bg-green-700 text-white text-xs font-semibold transition-colors"
+          disabled={exportando}
+          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white text-xs font-semibold transition-colors"
           title="Descargar tabla completa en Excel"
         >
-          <FileDown className="w-3.5 h-3.5" />
-          Excel
+          {exportando
+            ? <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+            : <FileDown className="w-3.5 h-3.5" />}
+          {exportando ? 'Generando...' : 'Excel'}
         </button>
       </div>
       <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700">
