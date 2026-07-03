@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import { supabase } from './supabaseClient';
 import { processFile, BatchAlert } from './fileProcessingService';
+import { clasificarAlertaDiaria } from './reportService';
 
 
 // ── Tipos ────────────────────────────────────────────────────────────────────
@@ -4012,29 +4013,11 @@ export async function importarAlertasRaw(
 
     // 4. Mapear de BatchAlert a los campos esperados por insertAlertasDiarias
     const datosMapeados = parseResult.data.map((alert: BatchAlert, index: number) => {
-      const typeLower = (alert.alert_type || '').toLowerCase();
-      let infraccion_80_kmh = 0;
-      let excesos_50_80_kmh = 0;
-      let excesos_varios_parametros = 0;
-      let frenadas_bruscas = 0;
-
-      const esFrenada = typeLower.includes('frenad') || typeLower.includes('brake') || typeLower.includes('desaceleracion') || typeLower.includes('desaceleración') || alert.alert_type === 'HARSH_BRAKE';
-      const esExcesoVelocidad = typeLower.includes('exceso') || typeLower.includes('velocidad') || typeLower.includes('limite') || typeLower.includes('speed') || typeLower.includes('infraccion') || typeLower.includes('infracción') || typeLower.includes('alrm');
-
-      // La categoría del exceso se decide por la VELOCIDAD real (en COLTRACK la columna
-      // "Max kph"), NO por el nombre del evento. Así el dato es coherente: un evento a
-      // 44 km/h nunca cae en "Infracción >= 80 km/h".
-      if (esFrenada) {
-        frenadas_bruscas = 1;
-      } else if (esExcesoVelocidad) {
-        const s = alert.speed ?? 0;
-        if (s >= 80) infraccion_80_kmh = 1;
-        else if (s >= 50) excesos_50_80_kmh = 1;
-        else excesos_varios_parametros = 1;
-      }
-      // Eventos que NO son exceso de velocidad ni frenada (p.ej. "TDR Encendido",
-      // "TDR Encendido-No GSM") quedan con todos los contadores en 0: no inflan el
-      // conteo de excesos. Se conservan como registro, pero no cuentan como alerta.
+      // Misma clasificación (fuente única) que usan el Excel/PDF/análisis al leer:
+      // categoría por nombre + velocidad real; eventos que no son exceso ni frenada
+      // (TDR Encendido, etc.) quedan en 0 y no inflan el conteo.
+      const { infraccion_80_kmh, excesos_50_80_kmh, excesos_varios_parametros, frenadas_bruscas } =
+        clasificarAlertaDiaria(alert.alert_type, alert.speed);
 
       return {
         _fila: index + 2,
