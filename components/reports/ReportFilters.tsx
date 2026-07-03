@@ -7,7 +7,8 @@ export interface FiltroState {
   vehiculoId: string;
   fechaInicio: string;
   fechaFin: string;
-  proyecto: string;
+  /** Cliente o grupo (agrupa varios contratos). Deriva de vehiculos.cliente. */
+  cliente: string;
   contratoId: string;
 }
 
@@ -17,7 +18,7 @@ interface ReportFiltersProps {
   conductores: { id: string; nombres: string; cedula: string }[];
   vehiculos: { id: string; placa: string; cliente: string }[];
   contratos?: { id: string; nombre: string; cliente?: string; proyecto?: string }[];
-  proyectos: string[];
+  clientes: string[];
   modo: 'daily' | 'monthly';
   onGenerar: () => void;
   onGenerarContrato?: () => void;
@@ -31,7 +32,7 @@ export const ReportFilters: React.FC<ReportFiltersProps> = ({
   conductores,
   vehiculos,
   contratos = [],
-  proyectos,
+  clientes,
   modo,
   onGenerar,
   onGenerarContrato,
@@ -118,14 +119,14 @@ export const ReportFilters: React.FC<ReportFiltersProps> = ({
         )}
 
         <div>
-          <label className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 block">Proyecto</label>
+          <label className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 block">Cliente / Grupo</label>
           <select
-            value={filtro.proyecto}
-            onChange={(e) => set({ proyecto: e.target.value })}
+            value={filtro.cliente}
+            onChange={(e) => set({ cliente: e.target.value, contratoId: '' })}
             className="w-full px-3 py-2 text-sm border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
           >
-            <option value="">Todos los proyectos</option>
-            {proyectos.map((p) => <option key={p} value={p}>{p}</option>)}
+            <option value="">Todos los clientes</option>
+            {clientes.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
         </div>
 
