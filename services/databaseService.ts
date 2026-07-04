@@ -218,10 +218,12 @@ export async function getFilteredAutoSavedAlerts(
     severity?: string;
     startDate?: string;
     endDate?: string;
-  }
+  },
+  maxRecords?: number
 ): Promise<{ success: boolean; data?: SavedAlert[]; error?: string }> {
   try {
-    // 🔧 SOLUCIÓN: Obtener TODOS los registros filtrados usando paginación automática
+    // 🔧 Paginación automática, con tope opcional (maxRecords) para evitar
+    // descargar tablas enormes y provocar statement timeout en la carga.
     let allData: SavedAlert[] = [];
     let from = 0;
     const pageSize = 1000;
@@ -263,12 +265,18 @@ export async function getFilteredAutoSavedAlerts(
 
         // Si recibimos menos registros que el tamaño de página, ya no hay más
         hasMore = data.length === pageSize;
+
+        // Respetar el tope solicitado (si se indicó)
+        if (maxRecords && allData.length >= maxRecords) {
+          allData = allData.slice(0, maxRecords);
+          hasMore = false;
+        }
       } else {
         hasMore = false;
       }
     }
 
-    console.log(`✅ Cargadas ${allData.length} alertas filtradas (sin límite de 1000)`);
+    console.log(`✅ Cargadas ${allData.length} alertas filtradas${maxRecords ? ` (tope ${maxRecords})` : ''}`);
     return { success: true, data: allData.map(normalizeAlertTimestamp) as SavedAlert[] };
   } catch (error: any) {
     console.error('Exception fetching filtered auto-saved alerts:', error);
@@ -305,6 +313,115 @@ export async function deleteMultipleAutoSavedAlerts(alertIds: string[]): Promise
     return { success: true, deletedCount };
   } catch (error: any) {
     console.error('Exception eliminando alertas:', error);
+    return { success: false, error: error.message || 'Error desconocido' };
+  }
+}
+
+/**
+ * Elimina TODAS las alertas auto-guardadas dentro de un periodo (rango de fechas),
+ * opcionalmente acotado por estado / severidad / fuente.
+ *
+ * A diferencia de deleteMultipleAutoSavedAlerts (que borra por lista de IDs y depende
+ * de la selección paginada de la UI), esta función borra en el servidor por rango de
+ * `timestamp`, en lotes, e incluye por defecto las alertas ya movidas al Historial
+ * (siguen conservadas en alert_history). Pensada para limpiezas de periodo completas.
+ *
+ * @param startDate Fecha inicio en formato 'YYYY-MM-DD' (se toma desde las 00:00:00 local)
+ * @param endDate   Fecha fin en formato 'YYYY-MM-DD' (se toma hasta las 23:59:59.999 local)
+ */
+export async function deleteAutoSavedAlertsByPeriod(
+  startDate: string,
+  endDate: string,
+  filters?: {
+    status?: 'pending' | 'in_progress' | 'resolved';
+    severity?: string;
+    source?: string;
+    /** Si es false, conserva las alertas ya movidas al Historial. Por defecto true (borra todo). */
+    includeMovedToHistory?: boolean;
+  }
+): Promise<{ success: boolean; deletedCount?: number; error?: string }> {
+  try {
+    if (!startDate || !endDate) {
+      return { success: false, error: 'Debe indicar fecha inicio y fecha fin del periodo' };
+    }
+
+    // Construir límites del periodo cubriendo el día completo (hora local del navegador).
+    const startBoundary = new Date(`${startDate}T00:00:00.000`);
+    const endBoundary = new Date(`${endDate}T23:59:59.999`);
+
+    if (isNaN(startBoundary.getTime()) || isNaN(endBoundary.getTime())) {
+      return { success: false, error: 'Fechas de periodo inválidas' };
+    }
+    if (startBoundary > endBoundary) {
+      return { success: false, error: 'La fecha inicio no puede ser posterior a la fecha fin' };
+    }
+
+    const startIso = startBoundary.toISOString();
+    const endIso = endBoundary.toISOString();
+    const includeMoved = filters?.includeMovedToHistory !== false; // default: true
+
+    console.log(`🗑️ Eliminando alertas del periodo ${startIso} → ${endIso}`, filters || {});
+
+    // Aplica los mismos filtros a cualquier query (select o delete).
+    const applyFilters = (q: any) => {
+      q = q.gte('timestamp', startIso).lte('timestamp', endIso);
+      if (filters?.status) q = q.eq('status', filters.status);
+      if (filters?.severity) q = q.eq('severity', filters.severity);
+      if (filters?.source) q = q.eq('source', filters.source);
+      if (!includeMoved) {
+        // "No movidas": incluye las que tienen el flag en false o en NULL
+        q = q.or('moved_to_history.is.null,moved_to_history.eq.false');
+      }
+      return q;
+    };
+
+    // Estrategia robusta contra el statement_timeout corto de la API:
+    // 1) SELECT de un lote pequeño de IDs (usa el índice de timestamp → rápido)
+    // 2) DELETE por esos IDs (usa la PK → rápido)
+    // Cada sentencia es diminuta y siempre cabe dentro del timeout de la API.
+    const BATCH = 500;
+    let deletedTotal = 0;
+    let hasMore = true;
+    let safetyLoops = 0;
+    const MAX_LOOPS = 100000; // corta bucles infinitos ante cualquier anomalía
+
+    while (hasMore && safetyLoops++ < MAX_LOOPS) {
+      const { data: idRows, error: selectError } = await applyFilters(
+        supabase.from('saved_alerts').select('id')
+      )
+        .order('timestamp', { ascending: true })
+        .limit(BATCH);
+
+      if (selectError) {
+        console.error('Error seleccionando IDs del periodo:', selectError);
+        return { success: false, deletedCount: deletedTotal, error: selectError.message };
+      }
+
+      const ids = (idRows || []).map((r: { id: string }) => r.id);
+      if (ids.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      const { error: deleteError } = await supabase
+        .from('saved_alerts')
+        .delete()
+        .in('id', ids);
+
+      if (deleteError) {
+        console.error('Error eliminando lote del periodo:', deleteError);
+        return { success: false, deletedCount: deletedTotal, error: deleteError.message };
+      }
+
+      deletedTotal += ids.length;
+      hasMore = ids.length === BATCH;
+      console.log(`🗑️ Eliminadas ${ids.length} alertas del periodo (total: ${deletedTotal})`);
+    }
+
+    console.log(`✅ ${deletedTotal} alertas del periodo eliminadas correctamente`);
+    return { success: true, deletedCount: deletedTotal };
+  } catch (error: any) {
+    console.error('Exception eliminando alertas del periodo:', error);
     return { success: false, error: error.message || 'Error desconocido' };
   }
 }

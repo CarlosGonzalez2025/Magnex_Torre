@@ -2,11 +2,11 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { AlertTriangle, AlertCircle, Bell, BellRing, CheckCircle, Clock, MapPin, User, Gauge, FileDown, Search, Calendar, Database, Info, Save, Copy, MessageCircle, FolderCheck, Trash2, CheckSquare, Square } from 'lucide-react';
 import { Alert } from '../types';
 import {
-  getAllAutoSavedAlerts,
   getFilteredAutoSavedAlerts,
   SavedAlert,
   markAlertAsMovedToHistory,
   deleteMultipleAutoSavedAlerts,
+  deleteAutoSavedAlertsByPeriod,
   markMultipleAlertsAsMovedToHistory
 } from '../services/databaseService';
 import { usePagination } from '../hooks/usePagination';
@@ -20,6 +20,10 @@ interface SavedAlertsPanelProps {
   onCopyAlert?: (alert: Alert) => void;
 }
 
+// Tope de filas que la vista descarga (evita statement timeout en tablas grandes).
+// El borrado por periodo NO depende de este tope: opera server-side sobre todo el rango.
+const MAX_PANEL_RECORDS = 3000;
+
 export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, onSaveAlert, onCopyAlert }) => {
   const [alerts, setAlerts] = useState<SavedAlert[]>([]);
   const [loading, setLoading] = useState(true);
@@ -28,6 +32,9 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
 
   // Selection state
   const [selectedAlertIds, setSelectedAlertIds] = useState<Set<string>>(new Set());
+
+  // Estado de borrado por periodo
+  const [deletingPeriod, setDeletingPeriod] = useState(false);
 
   // Filters
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'pending' | 'in_progress' | 'resolved'>('ALL');
@@ -134,24 +141,35 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
   const loadAlerts = useCallback(async () => {
     setLoading(true);
 
-    const filters: any = {};
+    // Filtros aplicados en el servidor para acotar la descarga y evitar timeouts.
+    const filters: {
+      status?: 'pending' | 'in_progress' | 'resolved';
+      severity?: string;
+      startDate?: string;
+      endDate?: string;
+    } = {};
 
     if (statusFilter !== 'ALL') filters.status = statusFilter;
     if (severityFilter !== 'ALL') filters.severity = severityFilter;
+    // Empujar el rango de fechas al servidor (día completo en el límite superior).
+    if (startDate) filters.startDate = new Date(`${startDate}T00:00:00.000`).toISOString();
+    if (endDate) filters.endDate = new Date(`${endDate}T23:59:59.999`).toISOString();
 
-    const result = statusFilter === 'ALL' && severityFilter === 'ALL'
-      ? await getAllAutoSavedAlerts()
-      : await getFilteredAutoSavedAlerts(filters);
+    // Tope de seguridad: nunca traer más de MAX_PANEL_RECORDS filas a la vista.
+    const result = await getFilteredAutoSavedAlerts(filters, MAX_PANEL_RECORDS);
 
     if (result.success && result.data) {
       setAlerts(result.data);
+      if (result.data.length >= MAX_PANEL_RECORDS) {
+        console.warn(`⚠️ Vista limitada a ${MAX_PANEL_RECORDS} alertas más recientes. Usa filtros de fecha para acotar; el borrado por periodo sí abarca todo el rango.`);
+      }
       console.log(`✅ ${result.data.length} alertas cargadas desde servidor`);
     } else {
       console.error('Error loading auto-saved alerts:', result.error);
     }
 
     setLoading(false);
-  }, [statusFilter, severityFilter]);
+  }, [statusFilter, severityFilter, startDate, endDate]);
 
   useEffect(() => {
     // 🧹 Limpiar caché antiguo si existe (evitar errors de quota)
@@ -391,7 +409,72 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
     const result = await deleteMultipleAutoSavedAlerts(Array.from(selectedAlertIds));
 
     if (result.success) {
-      window.alert(`✅ ${result.deletedCount} alerta${result.deletedCount! > 1 ? 's' : ''} eliminada${result.deletedCount! > 1 ? 's' : ''}`);
+      if ((result.deletedCount || 0) === 0) {
+        window.alert('⚠️ No se eliminó ninguna alerta. Es posible que no tengas permisos de borrado (RLS). Verifica con el administrador.');
+      } else {
+        window.alert(`✅ ${result.deletedCount} alerta${result.deletedCount! > 1 ? 's' : ''} eliminada${result.deletedCount! > 1 ? 's' : ''}`);
+      }
+      setSelectedAlertIds(new Set());
+      loadAlerts();
+    } else {
+      window.alert('❌ Error: ' + result.error);
+    }
+  };
+
+  // ==================== ELIMINACIÓN POR PERIODO ====================
+
+  const handleDeletePeriod = async () => {
+    if (!startDate || !endDate) {
+      window.alert('⚠️ Debes seleccionar "Desde" y "Hasta" para eliminar un periodo completo.');
+      return;
+    }
+
+    // Filtros del servidor que acotan el borrado (los mismos activos en la vista).
+    const periodFilters: {
+      status?: 'pending' | 'in_progress' | 'resolved';
+      severity?: string;
+      source?: string;
+    } = {};
+    if (statusFilter !== 'ALL') periodFilters.status = statusFilter;
+    if (severityFilter !== 'ALL') periodFilters.severity = severityFilter;
+    if (sourceFilter !== 'ALL') periodFilters.source = sourceFilter;
+
+    // Estimación visible para el usuario (según lo cargado en pantalla).
+    const estimate = filteredAndSearchedAlerts.length;
+
+    const activeFiltersText = [
+      statusFilter !== 'ALL' ? `Estado: ${statusFilter}` : null,
+      severityFilter !== 'ALL' ? `Severidad: ${severityFilter}` : null,
+      sourceFilter !== 'ALL' ? `Plataforma: ${sourceFilter}` : null,
+    ].filter(Boolean).join(' · ') || 'Ninguno (todo el periodo)';
+
+    const confirmText = window.prompt(
+      `⚠️ ELIMINAR PERIODO COMPLETO\n\n` +
+      `Se eliminarán TODAS las alertas autoguardadas entre:\n` +
+      `  ${startDate}  →  ${endDate}\n\n` +
+      `Filtros aplicados: ${activeFiltersText}\n` +
+      `Aproximadamente ${estimate} alerta(s) visibles coinciden (el servidor borrará todas las del periodo, incluidas las movidas al Historial).\n\n` +
+      `Esta acción NO se puede deshacer.\n\n` +
+      `Para confirmar, escribe: ELIMINAR PERIODO`
+    );
+
+    if (confirmText !== 'ELIMINAR PERIODO') {
+      if (confirmText !== null) {
+        window.alert('Operación cancelada. El texto no coincide.');
+      }
+      return;
+    }
+
+    setDeletingPeriod(true);
+    const result = await deleteAutoSavedAlertsByPeriod(startDate, endDate, periodFilters);
+    setDeletingPeriod(false);
+
+    if (result.success) {
+      if ((result.deletedCount || 0) === 0) {
+        window.alert('⚠️ No se eliminó ninguna alerta en ese periodo. Puede que no existan registros o que no tengas permisos de borrado (RLS).');
+      } else {
+        window.alert(`✅ ${result.deletedCount} alerta${result.deletedCount! > 1 ? 's' : ''} del periodo eliminada${result.deletedCount! > 1 ? 's' : ''}`);
+      }
       setSelectedAlertIds(new Set());
       loadAlerts();
     } else {
@@ -580,6 +663,29 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
             <FileDown className="w-3.5 h-3.5" />
             Excel
           </button>
+
+          {/* Botón Eliminar Periodo (solo con rango de fechas definido) */}
+          {startDate && endDate && (
+            <button
+              onClick={handleDeletePeriod}
+              disabled={deletingPeriod}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-red-700 text-white rounded hover:bg-red-800 transition-colors text-xs font-medium disabled:bg-slate-300 disabled:cursor-not-allowed"
+              title="Eliminar TODAS las alertas del periodo seleccionado (Desde → Hasta)"
+            >
+              {deletingPeriod ? (
+                <>
+                  <Clock className="w-3.5 h-3.5 animate-spin" />
+                  Eliminando...
+                </>
+              ) : (
+                <>
+                  <Calendar className="w-3.5 h-3.5" />
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Eliminar periodo
+                </>
+              )}
+            </button>
+          )}
 
           {/* Botones de Acción Masiva */}
           {selectedAlertIds.size > 0 && (
