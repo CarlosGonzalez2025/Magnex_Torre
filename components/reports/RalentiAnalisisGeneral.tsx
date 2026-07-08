@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../../services/supabaseClient';
 import { descargarPDFAnalisisGeneral, AnalisisGeneralPDFData } from '../../services/pdfTemplates';
+import { computeMotorMetrics } from '../../services/ralentiMetrics';
 
 // ── CO₂ factors (kg/gal) — FECOC/UPME ──
 const CO2_FACTORES: { test: (t: string) => boolean; factor: number }[] = [
@@ -92,6 +93,17 @@ interface PeriodoData {
   pctVsBaselineEventos: number;
   pctVsBaselineGalones: number;
   pctVsBaselineCO2: number;
+  // ── Métricas de eficiencia operativa (normalizadas por vehículos con motor > 0) ──
+  totalKm: number;               // Σ km recorridos sobre el universo con motor
+  kmPorVehiculoActivo: number;   // totalKm / vehículos con motor
+  pctConduccion: number;         // horasConduccion / H.Motor Encendido
+  velocidadMedia: number;        // km/h ponderada = totalKm / horasConduccion
+  kmPorHoraRalenti: number;      // eficiencia = totalKm / Ralentí Total
+  ralentiHuerfano: number;       // ralentí de filas con encendido=0 (excluido del %, señal de calidad)
+  coberturaMotorPct: number;     // vehiculosConMotor / vehiculosActivos * 100
+  datoInconsistente: boolean;    // bandera de validación cruzada (cobertura/identidad)
+  filasRalentiMayorEnc: number;  // filas con ralentí > encendido (violación física)
+  pctGalonesRalenti: number | null; // % galones en ralentí vs total (null si no hay total fiable)
 }
 
 // ── Helpers ──
@@ -508,7 +520,7 @@ export const RalentiAnalisisGeneral: React.FC<{
           return results.flatMap(r => r.data ?? []);
         };
 
-        const PERIODO_FIELDS = 'vehiculo_id, periodo_inicio, periodo_fin, horas_motor_encendido, horas_motor_ralenti, consumo_combustible, ralentis_excesivos';
+        const PERIODO_FIELDS = 'vehiculo_id, periodo_inicio, periodo_fin, horas_motor_encendido, horas_motor_ralenti, consumo_combustible, ralentis_excesivos, kms_recorridos';
         const EVENTO_FIELDS = 'vehiculo_id, periodo_inicio, periodo_fin, duracion_segundos, proveedor, conductor_nombre';
 
         const [periodosData, eventosData] = await Promise.all([
@@ -563,43 +575,42 @@ export const RalentiAnalisisGeneral: React.FC<{
     const computed: PeriodoData[] = [];
     periodMap.forEach((pRows, key) => {
       const first = pRows[0];
-      const totalGalones = pRows.reduce((a, r) => a + (Number(r.consumo_combustible) || 0), 0);
-      const totalHorasEncendido = pRows.reduce((a, r) => a + (Number(r.horas_motor_encendido) || 0), 0);
-      const totalHorasRalenti = pRows.reduce((a, r) => a + (Number(r.horas_motor_ralenti) || 0), 0);
-      // % Ralentí y H. Conducción se calculan sobre la FLOTA COMPLETA, igual que el Informe
-      // por Período (su fuente de verdad): así la aritmética cuadra con las columnas mostradas
-      // (H. Motor Enc − Ralentí Total = Conducción) y ambos módulos coinciden.
-      // OJO: en períodos con baja cobertura de horas de motor, las filas con encendido=0 pero
-      // ralentí>0 (importaciones Fagor/excesos) inflan el % ralentí y deprimen la conducción.
-      // Por eso se conserva el indicador de cobertura (vehiculosConMotor) como señal de calidad.
+      // Métricas de motor/ralentí normalizadas por vehículos activos (motor>0). La lógica
+      // vive en services/ralentiMetrics.ts (fuente única + testeada) para prevenir la
+      // regresión del bug del % Ralentí. Ver docs/DIAGNOSTICO_RALENTI_Q1_JUNIO_2026.md.
+      const m = computeMotorMetrics(pRows);
+
+      // CO₂ y costo se derivan de los galones de ralentí de TODAS las filas (incluye combustible
+      // imputado por cargas de excesos), coherente con el comportamiento previo del módulo.
       let co2Kg = 0; let costoCOP = 0;
-      const vehSet = new Set<string>();
-      const vehMotorSet = new Set<string>();
       pRows.forEach(r => {
         const fuel = vehFuelMap.get(String(r.vehiculo_id)) || '';
         const gal = Number(r.consumo_combustible) || 0;
         co2Kg += gal * getCO2Factor(fuel);
         costoCOP += gal * getPrecioGalon(fuel);
-        vehSet.add(String(r.vehiculo_id));
-        if ((Number(r.horas_motor_encendido) || 0) > 0) vehMotorSet.add(String(r.vehiculo_id));
       });
-      const pctRalenti = totalHorasEncendido > 0 ? (totalHorasRalenti / totalHorasEncendido) * 100 : 0;
-      const horasConduccion = Math.max(totalHorasEncendido - totalHorasRalenti, 0);
 
       const ev = eventAgg.get(key) ?? { alertas: 0, segMas5Min: 0, eventosMas30Min: 0 };
       const horasRalentiMas5Min = ev.segMas5Min / 3600;
-      const horasRalentiMenos5Min = Math.max(totalHorasRalenti - horasRalentiMas5Min, 0);
+      const horasRalentiMenos5Min = Math.max(m.totalHorasRalenti - horasRalentiMas5Min, 0);
 
       const labels = getPeriodoLabel(first.periodo_inicio);
       computed.push({
         key, ...labels,
         inicio: first.periodo_inicio, fin: first.periodo_fin,
-        totalEventos: ev.alertas, totalGalones, totalHorasEncendido, totalHorasRalenti,
-        horasConduccion, horasRalentiMas5Min, horasRalentiMenos5Min, eventosMas30Min: ev.eventosMas30Min,
-        pctRalenti, co2Kg, costoCOP,
-        vehiculosActivos: vehSet.size,
-        vehiculosConMotor: vehMotorSet.size,
+        totalEventos: ev.alertas, totalGalones: m.totalGalones,
+        totalHorasEncendido: m.totalHorasEncendido, totalHorasRalenti: m.totalHorasRalenti,
+        horasConduccion: m.horasConduccion, horasRalentiMas5Min, horasRalentiMenos5Min,
+        eventosMas30Min: ev.eventosMas30Min,
+        pctRalenti: m.pctRalenti, co2Kg, costoCOP,
+        vehiculosActivos: m.vehiculosActivos,
+        vehiculosConMotor: m.vehiculosConMotor,
         pctVsBaselineEventos: 0, pctVsBaselineGalones: 0, pctVsBaselineCO2: 0,
+        totalKm: m.totalKm, kmPorVehiculoActivo: m.kmPorVehiculoActivo, pctConduccion: m.pctConduccion,
+        velocidadMedia: m.velocidadMedia, kmPorHoraRalenti: m.kmPorHoraRalenti,
+        ralentiHuerfano: m.ralentiHuerfano, coberturaMotorPct: m.coberturaMotorPct,
+        datoInconsistente: m.datoInconsistente, filasRalentiMayorEnc: m.filasRalentiMayorEnc,
+        pctGalonesRalenti: null, // total de galones no se persiste hoy (ver ETL) → N/D
       });
     });
 
@@ -925,10 +936,109 @@ export const RalentiAnalisisGeneral: React.FC<{
         <p className="mt-3 text-[10px] text-slate-400 dark:text-slate-500 leading-relaxed flex items-start gap-1.5">
           <Info className="w-3 h-3 shrink-0 mt-0.5" />
           <span>
-            Todas las cifras cubren la flota completa y cuadran entre sí
-            (<strong>H. Motor Enc − Ralentí Total = H. Conducción</strong>), igual que el Informe por Período.
-            El indicador <span className="text-amber-600 dark:text-amber-400">n/total c/motor</span> señala cuántos
-            vehículos reportan horas de motor: con cobertura baja, el <strong>% Ralentí</strong> de ese período se sobreestima.
+            H. Motor, Conducción y <strong>% Ralentí</strong> se calculan sobre los vehículos con
+            horas de motor &gt; 0 (<strong>normalizado por vehículos activos</strong>) y cuadran entre sí
+            (<strong>H. Motor Enc − Ralentí Total = H. Conducción</strong>). El indicador
+            <span className="text-amber-600 dark:text-amber-400"> n/total c/motor</span> señala la cobertura del dato de
+            motor: los períodos con cobertura baja quedan marcados como <strong>dato inconsistente</strong> en la
+            tabla de eficiencia inferior.
+          </span>
+        </p>
+      </div>
+
+      {/* ── Tabla de Eficiencia Operativa Normalizada (por vehículos activos) ── */}
+      <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-6 shadow-sm">
+        <h3 className="font-bold text-slate-800 dark:text-slate-200 text-sm flex items-center gap-2 mb-1">
+          <Activity className="w-4 h-4 text-emerald-500" />
+          Eficiencia Operativa por Período
+          <span className="text-[10px] font-normal text-slate-400 dark:text-slate-500">— normalizado por vehículos activos (H. Motor &gt; 0)</span>
+        </h3>
+        <p className="text-[11px] text-slate-400 dark:text-slate-500 mb-4">
+          Métricas comparables entre períodos independientes de la cobertura de la flota. La bandera
+          <span className="text-red-500 font-semibold"> ⚑ dato inconsistente</span> se activa si la cobertura de
+          horas de motor es &lt; 98% de los vehículos activos o si existen filas con ralentí &gt; encendido.
+        </p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse text-xs">
+            <thead>
+              <tr className="bg-[#003366] text-white text-[10px] font-bold uppercase tracking-wider">
+                <th className="py-3 px-4 rounded-tl-lg">Período</th>
+                <th className="py-3 px-3">Veh. activos</th>
+                <th className="py-3 px-3">Km recorridos</th>
+                <th className="py-3 px-3">Km / veh. activo</th>
+                <th className="py-3 px-3">H. Motor Enc.</th>
+                <th className="py-3 px-3">H. Conducción (%)</th>
+                <th className="py-3 px-3">Ralentí Total (%)</th>
+                <th className="py-3 px-3">Vel. media (km/h)</th>
+                <th className="py-3 px-3">Km / h ralentí</th>
+                <th className="py-3 px-3">% Gal. ralentí</th>
+                <th className="py-3 px-3 rounded-tr-lg">Validación</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
+              {periods.map((p, i) => {
+                const isBaseline = i === 0;
+                const isLatest = i === periods.length - 1;
+                return (
+                  <tr key={p.key} className={`transition-colors hover:bg-slate-50/70 dark:hover:bg-slate-700/30 ${p.datoInconsistente ? 'bg-red-50/40 dark:bg-red-950/10' : isBaseline ? 'bg-blue-50/60 dark:bg-blue-950/20' : ''}`}>
+                    <td className="py-3 px-4 font-semibold text-slate-800 dark:text-slate-200">
+                      <div className="flex items-center gap-2">
+                        {p.label}
+                        {isBaseline && <span className="text-[9px] bg-[#003366] text-white px-1.5 py-0.5 rounded-full font-bold">BASE</span>}
+                        {isLatest && !isBaseline && <span className="text-[9px] bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-300 px-1.5 py-0.5 rounded-full font-bold">ACTUAL</span>}
+                      </div>
+                    </td>
+                    <td className="py-3 px-3 text-slate-600 dark:text-slate-400">
+                      {p.vehiculosConMotor}
+                      <span className="block text-[9px] text-slate-400 dark:text-slate-500">{p.coberturaMotorPct.toFixed(0)}% cobertura</span>
+                    </td>
+                    <td className="py-3 px-3 text-slate-700 dark:text-slate-300">{Math.round(p.totalKm).toLocaleString('es-CO')}</td>
+                    <td className="py-3 px-3 text-slate-700 dark:text-slate-300">{p.kmPorVehiculoActivo.toFixed(1)}</td>
+                    <td className="py-3 px-3 text-slate-700 dark:text-slate-300">{p.totalHorasEncendido.toFixed(1)}</td>
+                    <td className="py-3 px-3 text-slate-700 dark:text-slate-300">
+                      {p.horasConduccion.toFixed(1)}
+                      <span className="block text-[9px] text-slate-400 dark:text-slate-500">{p.pctConduccion.toFixed(1)}%</span>
+                    </td>
+                    <td className="py-3 px-3">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${p.pctRalenti < 10 ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400' : p.pctRalenti < 20 ? 'bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400' : 'bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-400'}`}>
+                        {p.pctRalenti.toFixed(2)}%
+                      </span>
+                      <span className="block text-[9px] text-slate-400 dark:text-slate-500 mt-0.5">{p.totalHorasRalenti.toFixed(0)} h</span>
+                    </td>
+                    <td className="py-3 px-3 text-slate-700 dark:text-slate-300">{p.velocidadMedia.toFixed(1)}</td>
+                    <td className="py-3 px-3 font-semibold text-slate-700 dark:text-slate-300">{p.kmPorHoraRalenti.toFixed(1)}</td>
+                    <td className="py-3 px-3 text-slate-500 dark:text-slate-400">
+                      {p.pctGalonesRalenti != null
+                        ? `${p.pctGalonesRalenti.toFixed(1)}%`
+                        : <span className="text-slate-300 dark:text-slate-600" title="El total de galones no se persiste en la fuente actual; solo se guarda la porción de ralentí. Requiere el nuevo campo galones_totales en el ETL.">N/D</span>}
+                    </td>
+                    <td className="py-3 px-3">
+                      {p.datoInconsistente ? (
+                        <span
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400"
+                          title={`Dato inconsistente: cobertura de motor ${p.coberturaMotorPct.toFixed(0)}% (< 98%)${p.filasRalentiMayorEnc > 0 ? ` · ${p.filasRalentiMayorEnc} fila(s) con ralentí > encendido` : ''}. Compare con precaución.`}
+                        >
+                          <AlertTriangle className="w-3 h-3" /> Inconsistente
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400">
+                          <CheckCircle className="w-3 h-3" /> OK
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <p className="mt-3 text-[10px] text-slate-400 dark:text-slate-500 leading-relaxed flex items-start gap-1.5">
+          <Info className="w-3 h-3 shrink-0 mt-0.5" />
+          <span>
+            <strong>Vel. media</strong> = Km / H. Conducción (ponderada). <strong>Km / h ralentí</strong> = eficiencia
+            (más alto = menos motor quieto por km útil). <strong>% Gal. ralentí</strong> requiere el total de galones,
+            que hoy no se persiste en la fuente (solo la porción de ralentí) → se muestra <strong>N/D</strong> hasta
+            que el ETL capture <code>galones_totales</code>.
           </span>
         </p>
       </div>

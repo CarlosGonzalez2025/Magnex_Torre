@@ -349,6 +349,16 @@ export const TelemetryProcessor: React.FC = () => {
               <p>
                 Los archivos crudos se cargaron, procesaron, normalizaron y unificaron con éxito. Se guardaron un total de <strong>{result.registrosInsertados} registros operacionales</strong> en Supabase para el período del <strong>{uploadRange.inicio}</strong> al <strong>{uploadRange.fin}</strong>.
               </p>
+              {result.advertencias && result.advertencias.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  {result.advertencias.map((adv, i) => (
+                    <div key={i} className="flex gap-2 items-start text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/20 border border-amber-200/50 dark:border-amber-900/50 rounded-lg p-2.5">
+                      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                      <span className="text-[11px] leading-relaxed">{adv}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}
