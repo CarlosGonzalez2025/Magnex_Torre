@@ -24,6 +24,40 @@ export interface ImportResult {
   registrosInsertados: number;
   errores: ValidationError[];
   novedades?: { pendientes: number };
+  advertencias?: string[];
+}
+
+/**
+ * Blindaje del informe de ralentí: tras una carga, verifica cuántos vehículos del período
+ * quedaron con ralentí pero SIN horas de motor encendido (cobertura). Cuando esa cobertura
+ * es baja, el % Ralentí del período se sobreestima (bug de docs/DIAGNOSTICO_RALENTI_Q1_JUNIO_2026.md).
+ * El cálculo del dashboard ya normaliza por vehículos activos, pero avisamos al operador para
+ * que cargue también el consolidado de horas de motor de ese proveedor.
+ */
+async function advertenciaCoberturaMotor(
+  periodoInicio: string,
+  periodoFin: string
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('ralentis_periodos')
+    .select('horas_motor_encendido, horas_motor_ralenti')
+    .eq('periodo_inicio', periodoInicio)
+    .eq('periodo_fin', periodoFin);
+  if (error || !data || data.length === 0) return null;
+  const total = data.length;
+  const conMotor = data.filter(r => Number(r.horas_motor_encendido) > 0).length;
+  const huerfanos = data.filter(
+    r => Number(r.horas_motor_encendido) === 0 && Number(r.horas_motor_ralenti) > 0
+  ).length;
+  const coberturaPct = total > 0 ? (conMotor / total) * 100 : 100;
+  if (coberturaPct >= 98) return null;
+  return (
+    `Cobertura de horas de motor baja en el período ${periodoInicio}…${periodoFin}: ` +
+    `${conMotor}/${total} vehículos con motor (${coberturaPct.toFixed(0)}%), ` +
+    `${huerfanos} con ralentí pero sin horas de motor. ` +
+    `Cargue también el consolidado de horas de motor (Ralenti 1 / Km_Vehículos) para que el ` +
+    `% Ralentí del período sea comparable.`
+  );
 }
 
 interface WriteResult {
@@ -2627,7 +2661,11 @@ export async function importarDatosPlanosColtrack(
       if (error) throw new Error(`Error reconciliando galones reales del semanal Coltrack: ${error.message}`);
     }
 
-    return { cargaId, exito: true, registrosInsertados, errores: erroresGlobales };
+    const advCobertura = await advertenciaCoberturaMotor(periodoInicio, periodoFin);
+    return {
+      cargaId, exito: true, registrosInsertados, errores: erroresGlobales,
+      advertencias: advCobertura ? [advCobertura] : undefined,
+    };
 
   } catch (err: any) {
     await supabase.from('cargas_excel').update({ estado_validacion: 'error' }).eq('id', cargaId);
@@ -3404,7 +3442,11 @@ export async function importarDatosPlanosFagor(
       registrosInsertados += consolizados.length;
     }
 
-    return { cargaId, exito: true, registrosInsertados, errores: erroresGlobales };
+    const advCobertura = await advertenciaCoberturaMotor(periodoInicio, periodoFin);
+    return {
+      cargaId, exito: true, registrosInsertados, errores: erroresGlobales,
+      advertencias: advCobertura ? [advCobertura] : undefined,
+    };
 
   } catch (err: any) {
     await supabase.from('cargas_excel').update({ estado_validacion: 'error' }).eq('id', cargaId);
