@@ -5,10 +5,11 @@ interface ToolResult { tool: string; args: Record<string, any>; result: any; }
 interface ChatMessage { role: 'user' | 'assistant'; content: string; toolResults?: ToolResult[]; error?: boolean; }
 
 const SUGGESTIONS = [
-  '¿Qué períodos de ralentí hay disponibles?',
-  'Dame la ficha del vehículo con placa ',
+  '¿Qué vehículos tuvieron excesos de velocidad hoy?',
+  '¿La placa ABC123 presentó excesos hoy?',
+  '¿Cuántos km recorrió la flota hoy?',
+  '¿Cuántos vehículos y conductores tiene cada contrato?',
   'Top 10 conductores por ralentí del último período',
-  'Compara el consumo y CO₂ por contrato',
 ];
 
 // ── Render genérico de los datos consultados ──
@@ -131,7 +132,7 @@ export const AiChat: React.FC = () => {
               </div>
               <div>
                 <div className="text-sm font-bold leading-tight">Asistente Torre de Control</div>
-                <div className="text-[10px] text-white/70">Consulta datos de flota, ralentí y contratos</div>
+                <div className="text-[10px] text-white/70">Excesos, km, ralentí, contratos y flota</div>
               </div>
             </div>
             <button onClick={() => setOpen(false)} className="p-1.5 hover:bg-white/20 rounded-lg transition-colors">
@@ -147,8 +148,8 @@ export const AiChat: React.FC = () => {
                   <Sparkles className="w-6 h-6 text-indigo-500" />
                 </div>
                 <p className="text-xs text-slate-500 dark:text-slate-400 px-4">
-                  Pregúntame sobre una <strong>placa</strong>, un <strong>conductor</strong>, un <strong>contrato</strong> o el <strong>ralentí por período</strong>.
-                  Respondo con datos reales de la base.
+                  Pregúntame por <strong>excesos de velocidad</strong>, <strong>km recorridos</strong>, <strong>ralentí</strong>,
+                  una <strong>placa</strong>, un <strong>conductor</strong> o un <strong>contrato</strong>. Respondo con datos reales de la base.
                 </p>
                 <div className="flex flex-col gap-1.5 px-2">
                   {SUGGESTIONS.map((s, i) => (
