@@ -77,12 +77,24 @@ export interface DetailedAuditAnalysis {
     top_locations: { location: string; count: number }[];
     locations_with_graves: { location: string; grave_count: number }[];
   };
-  
+
   trends: {
     daily_trend: { date: string; count: number; change_percentage: number }[];
     weekly_comparison: { week: string; count: number }[];
     growth_rate: number;
   };
+
+  // Distribución de alertas por plataforma de origen (FAGOR / COLTRACK / GEOTAB)
+  source_distribution: { source: string; count: number }[];
+
+  // Relación vehículo ↔ conductores con sus incidencias (quién conduce qué y con
+  // cuántas faltas). Permite cruzar responsabilidad entre placa y conductor.
+  vehicle_driver_relations: {
+    plate: string;
+    total: number;
+    grave_count: number;
+    drivers: { driver: string; count: number; grave_count: number }[];
+  }[];
 }
 
 export interface VehicleDetailedStats {
@@ -872,6 +884,37 @@ export async function getDetailedAuditAnalysis(
       ? (dailyTrend[dailyTrend.length - 1].count - dailyTrend[0].count) / dailyTrend[0].count * 100
       : 0;
 
+    // 9. DISTRIBUCIÓN POR PLATAFORMA
+    const sourceDistribution = Object.entries(sourceCount)
+      .map(([source, count]) => ({ source, count }))
+      .sort((a, b) => b.count - a.count);
+
+    // 10. RELACIÓN VEHÍCULO ↔ CONDUCTOR
+    const relationMap = alerts.reduce((acc, a) => {
+      const plate = a.plate || 'Sin placa';
+      const driver = a.driver || 'Sin conductor';
+      if (!acc[plate]) acc[plate] = {};
+      if (!acc[plate][driver]) acc[plate][driver] = { count: 0, grave: 0 };
+      acc[plate][driver].count++;
+      if (a.is_grave) acc[plate][driver].grave++;
+      return acc;
+    }, {} as Record<string, Record<string, { count: number; grave: number }>>);
+
+    const vehicleDriverRelations = Object.entries(relationMap)
+      .map(([plate, driversObj]) => {
+        const driverList = Object.entries(driversObj)
+          .map(([driver, d]) => ({ driver, count: d.count, grave_count: d.grave }))
+          .sort((a, b) => b.count - a.count);
+        return {
+          plate,
+          total: driverList.reduce((s, d) => s + d.count, 0),
+          grave_count: driverList.reduce((s, d) => s + d.grave_count, 0),
+          drivers: driverList
+        };
+      })
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 15);
+
     const analysis: DetailedAuditAnalysis = {
       overview: {
         total_uploads: uploads.length,
@@ -919,7 +962,9 @@ export async function getDetailedAuditAnalysis(
         daily_trend: dailyTrend,
         weekly_comparison: weeklyComparison,
         growth_rate: growthRate
-      }
+      },
+      source_distribution: sourceDistribution,
+      vehicle_driver_relations: vehicleDriverRelations
     };
 
     console.log('✅ Análisis detallado completado');
@@ -1178,7 +1223,27 @@ export function exportAnalysisToCSV(
   analysis.drivers.most_incidents.forEach(d => {
     rows.push(`${d.driver},${d.count},${d.grave_count}`);
   });
-  
+
+  rows.push('\n\nDISTRIBUCIÓN POR PLATAFORMA');
+  rows.push('Plataforma,Alertas');
+  analysis.source_distribution.forEach(s => {
+    rows.push(`${s.source},${s.count}`);
+  });
+
+  rows.push('\n\nTENDENCIA DIARIA');
+  rows.push('Fecha,Alertas,% Cambio');
+  analysis.trends.daily_trend.forEach(t => {
+    rows.push(`${t.date},${t.count},${t.change_percentage.toFixed(1)}%`);
+  });
+
+  rows.push('\n\nRELACIÓN VEHÍCULO - CONDUCTOR');
+  rows.push('Placa,Conductor,Alertas,Faltas Graves');
+  analysis.vehicle_driver_relations.forEach(v => {
+    v.drivers.forEach(d => {
+      rows.push(`${v.plate},${d.driver},${d.count},${d.grave_count}`);
+    });
+  });
+
   const csvContent = rows.join('\n');
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const link = document.createElement('a');
