@@ -443,6 +443,47 @@ def tool_estadisticas_flota(_args=None):
     }
 
 
+def tool_vehiculos_por_plataforma(args):
+    incluir_inactivos = args.get('incluir_inactivos') is True
+    vehs = pg_fetch_all('vehiculos', 'placa,estado,gps_compañia')
+    if not incluir_inactivos:
+        vehs = [v for v in vehs if es_activo(v.get('estado'))]
+
+    def canonical(raw):
+        value = str(raw or '').strip().upper()
+        if not value or value in ('N/A', 'NA', 'NINGUNO', 'NO', 'SIN GPS', 'NO MONITOREADO'):
+            return None
+        for platform in ('COLTRACK', 'GEOTAB', 'FAGOR'):
+            if platform in value:
+                return platform
+        return value
+
+    counts = {'COLTRACK': 0, 'FAGOR': 0, 'GEOTAB': 0}
+    no_monitoreados = 0
+    for veh in vehs:
+        platform = canonical(veh.get('gps_compañia'))
+        if platform is None:
+            no_monitoreados += 1
+        else:
+            counts[platform] = counts.get(platform, 0) + 1
+    por_plataforma = sorted(
+        ({'plataforma': k, 'vehiculos': v} for k, v in counts.items()),
+        key=lambda item: -item['vehiculos'])
+    monitoreados = sum(item['vehiculos'] for item in por_plataforma)
+    filtro = canonical(args.get('plataforma'))
+    coincidencia = next((x for x in por_plataforma if x['plataforma'] == filtro), None) if filtro else None
+    if filtro and coincidencia is None:
+        coincidencia = {'plataforma': filtro, 'vehiculos': 0}
+    return {
+        'alcance': 'Todos los vehiculos' if incluir_inactivos else 'Vehiculos activos',
+        'totalVehiculos': len(vehs), 'monitoreados': monitoreados,
+        'noMonitoreados': no_monitoreados,
+        'coberturaPct': round(monitoreados / len(vehs) * 100, 1) if vehs else 0,
+        'porPlataforma': por_plataforma, 'plataformaConsultada': coincidencia,
+        'criterio': 'Asignacion registrada en vehiculos.gps_compañia',
+    }
+
+
 def tool_buscar_vehiculo(args):
     placa = str(args.get('placa') or '').strip()
     vehs = pg_fetch_all('vehiculos',
@@ -544,6 +585,18 @@ def render_estadisticas(r):
             f"Principales clientes por vehículos: {top}.")
 
 
+def render_plataformas(r):
+    consultada = r.get('plataformaConsultada')
+    if consultada:
+        return (f"{consultada['vehiculos']} vehiculos activos son monitoreados por "
+                f"{consultada['plataforma']}. La cobertura GPS total es {r['coberturaPct']}% "
+                f"({r['monitoreados']} de {r['totalVehiculos']} vehiculos).")
+    detalle = ', '.join(f"{x['plataforma']}: {x['vehiculos']}" for x in r['porPlataforma'])
+    return (f"Hay {r['monitoreados']} de {r['totalVehiculos']} vehiculos activos monitoreados "
+            f"({r['coberturaPct']}%). Por plataforma: {detalle}. "
+            f"Sin monitoreo registrado: {r['noMonitoreados']}.")
+
+
 def render_vehiculo(r):
     if not r.get('encontrado'):
         return r['mensaje']
@@ -631,7 +684,15 @@ def run_agent(messages):
         else:
             tool = ('listar_contratos', tool_listar_contratos)
             tool_args = {}
-    # 4) Flota / conteos globales
+    # 4) Monitoreo por plataforma GPS
+    elif re.search(r'plataforma|monitoread|monitoriz|proveedor gps|gps', tn):
+        platform = next((p for p in ('COLTRACK', 'FAGOR', 'GEOTAB') if p.lower() in tn), None)
+        tool = ('vehiculos_por_plataforma_gps', tool_vehiculos_por_plataforma)
+        tool_args = {
+            'plataforma': platform,
+            'incluir_inactivos': any(k in tn for k in ('inactivos', 'todos los vehiculos', 'toda la flota')),
+        }
+    # 5) Flota / conteos globales
     elif re.search(r'cuantos?\s+(vehiculos|carros|conductores)|flota|estadistic|total de (vehiculos|conductores)', tn):
         if 'por contrato' in tn:
             tool = ('listar_contratos', tool_listar_contratos); tool_args = {}
@@ -661,7 +722,7 @@ def run_agent(messages):
         'excesos_velocidad': render_excesos, 'auditoria_excesos': render_auditoria,
         'km_recorridos': render_km, 'listar_contratos': render_listar_contratos,
         'estadisticas_flota': render_estadisticas, 'buscar_vehiculo': render_vehiculo,
-        'info_conductor': render_conductor,
+        'info_conductor': render_conductor, 'vehiculos_por_plataforma_gps': render_plataformas,
     }
     answer = renderers[name](result)
     return {'answer': answer, 'toolResults': [{'tool': name, 'args': tool_args, 'result': result}]}

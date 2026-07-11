@@ -585,6 +585,58 @@ const TOOLS = {
     },
   },
 
+  vehiculos_por_plataforma_gps: {
+    decl: {
+      name: 'vehiculos_por_plataforma_gps',
+      description: 'Cuenta los vehiculos monitoreados por plataforma GPS segun el maestro de vehiculos (COLTRACK, FAGOR, GEOTAB y otras), los no monitoreados y el porcentaje de cobertura. Permite consultar una plataforma concreta. Por defecto cuenta solo vehiculos activos.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          plataforma: { type: 'STRING', description: 'Plataforma opcional, por ejemplo COLTRACK, FAGOR o GEOTAB' },
+          incluir_inactivos: { type: 'BOOLEAN', description: 'True para incluir vehiculos inactivos; por defecto false' },
+        },
+      },
+    },
+    run: async (supabase, args) => {
+      const incluirInactivos = args.incluir_inactivos === true;
+      const rows = await fetchAll(supabase, 'vehiculos', 'placa, estado, gps_compañia', q =>
+        incluirInactivos ? q : q.eq('estado', 'ACTIVO'));
+      const canonical = raw => {
+        const value = String(raw || '').trim().toUpperCase();
+        if (!value || ['N/A', 'NA', 'NINGUNO', 'NO', 'SIN GPS', 'NO MONITOREADO'].includes(value)) return null;
+        if (value.includes('COLTRACK')) return 'COLTRACK';
+        if (value.includes('GEOTAB')) return 'GEOTAB';
+        if (value.includes('FAGOR')) return 'FAGOR';
+        return value;
+      };
+      const counts = new Map([['COLTRACK', 0], ['FAGOR', 0], ['GEOTAB', 0]]);
+      let noMonitoreados = 0;
+      for (const row of rows) {
+        const platform = canonical(row.gps_compañia);
+        if (!platform) noMonitoreados += 1;
+        else counts.set(platform, (counts.get(platform) || 0) + 1);
+      }
+      const porPlataforma = [...counts.entries()]
+        .map(([plataforma, vehiculos]) => ({ plataforma, vehiculos }))
+        .sort((a, b) => b.vehiculos - a.vehiculos);
+      const monitored = porPlataforma.reduce((sum, item) => sum + item.vehiculos, 0);
+      const filtro = canonical(args.plataforma);
+      const coincidencia = filtro
+        ? porPlataforma.find(item => item.plataforma === filtro) || { plataforma: filtro, vehiculos: 0 }
+        : null;
+      return {
+        alcance: incluirInactivos ? 'Todos los vehiculos' : 'Vehiculos activos',
+        totalVehiculos: rows.length,
+        monitoreados: monitored,
+        noMonitoreados,
+        coberturaPct: rows.length ? +((monitored / rows.length) * 100).toFixed(1) : 0,
+        porPlataforma,
+        plataformaConsultada: coincidencia,
+        criterio: 'Asignacion registrada en vehiculos.gps_compañia',
+      };
+    },
+  },
+
   auditoria_excesos: {
     decl: {
       name: 'auditoria_excesos',
@@ -672,6 +724,7 @@ CAPACIDADES (elige la herramienta adecuada):
 - Kilómetros recorridos en un día o rango (Geotab) → km_recorridos.
 - Contratos con nº de vehículos y conductores asignados → listar_contratos (o resumen_contrato para uno solo con detalle de ralentí).
 - Tamaño global de la flota (vehículos activos, conductores, contratos, por cliente) → estadisticas_flota.
+- Vehículos monitoreados por plataforma GPS, cobertura y no monitoreados → vehiculos_por_plataforma_gps. Úsala para preguntas por COLTRACK, FAGOR, GEOTAB o comparaciones entre plataformas.
 
 REGLAS ESTRICTAS:
 - Para CUALQUIER dato de la base DEBES usar las herramientas. NUNCA inventes cifras, placas, nombres ni fechas.
@@ -679,7 +732,8 @@ REGLAS ESTRICTAS:
 - Si una herramienta no devuelve datos, dilo con honestidad y sugiere cómo reformular (p. ej. usar listar_periodos para períodos de ralentí válidos, o verificar la placa/contrato).
 - Los períodos de ralentí son quincenas (Q1 = día 1 al 15, Q2 = día 16 al fin de mes). Si el usuario menciona un mes o quincena sin fechas exactas, primero usa listar_periodos. Para excesos y km las fechas son días calendario normales (YYYY-MM-DD).
 - No respondas sobre temas ajenos a la flota o la operación. Si te preguntan algo fuera de alcance, indícalo amablemente.
-- Cuando muestres cifras clave, redáctalas de forma natural; el sistema ya muestra al usuario las tablas de datos crudos por separado, así que no las repitas exhaustivamente: resume e interpreta.`;
+- Cuando muestres cifras clave, redáctalas de forma natural; el sistema ya muestra al usuario las tablas de datos crudos por separado, así que no las repitas exhaustivamente: resume e interpreta.
+- Si el usuario pide generar, crear, descargar o preparar un informe, consulta todas las herramientas necesarias y presenta un resumen ejecutivo. La interfaz permite exportar cada resultado a Excel o PDF; indícale que use esos botones.`;
 
 // ── Llamada a Gemini con bucle de function-calling ──
 async function runChat({ messages, geminiApiKey, supabaseUrl, supabaseKey, model }) {
