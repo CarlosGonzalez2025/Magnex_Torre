@@ -286,6 +286,41 @@ def tool_excesos_velocidad(args):
     }
 
 
+def tool_frenadas_bruscas(args):
+    desde = args.get('fecha_inicio') or args.get('fecha') or hoy_col()
+    hasta = args.get('fecha_fin') or args.get('fecha') or hoy_col()
+    filters = [_q('fecha_dia', 'gte', desde), _q('fecha_dia', 'lte', hasta), _q('frenadas_bruscas', 'gt', 0)]
+    for field, column in (('placa', 'placa'), ('contrato', 'contrato_nombre'), ('cliente', 'cliente'), ('plataforma', 'gps')):
+        if args.get(field):
+            filters.append(_q(column, 'ilike', f"*{args[field]}*"))
+    rows = pg_fetch_all('alertas_diarias_gps',
+                        'placa,conductor,fecha_dia,frenadas_bruscas,contrato_nombre,cliente,gps,tipo_activo,lugar', filters)
+    por_veh, por_cond, por_gps = {}, {}, {}
+    total = 0
+    for row in rows:
+        cantidad = int(float(row.get('frenadas_bruscas') or 0)); total += cantidad
+        placa = norm(row.get('placa')) or 'SIN_PLACA'
+        veh = por_veh.setdefault(placa, {'placa': placa, 'frenadas': 0,
+            'contrato': row.get('contrato_nombre') or '', 'cliente': row.get('cliente') or '',
+            'plataforma': row.get('gps') or 'N/D'})
+        veh['frenadas'] += cantidad
+        if not es_cond_placeholder(row.get('conductor')):
+            nombre = str(row.get('conductor')).strip()
+            cond = por_cond.setdefault(nombre, {'conductor': nombre, 'frenadas': 0})
+            cond['frenadas'] += cantidad
+        gps = str(row.get('gps') or 'NO REGISTRADA').strip().upper()
+        por_gps[gps] = por_gps.get(gps, 0) + cantidad
+    rango = desde if desde == hasta else f'{desde} a {hasta}'
+    return {
+        'rango': rango, 'totalFrenadas': total, 'totalVehiculos': len(por_veh),
+        'totalConductores': len(por_cond),
+        'por_plataforma': sorted(({'plataforma': k, 'frenadas': v} for k, v in por_gps.items()), key=lambda x: -x['frenadas']),
+        'por_vehiculo': sorted(por_veh.values(), key=lambda x: -x['frenadas'])[:100],
+        'por_conductor': sorted(por_cond.values(), key=lambda x: -x['frenadas'])[:100],
+        'mensaje': 'No se registraron frenadas bruscas para ese periodo/filtro.' if total == 0 else None,
+    }
+
+
 def tool_auditoria_excesos(args):
     # batch_alerts es grande. Un ilike '%x%' fuerza scan completo y dispara
     # statement timeout; hay índice en plate, así que usamos eq (placa exacta,
@@ -556,6 +591,15 @@ def render_auditoria(r):
             f"({_fnum(r['totalGraves'])} graves). Vehículos con más: {top}.")
 
 
+def render_frenadas(r):
+    if not r.get('totalFrenadas'):
+        return r.get('mensaje', 'No se registraron frenadas bruscas.')
+    top = ', '.join(f"{v['placa']} ({v['frenadas']})" for v in r.get('por_vehiculo', [])[:3])
+    return (f"En {r['rango']} se registraron {_fnum(r['totalFrenadas'])} frenadas bruscas en "
+            f"{r['totalVehiculos']} vehículos y {r['totalConductores']} conductores. "
+            + (f"Vehículos con más eventos: {top}." if top else ''))
+
+
 def render_km(r):
     if r.get('totalKm', 0) == 0 and r.get('mensaje'):
         return r['mensaje']
@@ -655,8 +699,15 @@ def run_agent(messages):
 
     tool = tool_args = None
 
-    # 1) Kilómetros
-    if re.search(r'\bkm\b|kilomet|recorr|kilometra', tn):
+    # 1) Frenadas bruscas
+    if re.search(r'frenad|frenado|harsh brak|desaceleracion brusca', tn):
+        tool = ('frenadas_bruscas', tool_frenadas_bruscas)
+        tool_args = {'placa': placa, 'contrato': contrato, 'cliente': cliente}
+        platform = next((p for p in ('COLTRACK', 'FAGOR', 'GEOTAB') if p.lower() in tn), None)
+        if platform: tool_args['plataforma'] = platform
+        if d1: tool_args.update(fecha_inicio=d1, fecha_fin=d2)
+    # 2) Kilómetros
+    elif re.search(r'\bkm\b|kilomet|recorr|kilometra', tn):
         tool = ('km_recorridos', tool_km_recorridos)
         tool_args = {'placa': placa, 'contrato': contrato, 'cliente': cliente}
         if d1:
@@ -720,6 +771,7 @@ def run_agent(messages):
 
     renderers = {
         'excesos_velocidad': render_excesos, 'auditoria_excesos': render_auditoria,
+        'frenadas_bruscas': render_frenadas,
         'km_recorridos': render_km, 'listar_contratos': render_listar_contratos,
         'estadisticas_flota': render_estadisticas, 'buscar_vehiculo': render_vehiculo,
         'info_conductor': render_conductor, 'vehiculos_por_plataforma_gps': render_plataformas,

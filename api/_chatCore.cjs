@@ -450,6 +450,57 @@ const TOOLS = {
     },
   },
 
+  frenadas_bruscas: {
+    decl: {
+      name: 'frenadas_bruscas',
+      description: 'Consulta frenadas bruscas de una fecha o rango en alertas_diarias_gps. Por defecto usa hoy. Permite filtrar por placa, contrato, cliente o plataforma GPS y devuelve eventos, vehiculos, conductores y rankings. Usala para preguntas e informes sobre frenadas, frenado brusco, harsh braking o conduccion reactiva.',
+      parameters: { type: 'OBJECT', properties: {
+        fecha: { type: 'STRING', description: 'Dia YYYY-MM-DD; por defecto hoy' },
+        fecha_inicio: { type: 'STRING', description: 'Inicio YYYY-MM-DD' },
+        fecha_fin: { type: 'STRING', description: 'Fin YYYY-MM-DD' },
+        placa: { type: 'STRING' }, contrato: { type: 'STRING' }, cliente: { type: 'STRING' },
+        plataforma: { type: 'STRING', description: 'COLTRACK, FAGOR o GEOTAB' },
+      } },
+    },
+    run: async (supabase, args) => {
+      const hoy = fechaHoyColombia();
+      const desde = String(args.fecha_inicio || args.fecha || hoy).trim();
+      const hasta = String(args.fecha_fin || args.fecha || hoy).trim();
+      const rows = await fetchAll(supabase, 'alertas_diarias_gps',
+        'placa,conductor,fecha_dia,frenadas_bruscas,contrato_nombre,cliente,gps,tipo_activo,lugar', q => {
+          let x = q.gte('fecha_dia', desde).lte('fecha_dia', hasta).gt('frenadas_bruscas', 0);
+          if (args.placa) x = x.ilike('placa', `%${String(args.placa).trim()}%`);
+          if (args.contrato) x = x.ilike('contrato_nombre', `%${String(args.contrato).trim()}%`);
+          if (args.cliente) x = x.ilike('cliente', `%${String(args.cliente).trim()}%`);
+          if (args.plataforma) x = x.ilike('gps', `%${String(args.plataforma).trim()}%`);
+          return x;
+        });
+      const porVeh = new Map(), porCond = new Map(), porGps = new Map();
+      let total = 0;
+      for (const r of rows) {
+        const cantidad = Number(r.frenadas_bruscas) || 0; total += cantidad;
+        const placa = norm(r.placa) || 'SIN_PLACA';
+        const pv = porVeh.get(placa) || { placa, frenadas: 0, contrato: r.contrato_nombre || '', cliente: r.cliente || '', plataforma: r.gps || 'N/D' };
+        pv.frenadas += cantidad; porVeh.set(placa, pv);
+        if (!esConductorPlaceholder(r.conductor)) {
+          const nombre = String(r.conductor).trim();
+          const pc = porCond.get(nombre) || { conductor: nombre, frenadas: 0 };
+          pc.frenadas += cantidad; porCond.set(nombre, pc);
+        }
+        const gps = String(r.gps || 'NO REGISTRADA').trim().toUpperCase();
+        porGps.set(gps, (porGps.get(gps) || 0) + cantidad);
+      }
+      return {
+        rango: desde === hasta ? desde : `${desde} a ${hasta}`,
+        totalFrenadas: total, totalVehiculos: porVeh.size, totalConductores: porCond.size,
+        por_plataforma: [...porGps].map(([plataforma, frenadas]) => ({ plataforma, frenadas })).sort((a,b) => b.frenadas-a.frenadas),
+        por_vehiculo: [...porVeh.values()].sort((a,b) => b.frenadas-a.frenadas).slice(0, 100),
+        por_conductor: [...porCond.values()].sort((a,b) => b.frenadas-a.frenadas).slice(0, 100),
+        mensaje: total === 0 ? 'No se registraron frenadas bruscas para ese periodo/filtro.' : undefined,
+      };
+    },
+  },
+
   km_recorridos: {
     decl: {
       name: 'km_recorridos',
@@ -720,6 +771,7 @@ Respondes en español, de forma clara, breve y gerencial. Hoy es ${fechaHoyColom
 CAPACIDADES (elige la herramienta adecuada):
 - Ralentí por período/quincena, fichas de vehículo y conductor, consumo y CO₂ → listar_periodos, buscar_vehiculo, info_conductor, ralenti_por_periodo, top_conductores_ralenti, consumo_co2_por_contrato.
 - Excesos de velocidad de un día o rango (por vehículo y por conductor, graves >=80) → excesos_velocidad. Si el usuario dice "hoy" u omite fecha, no pases fechas (la herramienta usa el día de hoy).
+- Frenadas bruscas de un día o rango, por vehículo, conductor o plataforma → frenadas_bruscas.
 - Excesos de velocidad guardados en la Auditoría de Flota (reportes cargados FAGOR/COLTRACK/GEOTAB; "alertas autoguardadas"), por placa y/o rango → auditoria_excesos. Úsalo para "¿la placa X tiene/presenta excesos de velocidad?".
 - Kilómetros recorridos en un día o rango (Geotab) → km_recorridos.
 - Contratos con nº de vehículos y conductores asignados → listar_contratos (o resumen_contrato para uno solo con detalle de ralentí).

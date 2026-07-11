@@ -442,7 +442,7 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
-    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
 
     console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
 
@@ -471,7 +471,10 @@ const server = http.createServer(async (req, res) => {
                 res.end(JSON.stringify({ error: 'Falta el historial de mensajes.' }));
             } else {
                 const out = await new Promise((resolve, reject) => {
-                    const child = spawn('python', ['scripts/run_local_agent.py'], { cwd: process.cwd(), windowsHide: true });
+                    const child = spawn('python', ['scripts/run_local_agent.py'], {
+                        cwd: process.cwd(), windowsHide: true,
+                        env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
+                    });
                     let stdout = '', stderr = '';
                     child.stdout.on('data', chunk => { stdout += chunk.toString(); });
                     child.stderr.on('data', chunk => { stderr += chunk.toString(); });
