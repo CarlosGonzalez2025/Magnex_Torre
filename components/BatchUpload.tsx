@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, AlertTriangle, CheckCircle, FileText, Trash2, Download, Database, Search, Filter, Copy, Save, X, ChevronDown, ChevronUp, TrendingUp, BarChart3, PieChart } from 'lucide-react';
+import { Upload, AlertTriangle, FileText, Trash2, Download, Database, Search, Filter, Copy, Save, X, ChevronDown, BarChart3 } from 'lucide-react';
+import { AuditAnalyticsPanel } from './AuditAnalyticsPanel';
 import { processFile, validateFile, BatchAlert } from '../services/fileProcessingService';
 import {
   createFileUploadRecord,
@@ -48,7 +49,9 @@ export const BatchUpload: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [processedAlerts, setProcessedAlerts] = useState<BatchAlert[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [uploadCollapsed, setUploadCollapsed] = useState(false);
+
+  // Navegación por pestañas del módulo (Análisis detallado / Carga / Datos)
+  const [activeTab, setActiveTab] = useState<'analisis' | 'carga' | 'datos'>('datos');
 
   // Analysis Section
   const [savedAlerts, setSavedAlerts] = useState<BatchAlertRecord[]>([]);
@@ -58,9 +61,9 @@ export const BatchUpload: React.FC = () => {
   // 🆕 ANÁLISIS DETALLADO
   const [detailedAnalysis, setDetailedAnalysis] = useState<DetailedAuditAnalysis | null>(null);
   const [isLoadingAnalysis, setIsLoadingAnalysis] = useState(false);
-  const [showAnalysis, setShowAnalysis] = useState(false);
   const [selectedVehicleStats, setSelectedVehicleStats] = useState<VehicleDetailedStats | null>(null);
   const [selectedDriverStats, setSelectedDriverStats] = useState<DriverDetailedStats | null>(null);
+  // (showAnalysis eliminado: el análisis vive ahora en su propia pestaña)
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -301,8 +304,6 @@ export const BatchUpload: React.FC = () => {
       setProcessedAlerts(result.data || []);
       setIsProcessing(false);
 
-      setUploadCollapsed(true);
-
     } catch (error: any) {
       setError(error.message || 'Error desconocido');
       setIsProcessing(false);
@@ -385,8 +386,13 @@ export const BatchUpload: React.FC = () => {
     if (sourceFilter !== 'ALL') newFilters.source = sourceFilter as 'FAGOR' | 'COLTRACK' | 'GEOTAB';
     // Siempre restringido a excesos >= 80 km/h (faltas graves).
     newFilters.isGrave = true;
-    if (startDate) newFilters.startDate = new Date(startDate).toISOString();
-    if (endDate) newFilters.endDate = new Date(endDate).toISOString();
+    // Los timestamps se almacenan con el offset de la operación (-05:00, Colombia).
+    // Construimos los límites en esa MISMA zona horaria y cubrimos el día completo:
+    // 'Desde' = 00:00:00.000 y 'Hasta' = 23:59:59.999 hora Colombia. Así un solo día
+    // incluye TODAS sus alertas (antes new Date('YYYY-MM-DD') se parseaba como UTC
+    // medianoche y start=end dejaba una ventana vacía -> 0 registros).
+    if (startDate) newFilters.startDate = `${startDate}T00:00:00.000-05:00`;
+    if (endDate) newFilters.endDate = `${endDate}T23:59:59.999-05:00`;
 
     console.log('🔍 ========== APLICANDO FILTROS ==========');
     console.log('🔍 Filtros a aplicar:', newFilters);
@@ -662,144 +668,50 @@ export const BatchUpload: React.FC = () => {
         <p className="text-purple-100 mt-1 text-sm font-medium">Muestra únicamente los excesos de velocidad iguales o superiores a 80 km/h de las 3 plataformas.</p>
       </div>
 
-      {/* 🆕 PANEL DE ANÁLISIS DETALLADO */}
-      {detailedAnalysis && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
-          <button
-            onClick={() => setShowAnalysis(!showAnalysis)}
-            className="w-full px-6 py-4 flex items-center justify-between hover:bg-slate-50 transition-colors"
-          >
-            <div className="flex items-center gap-3">
-              <BarChart3 className="w-5 h-5 text-indigo-600" />
-              <span className="font-semibold text-lg">Análisis Detallado</span>
-              <span className="text-sm bg-indigo-100 text-indigo-700 px-3 py-1 rounded-full">
-                Métricas Avanzadas
-              </span>
-            </div>
-            {showAnalysis ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-          </button>
+      {/* ==================== BARRA DE PESTAÑAS ==================== */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-1.5 flex flex-wrap gap-1">
+        {([
+          { id: 'analisis', label: 'Análisis Detallado', icon: BarChart3, badge: undefined as number | undefined },
+          { id: 'datos', label: 'Análisis de Datos', icon: Search, badge: savedAlerts.length || undefined },
+          { id: 'carga', label: 'Cargar Archivo', icon: Upload, badge: processedAlerts.length || undefined },
+        ] as const).map(tab => {
+          const Icon = tab.icon;
+          const active = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex-1 min-w-[160px] px-4 py-2.5 rounded-lg font-medium text-sm transition-colors flex items-center justify-center gap-2 ${
+                active ? 'bg-purple-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <Icon className="w-4 h-4" />
+              {tab.label}
+              {tab.badge ? (
+                <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${active ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-700'}`}>
+                  {tab.badge}
+                </span>
+              ) : null}
+            </button>
+          );
+        })}
+      </div>
 
-          {showAnalysis && (
-            <div className="p-6 border-t border-slate-200 space-y-6">
-              {/* Stats Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4 border border-blue-200">
-                  <p className="text-sm text-blue-700 font-medium">Promedio Alertas/Carga</p>
-                  <p className="text-2xl font-bold text-blue-900">
-                    {detailedAnalysis.overview.avg_alerts_per_upload.toFixed(1)}
-                  </p>
-                </div>
-
-                <div className="bg-gradient-to-br from-red-50 to-red-100 rounded-lg p-4 border border-red-200">
-                  <p className="text-sm text-red-700 font-medium">% Faltas Graves</p>
-                  <p className="text-2xl font-bold text-red-900">
-                    {detailedAnalysis.overview.grave_percentage.toFixed(1)}%
-                  </p>
-                </div>
-
-                <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg p-4 border border-green-200">
-                  <p className="text-sm text-green-700 font-medium">Total Vehículos</p>
-                  <p className="text-2xl font-bold text-green-900">
-                    {detailedAnalysis.vehicles.total_vehicles}
-                  </p>
-                </div>
-
-                <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-lg p-4 border border-purple-200">
-                  <p className="text-sm text-purple-700 font-medium">Velocidad Promedio</p>
-                  <p className="text-2xl font-bold text-purple-900">
-                    {detailedAnalysis.speed_analysis.avg_speed.toFixed(1)} km/h
-                  </p>
-                </div>
-              </div>
-
-              {/* Top Vehicles */}
-              <div className="bg-slate-50 rounded-lg p-4">
-                <h3 className="font-semibold text-slate-800 mb-3 flex items-center gap-2">
-                  <TrendingUp className="w-5 h-5 text-orange-600" />
-                  Top 5 Vehículos con Más Alertas
-                </h3>
-                <div className="space-y-2">
-                  {detailedAnalysis.vehicles.most_alerts.slice(0, 5).map((vehicle, index) => (
-                    <div key={vehicle.plate} className="flex items-center justify-between bg-white p-3 rounded-lg">
-                      <div className="flex items-center gap-3">
-                        <span className="w-6 h-6 bg-orange-100 text-orange-700 rounded-full flex items-center justify-center text-sm font-bold">
-                          {index + 1}
-                        </span>
-                        <button
-                          onClick={() => handleViewVehicleStats(vehicle.plate)}
-                          className="font-semibold text-slate-800 hover:text-indigo-600 transition-colors"
-                        >
-                          {vehicle.plate}
-                        </button>
-                      </div>
-                      <div className="flex items-center gap-4">
-                        <span className="text-sm text-slate-600">{vehicle.count} alertas</span>
-                        {vehicle.grave_count > 0 && (
-                          <span className="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full font-medium">
-                            {vehicle.grave_count} graves
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Top Drivers */}
-              <div className="bg-slate-50 rounded-lg p-4">
-                <h3 className="font-semibold text-slate-800 mb-3 flex items-center gap-2">
-                  <PieChart className="w-5 h-5 text-blue-600" />
-                  Top 5 Conductores
-                </h3>
-                <div className="space-y-2">
-                  {detailedAnalysis.drivers.most_incidents.slice(0, 5).map((driver, index) => (
-                    <div key={driver.driver} className="flex items-center justify-between bg-white p-3 rounded-lg">
-                      <div className="flex items-center gap-3">
-                        <span className="w-6 h-6 bg-blue-100 text-blue-700 rounded-full flex items-center justify-center text-sm font-bold">
-                          {index + 1}
-                        </span>
-                        <button
-                          onClick={() => handleViewDriverStats(driver.driver)}
-                          className="font-semibold text-slate-800 hover:text-indigo-600 transition-colors"
-                        >
-                          {driver.driver}
-                        </button>
-                      </div>
-                      <div className="flex items-center gap-4">
-                        <span className="text-sm text-slate-600">{driver.count} incidentes</span>
-                        {driver.grave_count > 0 && (
-                          <span className="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full font-medium">
-                            {driver.grave_count} graves
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Export Button */}
-              <div className="flex justify-end">
-                <button
-                  onClick={handleExportAnalysis}
-                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 flex items-center gap-2"
-                >
-                  <Download className="w-4 h-4" />
-                  Exportar Análisis Completo (CSV)
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+      {/* ==================== TAB: ANÁLISIS DETALLADO ==================== */}
+      {activeTab === 'analisis' && (
+        <AuditAnalyticsPanel
+          analysis={detailedAnalysis}
+          isLoading={isLoadingAnalysis}
+          onViewVehicle={handleViewVehicleStats}
+          onViewDriver={handleViewDriverStats}
+          onExport={handleExportAnalysis}
+        />
       )}
 
-      {/* ==================== UPLOAD SECTION ==================== */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
-        <button
-          onClick={() => setUploadCollapsed(!uploadCollapsed)}
-          className="w-full px-6 py-4 flex items-center justify-between hover:bg-slate-50 transition-colors"
-        >
-          <div className="flex items-center gap-3">
+      {/* ==================== TAB: CARGAR ARCHIVO ==================== */}
+      {activeTab === 'carga' && (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm">
+          <div className="px-6 pt-5 flex items-center gap-3">
             <Upload className="w-5 h-5 text-purple-600" />
             <span className="font-semibold text-lg">Cargar Archivo</span>
             {processedAlerts.length > 0 && (
@@ -808,11 +720,7 @@ export const BatchUpload: React.FC = () => {
               </span>
             )}
           </div>
-          {uploadCollapsed ? <ChevronDown className="w-5 h-5" /> : <ChevronUp className="w-5 h-5" />}
-        </button>
-
-        {!uploadCollapsed && (
-          <div className="p-6 border-t border-slate-200">
+          <div className="p-6">
             {/* Source Selection */}
             <div className="flex gap-4 mb-4">
               <button
@@ -949,10 +857,11 @@ export const BatchUpload: React.FC = () => {
               </div>
             )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* ==================== ANALYSIS SECTION ==================== */}
+      {/* ==================== TAB: ANÁLISIS DE DATOS ==================== */}
+      {activeTab === 'datos' && (
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-xl font-bold flex items-center gap-2">
@@ -1309,6 +1218,7 @@ export const BatchUpload: React.FC = () => {
           </>
         )}
       </div>
+      )}
 
       {/* 🆕 MODAL DE ESTADÍSTICAS DE VEHÍCULO */}
       {selectedVehicleStats && (

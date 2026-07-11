@@ -1,0 +1,3 @@
+# Agente de IA propio (api/agent.py) — función serverless de Python en Vercel.
+# No requiere dependencias externas: usa solo la librería estándar de Python.
+# Este archivo hace explícita la detección del runtime de Python en Vercel.

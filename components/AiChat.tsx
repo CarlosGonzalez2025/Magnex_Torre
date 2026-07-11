@@ -5,10 +5,11 @@ interface ToolResult { tool: string; args: Record<string, any>; result: any; }
 interface ChatMessage { role: 'user' | 'assistant'; content: string; toolResults?: ToolResult[]; error?: boolean; }
 
 const SUGGESTIONS = [
-  '¿Qué períodos de ralentí hay disponibles?',
-  'Dame la ficha del vehículo con placa ',
+  '¿Qué vehículos tuvieron excesos de velocidad hoy?',
+  '¿La placa ABC123 presentó excesos hoy?',
+  '¿Cuántos km recorrió la flota hoy?',
+  '¿Cuántos vehículos y conductores tiene cada contrato?',
   'Top 10 conductores por ralentí del último período',
-  'Compara el consumo y CO₂ por contrato',
 ];
 
 // ── Render genérico de los datos consultados ──
@@ -68,6 +69,8 @@ export const AiChat: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  // Motor: 'local' = agente propio en Python (sin API externa); 'ia' = Gemini.
+  const [engine, setEngine] = useState<'local' | 'ia'>('local');
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -88,7 +91,7 @@ export const AiChat: React.FC = () => {
     setInput('');
     setLoading(true);
     try {
-      const res = await fetch('/api/chat', {
+      const res = await fetch(engine === 'local' ? '/api/agent' : '/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: history.map(m => ({ role: m.role, content: m.content })) }),
@@ -131,12 +134,23 @@ export const AiChat: React.FC = () => {
               </div>
               <div>
                 <div className="text-sm font-bold leading-tight">Asistente Torre de Control</div>
-                <div className="text-[10px] text-white/70">Consulta datos de flota, ralentí y contratos</div>
+                <div className="text-[10px] text-white/70">Excesos, km, ralentí, contratos y flota</div>
               </div>
             </div>
-            <button onClick={() => setOpen(false)} className="p-1.5 hover:bg-white/20 rounded-lg transition-colors">
-              <X className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setEngine(e => (e === 'local' ? 'ia' : 'local'))}
+                title={engine === 'local'
+                  ? 'Motor: Local (Python, sin API externa). Clic para usar IA (Gemini).'
+                  : 'Motor: IA (Gemini). Clic para usar el motor Local.'}
+                className="px-2 py-1 rounded-lg bg-white/15 hover:bg-white/25 text-[10px] font-semibold transition-colors"
+              >
+                {engine === 'local' ? '🔒 Local' : '✨ IA'}
+              </button>
+              <button onClick={() => setOpen(false)} className="p-1.5 hover:bg-white/20 rounded-lg transition-colors">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
           {/* Mensajes */}
@@ -147,8 +161,8 @@ export const AiChat: React.FC = () => {
                   <Sparkles className="w-6 h-6 text-indigo-500" />
                 </div>
                 <p className="text-xs text-slate-500 dark:text-slate-400 px-4">
-                  Pregúntame sobre una <strong>placa</strong>, un <strong>conductor</strong>, un <strong>contrato</strong> o el <strong>ralentí por período</strong>.
-                  Respondo con datos reales de la base.
+                  Pregúntame por <strong>excesos de velocidad</strong>, <strong>km recorridos</strong>, <strong>ralentí</strong>,
+                  una <strong>placa</strong>, un <strong>conductor</strong> o un <strong>contrato</strong>. Respondo con datos reales de la base.
                 </p>
                 <div className="flex flex-col gap-1.5 px-2">
                   {SUGGESTIONS.map((s, i) => (
