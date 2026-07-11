@@ -28,6 +28,7 @@ const PORT = process.env.LOCAL_API_PORT || 3001;
 
 // ── Chat IA (núcleo compartido con api/chat.ts) ──
 const { runChat } = require('../api/_chatCore.cjs');
+const { spawn } = require('child_process');
 const CHAT_SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || 'https://cmzeijcyykzdmvisojte.supabase.co';
 const CHAT_SUPABASE_KEY = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNtemVpamN5eWt6ZG12aXNvanRlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgwNzc5MTYsImV4cCI6MjA5MzY1MzkxNn0.qn5_sVmmZ1gb6YQCaO2RQYWRO-XwVTuLTY64LK8mAME';
 const CHAT_GEMINI_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY || '';
@@ -462,6 +463,28 @@ const server = http.createServer(async (req, res) => {
             const result = await fetchConductoresSheets();
             res.writeHead(result.success ? 200 : 500);
             res.end(JSON.stringify(result));
+        } else if (req.url === '/api/agent' && req.method === 'POST') {
+            const body = await readBody(req);
+            const messages = Array.isArray(body.messages) ? body.messages : [];
+            if (messages.length === 0) {
+                res.writeHead(400);
+                res.end(JSON.stringify({ error: 'Falta el historial de mensajes.' }));
+            } else {
+                const out = await new Promise((resolve, reject) => {
+                    const child = spawn('python', ['scripts/run_local_agent.py'], { cwd: process.cwd(), windowsHide: true });
+                    let stdout = '', stderr = '';
+                    child.stdout.on('data', chunk => { stdout += chunk.toString(); });
+                    child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+                    child.on('error', reject);
+                    child.on('close', code => {
+                        if (code !== 0) return reject(new Error(stderr || `Agente local termino con codigo ${code}`));
+                        try { resolve(JSON.parse(stdout)); } catch { reject(new Error(`Respuesta invalida del agente local: ${stdout.slice(0, 200)}`)); }
+                    });
+                    child.stdin.end(JSON.stringify({ messages }));
+                });
+                res.writeHead(out.error ? 502 : 200);
+                res.end(JSON.stringify(out));
+            }
         } else if (req.url === '/api/chat' && req.method === 'POST') {
             const body = await readBody(req);
             const messages = Array.isArray(body.messages) ? body.messages : [];
@@ -500,5 +523,6 @@ server.listen(PORT, () => {
     console.log(`  GET  /api/google-sheets      - Fetch vehiculos from Google Sheets`);
     console.log(`  GET  /api/sheets-conductores - Fetch conductores from Google Sheets`);
     console.log(`  GET  /api/health             - Health check`);
+    console.log(`  POST /api/agent              - Agente deterministico local`);
     console.log(`\nNow run 'npm run dev' in another terminal.\n`);
 });

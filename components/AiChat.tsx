@@ -1,10 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Bot, Send, X, Sparkles, Loader2, Database, AlertTriangle } from 'lucide-react';
+import { Bot, Send, X, Sparkles, Loader2, Database, AlertTriangle, FileSpreadsheet, FileText } from 'lucide-react';
+import { exportAssistantExcel, printAssistantReport } from '../services/assistantReportExport';
 
 interface ToolResult { tool: string; args: Record<string, any>; result: any; }
 interface ChatMessage { role: 'user' | 'assistant'; content: string; toolResults?: ToolResult[]; error?: boolean; }
 
 const SUGGESTIONS = [
+  'Genera un informe de vehiculos monitoreados por plataforma GPS',
   '¿Qué vehículos tuvieron excesos de velocidad hoy?',
   '¿La placa ABC123 presentó excesos hoy?',
   '¿Cuántos km recorrió la flota hoy?',
@@ -70,6 +72,7 @@ export const AiChat: React.FC = () => {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   // Motor: 'local' = agente propio en Python (sin API externa); 'ia' = Gemini.
+  // El motor deterministico es el respaldo estable y no consume cuota externa.
   const [engine, setEngine] = useState<'local' | 'ia'>('local');
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -199,6 +202,14 @@ export const AiChat: React.FC = () => {
                           <div key={j} className="rounded-lg bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 p-2">
                             <div className="text-[9px] uppercase tracking-wide text-indigo-500 font-bold mb-1">{tr.tool}</div>
                             <DataValue value={tr.result} />
+                            <div className="flex gap-1.5 mt-2 pt-2 border-t border-slate-200 dark:border-slate-700">
+                              <button onClick={() => exportAssistantExcel(tr)} className="flex items-center gap-1 px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-[9px] font-semibold">
+                                <FileSpreadsheet className="w-3 h-3" /> Excel
+                              </button>
+                              <button onClick={() => printAssistantReport(tr)} className="flex items-center gap-1 px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-700 text-white text-[9px] font-semibold">
+                                <FileText className="w-3 h-3" /> PDF / Imprimir
+                              </button>
+                            </div>
                           </div>
                         ))}
                       </div>
