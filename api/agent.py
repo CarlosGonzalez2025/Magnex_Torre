@@ -24,6 +24,7 @@ import re
 import unicodedata
 import urllib.request
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -52,27 +53,42 @@ def _q(col: str, op: str, val) -> str:
     return f"{col}={op}.{urllib.parse.quote(str(val), safe='*')}"
 
 
+def _pg_url(table, select, filters, order, offset, page):
+    parts = [f"select={urllib.parse.quote(select, safe='*,')}", f"limit={page}", f"offset={offset}"]
+    if order:
+        parts.append(f"order={order}")
+    for f in (filters or []):
+        parts.append(f)
+    return f"{SUPABASE_URL}/rest/v1/{table}?" + "&".join(parts)
+
+
+def _pg_get(url, want_count=False):
+    headers = {'apikey': SUPABASE_KEY, 'Authorization': f'Bearer {SUPABASE_KEY}', 'Accept': 'application/json'}
+    if want_count:
+        headers['Prefer'] = 'count=exact'
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=20) as r:
+        data = json.loads(r.read().decode('utf-8'))
+        total = None
+        if want_count:
+            cr = r.headers.get('Content-Range') or ''
+            tail = cr.split('/')[-1] if '/' in cr else ''
+            total = int(tail) if tail.isdigit() else None
+    return data, total
+
+
 def pg_fetch_all(table: str, select: str = '*', filters=None, order: str = None, page: int = 1000):
-    """Trae todas las filas de una tabla (con filtros) paginando de a 1000."""
-    rows, offset = [], 0
-    while True:
-        parts = [f"select={urllib.parse.quote(select, safe='*,')}", f"limit={page}", f"offset={offset}"]
-        if order:
-            parts.append(f"order={order}")
-        for f in (filters or []):
-            parts.append(f)
-        url = f"{SUPABASE_URL}/rest/v1/{table}?" + "&".join(parts)
-        req = urllib.request.Request(url, headers={
-            'apikey': SUPABASE_KEY,
-            'Authorization': f'Bearer {SUPABASE_KEY}',
-            'Accept': 'application/json',
-        })
-        with urllib.request.urlopen(req, timeout=25) as r:
-            data = json.loads(r.read().decode('utf-8'))
-        rows.extend(data)
-        if len(data) < page:
-            break
-        offset += page
+    """Trae todas las filas (con filtros). Pide el conteo en la 1ª página y descarga
+    el resto en PARALELO — clave para no exceder el timeout de Vercel (~10s)."""
+    first, total = _pg_get(_pg_url(table, select, filters, order, 0, page), want_count=True)
+    rows = list(first)
+    if not total or total <= page:
+        return rows
+    offsets = list(range(page, total, page))
+    urls = [_pg_url(table, select, filters, order, o, page) for o in offsets]
+    with ThreadPoolExecutor(max_workers=min(8, len(urls))) as ex:
+        for data, _ in ex.map(_pg_get, urls):
+            rows.extend(data)
     return rows
 
 
@@ -271,11 +287,17 @@ def tool_excesos_velocidad(args):
 
 
 def tool_auditoria_excesos(args):
+    # batch_alerts es grande. Un ilike '%x%' fuerza scan completo y dispara
+    # statement timeout; hay índice en plate, así que usamos eq (placa exacta,
+    # mayúsculas/sin espacios). Sin placa ni fechas evitamos escanear toda la tabla.
+    if not args.get('placa') and not args.get('fecha_inicio') and not args.get('fecha_fin'):
+        return {'placa': 'Todas', 'rango': 'todo el histórico', 'totalEventos': 0,
+                'mensaje': 'Indica una placa o un rango de fechas para consultar la Auditoría de Flota.'}
     uploads = pg_fetch_all('file_uploads', 'id,source')
     src_map = {str(u['id']): u.get('source') for u in uploads}
     filters = []
     if args.get('placa'):
-        filters.append(_q('plate', 'ilike', f"*{args['placa']}*"))
+        filters.append(_q('plate', 'eq', str(args['placa']).strip().upper()))
     if args.get('fecha_inicio'):
         filters.append(_q('timestamp', 'gte', f"{args['fecha_inicio']}T00:00:00.000-05:00"))
     if args.get('fecha_fin'):
