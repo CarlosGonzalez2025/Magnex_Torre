@@ -414,28 +414,40 @@ export async function deleteUpload(
     let hasMore = true;
     let deletedTotal = 0;
 
+    // Eliminar de forma segura en lotes de IDs reales para evitar timeouts
     while (hasMore) {
-      const { data, error } = await supabase
+      const { data: records, error: selectError } = await supabase
+        .from('batch_alerts')
+        .select('id')
+        .eq('upload_id', uploadId)
+        .limit(1000);
+
+      if (selectError) {
+        console.error('❌ Error obteniendo IDs para eliminar:', selectError);
+        return { success: false, error: selectError.message };
+      }
+
+      if (!records || records.length === 0) {
+        break;
+      }
+
+      const ids = records.map(r => r.id);
+      const { error: deleteError } = await supabase
         .from('batch_alerts')
         .delete()
-        .eq('upload_id', uploadId)
-        .limit(1000)
-        .select();
+        .in('id', ids);
 
-      if (error) {
-        console.error('❌ Error eliminando alertas:', error);
-        return { success: false, error: error.message };
+      if (deleteError) {
+        console.error('❌ Error eliminando lote de alertas:', deleteError);
+        return { success: false, error: deleteError.message };
       }
 
-      const deletedCount = data?.length || 0;
-      deletedTotal += deletedCount;
-      hasMore = deletedCount === 1000;
-
-      if (deletedCount > 0) {
-        console.log(`🗑️ Eliminadas ${deletedCount} alertas (total: ${deletedTotal})`);
-      }
+      deletedTotal += ids.length;
+      hasMore = ids.length === 1000;
+      console.log(`🗑️ Eliminadas ${ids.length} alertas (progreso: ${deletedTotal})`);
     }
 
+    // Eliminar el registro padre de file_uploads
     const { error: uploadError } = await supabase
       .from('file_uploads')
       .delete()
@@ -484,6 +496,7 @@ export async function deleteAllBatchAlerts(): Promise<{
   error?: string;
 }> {
   try {
+    // Obtener la cuenta total de alertas antes de eliminar, para retornar al usuario
     const { count, error: countError } = await supabase
       .from('batch_alerts')
       .select('*', { count: 'exact', head: true });
@@ -494,40 +507,59 @@ export async function deleteAllBatchAlerts(): Promise<{
     }
 
     const totalToDelete = count || 0;
-    let deletedTotal = 0;
-    let hasMore = true;
+    console.log(`⚠️ Iniciando eliminación de ${totalToDelete} alertas en cascada a través de file_uploads...`);
 
-    console.log(`⚠️ Iniciando eliminación de ${totalToDelete} alertas...`);
+    // Obtener todas las cargas de archivos
+    const { data: uploads, error: uploadsError } = await supabase
+      .from('file_uploads')
+      .select('id, filename');
 
-    // Estrategia: usar NOT NULL en 'id' como WHERE clause (todos los registros tienen ID)
-    // Eliminar en lotes usando LIMIT para evitar timeout
-    while (hasMore && deletedTotal < totalToDelete) {
-      const { data, error: deleteError, count: deletedCount } = await supabase
-        .from('batch_alerts')
-        .delete({ count: 'exact' })
-        .not('id', 'is', null)  // WHERE id IS NOT NULL - siempre verdadero
-        .limit(500)  // Lotes de 500
-        .select();
+    if (uploadsError) {
+      console.error('❌ Error obteniendo cargas para limpiar:', uploadsError);
+      return { success: false, error: uploadsError.message };
+    }
 
-      if (deleteError) {
-        console.error('❌ Error eliminando alertas:', deleteError);
-        return { success: false, error: deleteError.message };
-      }
+    // Eliminar cada carga una por una para evitar timeouts por cascade delete masivo
+    if (uploads && uploads.length > 0) {
+      console.log(`📂 Se encontraron ${uploads.length} cargas para eliminar.`);
+      for (let i = 0; i < uploads.length; i++) {
+        const upload = uploads[i];
+        console.log(`🗑️ Eliminando carga [${i + 1}/${uploads.length}]: ${upload.filename} (ID: ${upload.id})`);
+        
+        const { error: deleteError } = await supabase
+          .from('file_uploads')
+          .delete()
+          .eq('id', upload.id);
 
-      const batchDeleted = data?.length || 0;
-      deletedTotal += batchDeleted;
-      hasMore = batchDeleted === 500;  // Continuar si se eliminaron 500 (lote completo)
-
-      console.log(`🗑️ Eliminadas ${batchDeleted} alertas (progreso: ${deletedTotal}/${totalToDelete})`);
-
-      // Pequeña pausa para evitar sobrecarga
-      if (hasMore) {
-        await new Promise(resolve => setTimeout(resolve, 100));
+        if (deleteError) {
+          console.error(`❌ Error al eliminar carga ${upload.id}:`, deleteError);
+          return { success: false, error: deleteError.message };
+        }
       }
     }
 
-    console.log(`✅ ${deletedTotal} alertas eliminadas de batch_alerts`);
-    return { success: true, deletedCount: deletedTotal };
+    // Por si quedaran alertas huérfanas (aunque la FK es NOT NULL, es buena práctica)
+    const { error: cleanAlertsError } = await supabase
+      .from('batch_alerts')
+      .delete()
+      .not('id', 'is', null);
+
+    if (cleanAlertsError) {
+      console.warn('⚠️ Nota: Error al limpiar alertas remanentes:', cleanAlertsError.message);
+    }
+
+    // Limpieza final de file_uploads
+    const { error: cleanUploadsError } = await supabase
+      .from('file_uploads')
+      .delete()
+      .not('id', 'is', null);
+
+    if (cleanUploadsError) {
+      console.warn('⚠️ Nota: Error al limpiar cargas remanentes:', cleanUploadsError.message);
+    }
+
+    console.log(`✅ Eliminación completada. Se eliminaron ${totalToDelete} alertas.`);
+    return { success: true, deletedCount: totalToDelete };
 
   } catch (error: any) {
     console.error('❌ Exception eliminando todas las alertas:', error);
