@@ -748,6 +748,23 @@ serve(async (req) => {
       const success = await saveAlert(supabase, alert);
       if (success) {
         savedCount++;
+        
+        // Disparar la validación RPA en segundo plano si es un exceso de velocidad
+        const isSpeeding = alert.type.toLowerCase().includes('velocidad') ||
+          alert.type.toLowerCase().includes('speeding');
+        if (isSpeeding) {
+          console.log(`[Worker] Disparando validación RPA para la placa ${alert.plate}...`);
+          fetch(`${VERCEL_APP_URL}/api/validate-alert`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              plate: alert.plate,
+              timestamp: alert.timestamp,
+              source: alert.source,
+              alertId: alert.alert_id
+            })
+          }).catch(err => console.error('[Worker] Error al disparar validación RPA:', err));
+        }
       } else {
         errorCount++;
       }

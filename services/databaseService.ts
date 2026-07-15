@@ -27,6 +27,9 @@ export interface SavedAlert {
   moved_to_history?: boolean;
   moved_at?: string;
   moved_by?: string;
+  screenshot_url?: string;
+  validation_reason?: string;
+  is_real_alert?: boolean;
 }
 
 export interface FileAttachment {
@@ -154,6 +157,25 @@ export async function autoSaveAlert(alert: Alert): Promise<{ success: boolean; d
 
     if (alert.severity === 'critical') {
       console.log('✅ [DIAGNÓSTICO] Alerta CRÍTICA guardada exitosamente:', data);
+    }
+
+    // Disparar la validación RPA en segundo plano si es un exceso de velocidad
+    const isSpeeding = normalizedAlert.type.toLowerCase().includes('velocidad') ||
+      normalizedAlert.type.toLowerCase().includes('speeding');
+
+    if (isSpeeding && typeof window !== 'undefined') {
+      const origin = window.location.origin;
+      console.log(`[RPA Trigger] Solicitando validación RPA en segundo plano para ${normalizedAlert.plate}...`);
+      fetch(`${origin}/api/validate-alert`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          plate: normalizedAlert.plate,
+          timestamp: normalizedAlert.timestamp,
+          source: normalizedAlert.source,
+          alertId: alert.id
+        })
+      }).catch(err => console.error('Error al solicitar validación RPA desde el cliente:', err));
     }
 
     return { success: true, data };
