@@ -57,6 +57,9 @@ export interface Alert {
   sentAt?: string; // Cuándo fue enviada
   sentBy?: string; // Quién la envió
   saved?: boolean; // Si ya fue guardada en historial
+  is_valid?: boolean; // Si fue validada como real por el bot
+  validation_reason?: string; // Motivo de descarte o confirmación
+  screenshot_url?: string; // Enlace al mapa de ubicación capturado
 }
 
 /**

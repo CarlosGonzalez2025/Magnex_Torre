@@ -38,6 +38,7 @@ import { GeotabPanel } from './components/GeotabPanel';
 import { fetchFleetData, FleetResponse, fetchGeotabAlertsViaAPI } from './services/fleetService';
 import { detectAlerts, buildGeotabAlerts, esAlertaVisibleCentroAlertas, saveAlertsToStorage, getAlertsFromStorage, getUnsavedAlerts, markAlertAsSent, markAlertAsSaved, cleanOldAlerts, processVehiclesForIdleDetection } from './services/alertService';
 import { saveAlertToDatabase, autoSaveAlert } from './services/databaseService';
+import { supabase } from './services/supabaseClient';
 import { useAutoCleanup } from './hooks/useAutoCleanup';
 import audioEngine from './services/alertSoundService';
 import { usePWA } from './hooks/usePWA';
@@ -316,6 +317,25 @@ export default function App() {
     // Generar URL de Google Maps con las coordenadas
     const googleMapsUrl = `https://www.google.com/maps?q=${alert.latitude},${alert.longitude}`;
 
+    // Consultar detalles de validación actualizados en base de datos en tiempo real (por si se ejecutó en background)
+    let screenshotUrl = alert.screenshot_url;
+    let validationReason = alert.validation_reason;
+
+    try {
+      const { data, error } = await supabase
+        .from('saved_alerts')
+        .select('screenshot_url, validation_reason')
+        .eq('alert_id', alert.id)
+        .maybeSingle();
+
+      if (data && !error) {
+        if (data.screenshot_url) screenshotUrl = data.screenshot_url;
+        if (data.validation_reason) validationReason = data.validation_reason;
+      }
+    } catch (dbErr) {
+      console.warn('[Copy] Error consultando validación RPA en Supabase:', dbErr);
+    }
+
     // Formato con markdown para WhatsApp
     const message = `🚨 *ALERTA DE FLOTA*\n\n` +
       `*Tipo:* ${alert.type}\n` +
@@ -325,6 +345,8 @@ export default function App() {
       (isSpeedingAlert ? `*Velocidad:* ${alert.speed} km/h ⚠️\n` : `Velocidad: ${alert.speed} km/h\n`) +
       `📍 *Ubicación:* ${alert.location}\n` +
       `🗺️ *Ver en mapa:* ${googleMapsUrl}\n` +
+      (screenshotUrl ? `📸 *Captura GPS:* ${screenshotUrl}\n` : '') +
+      (validationReason ? `🤖 *Validación:* ${validationReason}\n` : '') +
       `Hora: ${new Date(alert.timestamp).toLocaleString()}\n` +
       (alert.contract ? `Contrato: ${alert.contract}\n` : '') +
       `Fuente: ${alert.source}`;

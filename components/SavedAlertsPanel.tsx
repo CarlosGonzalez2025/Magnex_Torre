@@ -217,7 +217,10 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
       details: savedAlert.details,
       contract: savedAlert.contract,
       source: savedAlert.source as any,
-      sent: false // Defaults
+      sent: false, // Defaults
+      screenshot_url: savedAlert.screenshot_url,
+      validation_reason: savedAlert.validation_reason,
+      is_valid: savedAlert.is_real_alert
     };
 
     const saveResult = await onSaveAlert(alert);
@@ -277,7 +280,10 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
       details: savedAlert.details,
       contract: savedAlert.contract,
       source: savedAlert.source as any,
-      sent: false
+      sent: false,
+      screenshot_url: savedAlert.screenshot_url,
+      validation_reason: savedAlert.validation_reason,
+      is_valid: savedAlert.is_real_alert
     };
 
     onCopyAlert(alert);
@@ -363,7 +369,10 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
         details: savedAlert.details,
         contract: savedAlert.contract,
         source: savedAlert.source as any,
-        sent: false
+        sent: false,
+        screenshot_url: savedAlert.screenshot_url,
+        validation_reason: savedAlert.validation_reason,
+        is_valid: savedAlert.is_real_alert
       };
       const saveResult = await onSaveAlert(alert);
       if (saveResult !== false) {
