@@ -1,0 +1,53 @@
+name: ML — Scoring de riesgo por conductor
+
+# Corre FUERA de Vercel a propósito: aquí pandas/numpy/scikit-learn pesan lo que
+# necesiten. El bundle serverless sigue con stdlib pura y sin cold start.
+on:
+  schedule:
+    # 09:10 UTC = 04:10 Colombia. Después del cron horario de geotab-sync
+    # (vercel.json) para que el cálculo del día incluya la última telemetría.
+    - cron: '10 9 * * *'
+  workflow_dispatch:
+    inputs:
+      ventana:
+        description: 'Días de historia a analizar'
+        required: false
+        default: '90'
+      dry_run:
+        description: 'Calcular sin escribir en Supabase'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  # Dos corridas simultáneas se pisarían en el upsert del mismo día.
+  group: ml-driver-risk
+  cancel-in-progress: false
+
+jobs:
+  scoring:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: ml/requirements.txt
+
+      - name: Instalar dependencias de ML
+        run: pip install -r ml/requirements.txt
+
+      - name: Calcular scoring de riesgo
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          # service_role: bypassa RLS para escribir ml_driver_scores.
+          # Nunca debe salir de aquí ni llegar al frontend.
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          python -m ml.train_driver_risk \
+            --ventana "${{ github.event.inputs.ventana || '90' }}" \
+            ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}

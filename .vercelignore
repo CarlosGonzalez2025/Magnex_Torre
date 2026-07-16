@@ -1,0 +1,8 @@
+# La capa de ML corre en GitHub Actions, nunca en Vercel.
+# Excluirla es lo que garantiza que pandas/numpy/scikit-learn jamás toquen el
+# bundle serverless: api/agent.py debe seguir con stdlib pura, sin cold start y
+# lejos del límite de 250MB.
+ml/
+.venv-ml/
+__pycache__/
+scratch/

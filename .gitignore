@@ -28,3 +28,10 @@ dist-ssr
 
 # LLM Council — claves API (nunca subir al repo)
 .council.env
+
+# Python
+__pycache__/
+*.py[cod]
+# Entorno local del job de ML (pandas/sklearn pesan cientos de MB)
+.venv-ml/
+.venv/
