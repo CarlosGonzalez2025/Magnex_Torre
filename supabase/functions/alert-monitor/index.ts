@@ -749,21 +749,26 @@ serve(async (req) => {
       if (success) {
         savedCount++;
         
-        // Disparar la validación RPA en segundo plano si es un exceso de velocidad
+        // Encolar la validación si es un exceso de velocidad.
+        // Antes disparaba /api/validate-alert (agente RPA con navegador). Ahora
+        // solo encola: el worker Python la verifica contra el informe diario del
+        // proveedor, con reintentos. Ver docs/VALIDACION_ALERTAS.md.
         const isSpeeding = alert.type.toLowerCase().includes('velocidad') ||
           alert.type.toLowerCase().includes('speeding');
         if (isSpeeding) {
-          console.log(`[Worker] Disparando validación RPA para la placa ${alert.plate}...`);
-          fetch(`${VERCEL_APP_URL}/api/validate-alert`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+          const { error: queueError } = await supabase
+            .from('alert_validation_queue')
+            .upsert({
+              alert_id: alert.alert_id,
               plate: alert.plate,
-              timestamp: alert.timestamp,
               source: alert.source,
-              alertId: alert.alert_id
-            })
-          }).catch(err => console.error('[Worker] Error al disparar validación RPA:', err));
+              alert_timestamp: alert.timestamp,
+              estado: 'pendiente',
+            }, { onConflict: 'alert_id', ignoreDuplicates: true });
+
+          if (queueError) {
+            console.warn(`[Worker] No se pudo encolar la validación de ${alert.plate}:`, queueError.message);
+          }
         }
       } else {
         errorCount++;

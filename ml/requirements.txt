@@ -1,0 +1,16 @@
+# Dependencias de la capa de inteligencia (job batch OFFLINE).
+#
+# IMPORTANTE: este archivo NO es el requirements.txt de la raíz.
+# El de la raíz alimenta el bundle de Vercel y debe seguir vacío: api/agent.py
+# corre con stdlib pura para no pagar cold start ni el límite de 250MB.
+# Estas librerías solo se instalan en GitHub Actions (o en un worker), donde el
+# peso no importa.
+#
+# Instalar:  pip install -r ml/requirements.txt
+
+# Rangos y no pines exactos: el job se probó con pandas 3.0 / numpy 2.5 / sklearn 1.9
+# en Python 3.14 y con la línea 2.x en 3.12 (la que usa el cron). Los pines exactos
+# rompen según la versión de Python del runner.
+pandas>=2.2,<4
+numpy>=1.26,<3
+scikit-learn>=1.5,<2

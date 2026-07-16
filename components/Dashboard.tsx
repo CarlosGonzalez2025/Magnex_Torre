@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { Vehicle, Alert, VehicleStatus } from '../types';
 import { getAlertStatistics } from '../services/databaseService';
+import MlInsightsPanel from './MlInsightsPanel';
 
 interface DashboardProps {
     vehicles: Vehicle[];
@@ -327,6 +328,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ vehicles, alerts, onNaviga
                     </div>
                 </div>
             </div>
+
+            {/* Inteligencia (ML) — lee resultados precalculados por el cron diario */}
+            <MlInsightsPanel />
 
             {/* Secondary Stats */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

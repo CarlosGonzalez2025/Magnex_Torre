@@ -1,9 +1,19 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Bot, Send, X, Sparkles, Loader2, Database, AlertTriangle, FileSpreadsheet, FileText } from 'lucide-react';
+import { Bot, Send, X, Sparkles, Loader2, Database, AlertTriangle, FileSpreadsheet, FileText, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { exportAssistantExcel, printAssistantReport } from '../services/assistantReportExport';
+import { enviarFeedbackAsistente } from '../services/mlInsightsService';
 
 interface ToolResult { tool: string; args: Record<string, any>; result: any; }
-interface ChatMessage { role: 'user' | 'assistant'; content: string; toolResults?: ToolResult[]; error?: boolean; }
+interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  toolResults?: ToolResult[];
+  error?: boolean;
+  // Id que devuelve /api/agent. Sin él no hay forma de asociar el feedback a la
+  // pregunta que lo originó, y el bucle de aprendizaje del router no cierra.
+  interactionId?: string;
+  feedback?: boolean;
+}
 
 const SUGGESTIONS = [
   'Genera un informe de vehiculos monitoreados por plataforma GPS',
@@ -103,13 +113,28 @@ export const AiChat: React.FC = () => {
       if (!res.ok || data.error) {
         setMessages(m => [...m, { role: 'assistant', content: data.error || 'Ocurrió un error al consultar.', error: true }]);
       } else {
-        setMessages(m => [...m, { role: 'assistant', content: data.answer || 'Sin respuesta.', toolResults: data.toolResults }]);
+        setMessages(m => [...m, {
+          role: 'assistant',
+          content: data.answer || 'Sin respuesta.',
+          toolResults: data.toolResults,
+          interactionId: data.interactionId,
+        }]);
       }
     } catch (e: any) {
       setMessages(m => [...m, { role: 'assistant', content: `No se pudo conectar con el asistente: ${e.message}`, error: true }]);
     } finally {
       setLoading(false);
     }
+  };
+
+  // El feedback es optimista a propósito: marcar el pulgar no debe esperar a la
+  // red. Si la escritura falla, se registra en consola — no vale interrumpir al
+  // usuario por un dato de telemetría.
+  const calificar = async (index: number, acierto: boolean) => {
+    const msg = messages[index];
+    if (!msg?.interactionId || msg.feedback !== undefined) return;
+    setMessages(m => m.map((x, i) => (i === index ? { ...x, feedback: acierto } : x)));
+    await enviarFeedbackAsistente(msg.interactionId, acierto);
   };
 
   return (
@@ -192,6 +217,33 @@ export const AiChat: React.FC = () => {
                 }`}>
                   {m.error && <AlertTriangle className="w-3.5 h-3.5 inline mr-1 -mt-0.5" />}
                   <span className="whitespace-pre-wrap">{m.content}</span>
+                  {m.role === 'assistant' && !m.error && m.interactionId && (
+                    <div className="flex items-center gap-1.5 mt-2 pt-1.5 border-t border-slate-100 dark:border-slate-700/60">
+                      {m.feedback === undefined ? (
+                        <>
+                          <span className="text-[9px] text-slate-400 dark:text-slate-500">¿Te sirvió?</span>
+                          <button
+                            onClick={() => calificar(i, true)}
+                            title="La respuesta fue correcta"
+                            className="p-1 rounded hover:bg-green-100 dark:hover:bg-green-900/30 text-slate-400 hover:text-green-600 dark:hover:text-green-400 transition-colors"
+                          >
+                            <ThumbsUp className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={() => calificar(i, false)}
+                            title="La respuesta no era lo que buscaba"
+                            className="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-slate-400 hover:text-red-600 dark:hover:text-red-400 transition-colors"
+                          >
+                            <ThumbsDown className="w-3 h-3" />
+                          </button>
+                        </>
+                      ) : (
+                        <span className="text-[9px] text-slate-400 dark:text-slate-500">
+                          {m.feedback ? '¡Gracias! Esto ayuda a mejorar el asistente.' : 'Gracias — lo revisaremos.'}
+                        </span>
+                      )}
+                    </div>
+                  )}
                   {m.toolResults && m.toolResults.length > 0 && (
                     <details className="mt-2 group">
                       <summary className="flex items-center gap-1 text-[10px] text-slate-400 dark:text-slate-500 cursor-pointer hover:text-indigo-500 select-none">

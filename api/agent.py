@@ -21,9 +21,11 @@ from http.server import BaseHTTPRequestHandler
 import json
 import os
 import re
+import time
 import unicodedata
 import urllib.request
 import urllib.parse
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 
@@ -75,6 +77,45 @@ def _pg_get(url, want_count=False):
             tail = cr.split('/')[-1] if '/' in cr else ''
             total = int(tail) if tail.isdigit() else None
     return data, total
+
+
+def _pg_post(table: str, row: dict, timeout: int = 3) -> None:
+    headers = {'apikey': SUPABASE_KEY, 'Authorization': f'Bearer {SUPABASE_KEY}',
+               'Content-Type': 'application/json', 'Prefer': 'return=minimal'}
+    body = json.dumps(row, ensure_ascii=False, default=str).encode('utf-8')
+    req = urllib.request.Request(f'{SUPABASE_URL}/rest/v1/{table}', data=body,
+                                 headers=headers, method='POST')
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        r.read()
+
+
+def log_interaccion(interaction_id: str, pregunta: str, tool: str, args: dict,
+                    via: str, latencia_ms: int, error: str = None) -> None:
+    """Registra la interacción para alimentar el aprendizaje del router.
+
+    Cada pregunta que cae en fallback (tool=None) es una intención que el usuario
+    quiere y el sistema no cubre: es el insumo del reentrenamiento. Sin este
+    registro, "que el sistema aprenda" es una intención, no un plan.
+
+    Es síncrono a propósito: en serverless el proceso se congela apenas responde,
+    así que un hilo en segundo plano perdería registros de forma silenciosa. El
+    costo es ~100ms sobre una respuesta que ya consulta la base varias veces.
+
+    NUNCA propaga una excepción: si el log falla, el usuario igual recibe su
+    respuesta. Un tablero de telemetría no puede caerse por su propia telemetría.
+    """
+    try:
+        _pg_post('agent_interactions', {
+            'id': interaction_id,
+            'pregunta': pregunta[:2000],
+            'tool_elegida': tool,
+            'tool_args': args or {},
+            'router_via': via,
+            'latencia_ms': latencia_ms,
+            'error': error[:500] if error else None,
+        })
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def pg_fetch_all(table: str, select: str = '*', filters=None, order: str = None, page: int = 1000):
@@ -689,6 +730,10 @@ def run_agent(messages):
     if not user_msgs:
         return {'answer': CAPACIDADES, 'toolResults': []}
     text = str(user_msgs[-1]['content'])
+    # El id se genera aquí y viaja en la respuesta para que el front pueda enviar
+    # el feedback (pulgar arriba/abajo) sin una segunda consulta.
+    interaction_id = str(uuid.uuid4())
+    t0 = time.monotonic()
     tn = normtxt(text)
     placa = extract_placa(text)
     d1, d2 = extract_dates(tn)
@@ -760,13 +805,20 @@ def run_agent(messages):
             tool = ('info_conductor', tool_info_conductor); tool_args = {'nombre': nombre}
 
     if tool is None:
-        return {'answer': "No estoy seguro de qué dato necesitas.\n\n" + CAPACIDADES, 'toolResults': []}
+        # Esta rama es la más valiosa del registro: es el catálogo de lo que los
+        # usuarios piden y el router todavía no entiende.
+        log_interaccion(interaction_id, text, None, {}, 'fallback',
+                        int((time.monotonic() - t0) * 1000))
+        return {'answer': "No estoy seguro de qué dato necesitas.\n\n" + CAPACIDADES,
+                'toolResults': [], 'interactionId': interaction_id}
 
     name, fn = tool
     tool_args = {k: v for k, v in (tool_args or {}).items() if v is not None}
     try:
         result = fn(tool_args)
     except Exception as e:  # noqa: BLE001
+        log_interaccion(interaction_id, text, name, tool_args, 'regex',
+                        int((time.monotonic() - t0) * 1000), error=str(e))
         return {'error': f'Fallo al consultar la base ({name}): {e}'}
 
     renderers = {
@@ -777,7 +829,10 @@ def run_agent(messages):
         'info_conductor': render_conductor, 'vehiculos_por_plataforma_gps': render_plataformas,
     }
     answer = renderers[name](result)
-    return {'answer': answer, 'toolResults': [{'tool': name, 'args': tool_args, 'result': result}]}
+    log_interaccion(interaction_id, text, name, tool_args, 'regex',
+                    int((time.monotonic() - t0) * 1000))
+    return {'answer': answer, 'toolResults': [{'tool': name, 'args': tool_args, 'result': result}],
+            'interactionId': interaction_id}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

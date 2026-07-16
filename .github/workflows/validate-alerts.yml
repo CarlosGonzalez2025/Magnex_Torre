@@ -1,0 +1,50 @@
+name: Alertas — Validación contra informe del proveedor
+
+# Corre fuera de Vercel: la validación necesita reintentos a lo largo de horas
+# (el informe diario del proveedor llega con retraso), y una función serverless
+# disparada por el navegador no puede dar eso.
+on:
+  schedule:
+    # Cada 2 horas. El informe diario se carga en algún momento del día; el
+    # reintento es lo que cierra la brecha sin inventar veredictos.
+    - cron: '20 */2 * * *'
+  workflow_dispatch:
+    inputs:
+      limite:
+        description: 'Máximo de alertas a procesar'
+        required: false
+        default: '200'
+      dry_run:
+        description: 'Calcular sin escribir'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  # Dos corridas simultáneas procesarían la misma alerta dos veces.
+  group: validate-alerts
+  cancel-in-progress: false
+
+jobs:
+  validar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Sin pip install: el worker usa solo la librería estándar (urllib + json).
+      # No necesita pandas ni Playwright — valida contra datos que ya están en
+      # Supabase, no contra un navegador.
+      - name: Validar alertas pendientes
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          python -m alerts.validate_alerts \
+            --limite "${{ github.event.inputs.limite || '200' }}" \
+            ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}

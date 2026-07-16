@@ -40,10 +40,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // 2. Ejecutar Agente RPA
     const validationResult = await validateAlertWithRPA(plate, timestamp, source);
     console.log(`[API Validation] Resultado RPA:`, {
-      isValid: validationResult.isValid,
+      status: validationResult.status,
       reason: validationResult.reason,
       hasScreenshot: !!validationResult.screenshotBuffer && validationResult.screenshotBuffer.length > 0
     });
+
+    // Sin veredicto no se escribe nada. Dejar `is_real_alert` en NULL es
+    // información honesta ("no verificado"); escribir true/false sería afirmar
+    // algo que el agente no comprobó, sobre una infracción imputada a una persona.
+    if (validationResult.status === 'inconcluyente') {
+      console.warn(`[API Validation] Inconcluyente para ${alertId}: ${validationResult.reason}`);
+      return res.status(200).json({
+        success: false,
+        alertId,
+        plate,
+        source,
+        status: 'inconcluyente',
+        reason: validationResult.reason,
+      });
+    }
+
+    // Un resultado simulado jamás puede contaminar la base.
+    if (validationResult.simulado) {
+      console.warn('[API Validation] RPA_MOCK_MODE activo: no se persiste nada.');
+      return res.status(200).json({
+        success: false,
+        alertId,
+        status: 'simulado',
+        reason: validationResult.reason,
+      });
+    }
 
     let screenshotUrl = '';
 
@@ -101,7 +127,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .update({
         screenshot_url: screenshotUrl || null,
         validation_reason: validationResult.reason,
-        is_real_alert: validationResult.isValid,
+        is_real_alert: validationResult.status === 'confirmada',
         updated_at: new Date().toISOString()
       })
       .eq('alert_id', alertId);
@@ -118,7 +144,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .update({
         screenshot_url: screenshotUrl || null,
         validation_reason: validationResult.reason,
-        is_real_alert: validationResult.isValid,
+        is_real_alert: validationResult.status === 'confirmada',
         updated_at: new Date().toISOString()
       })
       .eq('alert_id', alertId);
@@ -134,7 +160,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       alertId,
       plate,
       source,
-      isValid: validationResult.isValid,
+      status: validationResult.status,
+      isValid: validationResult.status === 'confirmada',
       reason: validationResult.reason,
       screenshotUrl
     });
