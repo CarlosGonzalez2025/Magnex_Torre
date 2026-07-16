@@ -189,8 +189,11 @@ entrenado ──► sombra ──► [aprobación humana] ──► activo
 > martes empieza a dar cifras equivocadas a un cliente y nadie sabe por qué.
 
 **Nota:** el scoring de riesgo (`driver_risk`) es determinista y explicable, así
-que su recálculo diario no requiere aprobación. El router de intención sí: ese le
-responde directamente a un usuario.
+que su recálculo diario no requiere aprobación — su fila en `ml_model_registry`
+queda en `entrenado` como bitácora y no controla nada: el Dashboard lee
+`ml_driver_scores` directamente. El estado `activo` está reservado para modelos
+que sí deciden qué se le responde a un usuario (el router de intención), y esos
+exigen aprobación humana explícita.
 
 ---
 
