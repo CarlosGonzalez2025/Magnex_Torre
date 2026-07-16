@@ -486,9 +486,12 @@ def main() -> int:
     n2 = upsert('ml_fleet_baselines', filas_base,
                 on_conflict='fecha_calculo,segmento_tipo,segmento_valor,metrica')
 
-    # El scoring es determinista y explicable, así que entra como 'activo' sin
-    # aprobación humana. El router de intención NO: ese sí exige aprobación
-    # explícita antes de responderle a un usuario (ver ml_model_registry).
+    # Bitácora de la corrida, no una compuerta: para `driver_risk` el registro no
+    # controla nada — el Dashboard lee `ml_driver_scores` directamente, y el
+    # scoring es determinista y explicable, así que no necesita aprobación. Queda
+    # en 'entrenado' a propósito: 'activo' está reservado para modelos que SÍ
+    # deciden qué se le responde a un usuario (el router de intención), y esos
+    # exigen aprobación humana explícita antes de promoverse.
     try:
         insert('ml_model_registry', {
             'version': version,
