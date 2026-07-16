@@ -159,23 +159,35 @@ export async function autoSaveAlert(alert: Alert): Promise<{ success: boolean; d
       console.log('✅ [DIAGNÓSTICO] Alerta CRÍTICA guardada exitosamente:', data);
     }
 
-    // Disparar la validación RPA en segundo plano si es un exceso de velocidad
+    // Encolar la validación si es un exceso de velocidad.
+    //
+    // Antes esto lanzaba un fetch a /api/validate-alert desde el navegador: si el
+    // usuario cerraba la pestaña la validación se perdía, y no había reintentos.
+    // Ahora solo se ENCOLA; el worker Python (alerts/validate_alerts.py) la
+    // procesa por lotes contra el informe diario del proveedor. El informe llega
+    // con retraso, así que la validación necesita reintentos — algo que un fetch
+    // disparado desde una pestaña no puede dar.
     const isSpeeding = normalizedAlert.type.toLowerCase().includes('velocidad') ||
       normalizedAlert.type.toLowerCase().includes('speeding');
 
-    if (isSpeeding && typeof window !== 'undefined') {
-      const origin = window.location.origin;
-      console.log(`[RPA Trigger] Solicitando validación RPA en segundo plano para ${normalizedAlert.plate}...`);
-      fetch(`${origin}/api/validate-alert`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+    if (isSpeeding) {
+      // onConflict: una alerta se encola una sola vez aunque el front reintente
+      // (recarga, doble render). Sin esto se validaría la misma alerta N veces.
+      const { error: queueError } = await supabase
+        .from('alert_validation_queue')
+        .upsert({
+          alert_id: alert.id,
           plate: normalizedAlert.plate,
-          timestamp: normalizedAlert.timestamp,
           source: normalizedAlert.source,
-          alertId: alert.id
-        })
-      }).catch(err => console.error('Error al solicitar validación RPA desde el cliente:', err));
+          alert_timestamp: normalizedAlert.timestamp,
+          estado: 'pendiente',
+        }, { onConflict: 'alert_id', ignoreDuplicates: true });
+
+      if (queueError) {
+        // Que falle el encolado no puede tumbar el guardado de la alerta: la
+        // alerta es el dato; la validación es un enriquecimiento posterior.
+        console.warn('[Validación] No se pudo encolar la alerta:', queueError.message);
+      }
     }
 
     return { success: true, data };

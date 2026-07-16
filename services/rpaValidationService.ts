@@ -1,12 +1,50 @@
-import puppeteer from 'puppeteer-core';
+/**
+ * ⚠️ OBSOLETO — SIN USO. No reconectar sin leer docs/VALIDACION_ALERTAS.md.
+ *
+ * La validación de alertas ya NO pasa por aquí. La hace alerts/validate_alerts.py
+ * contra el informe diario del proveedor (`alertas_diarias_gps`), que es el mismo
+ * dato que muestra el portal pero sin navegador ni scraping.
+ *
+ * Este archivo se conserva solo por si algún día se quiere la captura de pantalla
+ * como evidencia visual; para eso habría que correrlo en un worker con navegador
+ * (Vercel no tiene binario de Chrome: el proyecto solo trae `puppeteer-core`,
+ * sin `@sparticuz/chromium`, así que aquí el navegador nunca puede arrancar).
+ *
+ * Historia, para que no se repita: la versión original caía en una simulación con
+ * Math.random() ante CUALQUIER error, y ese veredicto se escribía en
+ * `is_real_alert` y se enviaba por WhatsApp como validación real. Se comprobó
+ * ejecutándolo: misma placa, misma hora y misma plataforma devolvían veredictos
+ * distintos. Por eso el resultado ahora es de tres estados y 'inconcluyente' es
+ * un valor de primera clase: "no pude verificar" nunca puede convertirse en una
+ * afirmación sobre la conducta de una persona.
+ */
+import puppeteer, { type Browser, type Page } from 'puppeteer-core';
 import os from 'os';
 import fs from 'fs';
 
+/**
+ * Resultado de la validación de una alerta.
+ *
+ * `status` es de tres estados A PROPÓSITO — no un booleano:
+ *   'confirmada'   -> el portal confirma el exceso.
+ *   'descartada'   -> el portal demuestra que fue un falso positivo.
+ *   'inconcluyente'-> no se pudo verificar (portal caído, timeout, cambio de DOM…).
+ *
+ * Un booleano obliga a inventar un veredicto cuando la verificación falla, y eso
+ * es exactamente lo que hacía la versión anterior: ante cualquier error caía en
+ * una simulación con Math.random() y ese resultado se escribía en la base y se
+ * enviaba por WhatsApp como si fuera real. "No sé" tiene que ser representable.
+ */
+export type RpaValidationStatus = 'confirmada' | 'descartada' | 'inconcluyente';
+
 export interface RpaValidationResult {
-  isValid: boolean;
+  status: RpaValidationStatus;
   reason: string;
   screenshotBuffer?: Buffer;
+  /** Solo se llena si se midió de verdad. `undefined` = no se pudo medir. Nunca se inventa. */
   maxSpeedRecorded?: number;
+  /** true solo cuando el resultado viene del modo simulación explícito. */
+  simulado?: boolean;
 }
 
 /**
@@ -41,7 +79,7 @@ function getChromePath(): string {
 /**
  * Lanza o se conecta a una instancia de navegador Chromium.
  */
-async function getBrowser(): Promise<puppeteer.Browser> {
+async function getBrowser(): Promise<Browser> {
   const wsEndpoint = process.env.RPA_BROWSER_WS_ENDPOINT;
   
   if (wsEndpoint && wsEndpoint !== 'local') {
@@ -74,7 +112,7 @@ async function getBrowser(): Promise<puppeteer.Browser> {
 async function validateColtrackWeb(
   plate: string,
   timestamp: string,
-  page: puppeteer.Page
+  page: Page
 ): Promise<RpaValidationResult> {
   const loginUrl = process.env.COLTRACK_WEB_LOGIN_URL || 'https://gps.coltrack.com/gps/login.jsp';
   const username = process.env.COLTRACK_WEB_USER;
@@ -128,15 +166,26 @@ async function validateColtrackWeb(
   console.log(`[RPA Coltrack] Velocidades extraídas del portal web:`, speeds);
 
   // 5. Algoritmo de validación (Filtrar saltos de señal GPS o ruidos)
-  const maxSpeed = speeds.length > 0 ? Math.max(...speeds) : 85; // Fallback a 85 si no hay tabla
-  let isValid = true;
-  let reason = 'Exceso validado en portal web Coltrack.';
+  //
+  // Sin velocidades NO hay veredicto. La versión anterior caía a `: 85` — es
+  // decir, si el scraping no encontraba la tabla, inventaba 85 km/h, que está
+  // por encima del umbral de exceso grave (80) y confirmaba la alerta sola.
+  if (speeds.length === 0) {
+    return {
+      status: 'inconcluyente',
+      reason: 'No se pudieron leer velocidades en el portal Coltrack (la tabla no se encontró o cambió de estructura). Requiere verificación manual.',
+    };
+  }
+
+  const maxSpeed = Math.max(...speeds);
+  let status: RpaValidationStatus = 'confirmada';
+  let reason = `Exceso validado en portal web Coltrack (Max: ${maxSpeed} km/h).`;
 
   if (speeds.length >= 3) {
     // Si la velocidad sube de golpe a >80 y vuelve a caer a <40 en segundos, es un salto
     const isSuddenJump = speeds[0] < 45 && speeds[1] >= 80 && speeds[2] < 45;
     if (isSuddenJump) {
-      isValid = false;
+      status = 'descartada';
       reason = `Alerta descartada: Salto de señal GPS detectado en portal web (${speeds.join(' -> ')} km/h).`;
     }
   }
@@ -169,7 +218,7 @@ async function validateColtrackWeb(
   const screenshot = await page.screenshot({ type: 'png', fullPage: false }) as Buffer;
 
   return {
-    isValid,
+    status,
     reason,
     screenshotBuffer: screenshot,
     maxSpeedRecorded: maxSpeed
@@ -182,7 +231,7 @@ async function validateColtrackWeb(
 async function validateFagorWeb(
   plate: string,
   timestamp: string,
-  page: puppeteer.Page
+  page: Page
 ): Promise<RpaValidationResult> {
   const loginUrl = process.env.FAGOR_WEB_LOGIN_URL || 'https://www.flotasnet.com/usuario/acceso';
   const username = process.env.FAGOR_WEB_USER;
@@ -379,36 +428,47 @@ async function validateFagorWeb(
   await new Promise(resolve => setTimeout(resolve, 7000));
 
   // 7. Evaluar los resultados del reporte (DOM Scraping)
-  const validation = await page.evaluate((vehPlate) => {
+  const validation = await page.evaluate(() => {
     const textContent = document.body.innerText;
-    
-    // Buscar menciones a excesos de velocidad o alarmas
-    const hasViolation = textContent.includes('Exceso de velocidad') || 
-                         textContent.includes('exceso') || 
-                         textContent.includes('Velocidad') ||
-                         textContent.includes('Excesos');
 
-    // Intentar extraer números de velocidad de la tabla de resultados
+    // Extraer las velocidades reales de la tabla de resultados.
     const speedsFound: number[] = [];
     const regex = /(\d+)\s*km\/h/gi;
     let match;
     while ((match = regex.exec(textContent)) !== null) {
       speedsFound.push(parseInt(match[1]));
     }
-    
-    return {
-      hasViolation,
-      speedsFound,
-      maxSpeed: speedsFound.length > 0 ? Math.max(...speedsFound) : 85
-    };
-  }, plate);
 
-  console.log(`[RPA Fagor] Resultados obtenidos:`, validation);
+    return { speedsFound };
+  });
 
-  let isValid = validation.hasViolation;
-  let reason = isValid
-    ? `Exceso confirmado en FlotasNet MAE: Se registraron alarmas de velocidad del vehículo ${plate} para el día ${formattedDate} (Max: ${validation.maxSpeed} km/h).`
-    : `Alerta descartada: No se registraron alarmas ni excesos de velocidad para la placa ${plate} en FlotasNet MAE para el día ${formattedDate}.`;
+  console.log(`[RPA Fagor] Velocidades encontradas en el reporte:`, validation.speedsFound);
+
+  // El veredicto sale de las velocidades MEDIDAS, no de buscar palabras en la página.
+  //
+  // La versión anterior hacía `textContent.includes('Velocidad')`, que matchea el
+  // encabezado de la propia tabla del reporte: cualquier página que cargara
+  // "confirmaba" el exceso. Y si no encontraba cifras, caía a `maxSpeed: 85`,
+  // inventando una velocidad por encima del umbral de grave.
+  let status: RpaValidationStatus;
+  let reason: string;
+  let maxSpeed: number | undefined;
+
+  if (validation.speedsFound.length === 0) {
+    status = 'inconcluyente';
+    reason = `No se pudieron leer velocidades en el reporte MAE de FlotasNet para ${plate} el ${formattedDate} (reporte vacío o cambio de estructura). Requiere verificación manual.`;
+  } else {
+    maxSpeed = Math.max(...validation.speedsFound);
+    // Umbral de exceso, consistente con la semántica del resto del sistema
+    // (>=50 km/h es exceso; >=80 es grave). Ver reference: alertas_diarias_gps.
+    if (maxSpeed >= 50) {
+      status = 'confirmada';
+      reason = `Exceso confirmado en FlotasNet MAE para ${plate} el ${formattedDate} (Max registrado: ${maxSpeed} km/h).`;
+    } else {
+      status = 'descartada';
+      reason = `Alerta descartada: la velocidad máxima registrada en FlotasNet MAE para ${plate} el ${formattedDate} fue ${maxSpeed} km/h, por debajo del umbral de exceso.`;
+    }
+  }
 
   // 8. Ocultar menús y maximizar mapa/tabla para el screenshot
   await page.evaluate(() => {
@@ -441,56 +501,50 @@ async function validateFagorWeb(
   const screenshot = await page.screenshot({ type: 'png' }) as Buffer;
 
   return {
-    isValid,
+    status,
     reason,
     screenshotBuffer: screenshot,
-    maxSpeedRecorded: validation.maxSpeed
+    maxSpeedRecorded: maxSpeed
   };
 }
 
 /**
- * Ejecuta un flujo simulado (MOCK) en caso de pruebas locales sin credenciales reales o caídas de portales.
+ * Flujo simulado, SOLO para desarrollo.
+ *
+ * Únicamente se alcanza con RPA_MOCK_MODE=true explícito. Antes era el fallback
+ * automático de cualquier error, así que un portal caído o un cambio de DOM
+ * producía un veredicto de Math.random() que se escribía en la base y se enviaba
+ * por WhatsApp como validación real, sobre un exceso imputado a un conductor de
+ * carne y hueso.
+ *
+ * El resultado va marcado con `simulado: true` para que ninguna capa de arriba
+ * pueda confundirlo con una verificación de verdad.
  */
 async function runMockValidation(plate: string, source: string): Promise<RpaValidationResult> {
-  console.log(`[RPA Mock] Iniciando validación simulada (MOCK) para ${plate} en ${source}...`);
-  await new Promise(resolve => setTimeout(resolve, 3000)); // Simular retraso de red
-  
-  // Simular de forma aleatoria (85% reales, 15% falsos positivos)
+  console.warn(`[RPA Mock] MODO SIMULACIÓN ACTIVO (RPA_MOCK_MODE=true) para ${plate} en ${source}. ` +
+               'Los resultados son ficticios y no deben usarse para decidir nada.');
+  await new Promise(resolve => setTimeout(resolve, 500));
+
   const isReal = Math.random() > 0.15;
-  const simulatedSpeed = isReal ? Math.floor(Math.random() * 25) + 81 : 98; // 81-105 km/h o pico falso
-
-  // Intentamos obtener una imagen de mapa estático de prueba para no dejar la foto vacía
-  let screenshot: Buffer | undefined = undefined;
-  try {
-    // Si tenemos una key de Google Maps o podemos hacer un fetch simple a una imagen pública
-    const sampleMapUrl = 'https://maps.googleapis.com/maps/api/staticmap?center=4.6097,-74.0817&zoom=14&size=600x400&markers=color:red%7C4.6097,-74.0817&key=' + (process.env.GOOGLE_STATIC_MAPS_KEY || '');
-    if (process.env.GOOGLE_STATIC_MAPS_KEY) {
-      const res = await fetch(sampleMapUrl);
-      if (res.ok) {
-        screenshot = Buffer.from(await res.arrayBuffer());
-      }
-    }
-  } catch (err) {
-    console.warn('[RPA Mock] No se pudo obtener mapa estático para el Mock:', err.message);
-  }
-
-  // Si no pudimos descargar nada, leemos un buffer vacío o simulado
-  if (!screenshot) {
-    screenshot = Buffer.alloc(0);
-  }
+  const simulatedSpeed = isReal ? Math.floor(Math.random() * 25) + 81 : 98;
 
   return {
-    isValid: isReal,
-    reason: isReal 
-      ? `Simulación: Exceso de velocidad confirmado. Registrado a ${simulatedSpeed} km/h de forma sostenida por 8s.`
-      : `Simulación: Descartado. Salto de señal GPS detectado en plataforma (Velocidad: 0 -> 98 -> 0 km/h).`,
-    screenshotBuffer: screenshot,
-    maxSpeedRecorded: simulatedSpeed
+    status: isReal ? 'confirmada' : 'descartada',
+    reason: `[SIMULACIÓN — dato ficticio, no es una verificación real] ` + (isReal
+      ? `Exceso confirmado a ${simulatedSpeed} km/h.`
+      : `Descartado por salto de señal GPS.`),
+    screenshotBuffer: Buffer.alloc(0),
+    maxSpeedRecorded: simulatedSpeed,
+    simulado: true,
   };
 }
 
 /**
- * Función principal del Agente. Valida la alerta e ingresa a las plataformas correspondientes.
+ * Función principal del Agente. Valida la alerta contra el portal de la plataforma.
+ *
+ * Contrato: si no se pudo verificar, devuelve 'inconcluyente'. NUNCA inventa un
+ * veredicto. Quien llame debe tratar 'inconcluyente' como "sin dato" y no
+ * escribir conclusiones en la base.
  */
 export async function validateAlertWithRPA(
   plate: string,
@@ -500,40 +554,49 @@ export async function validateAlertWithRPA(
   const isColtrack = source.toUpperCase() === 'COLTRACK';
   const isFagor = source.toUpperCase() === 'FAGOR';
 
-  // Si no tenemos credenciales, caemos en simulación para desarrollo local
+  // La simulación es ahora opt-in explícito, jamás un respaldo silencioso.
+  if (process.env.RPA_MOCK_MODE === 'true') {
+    return await runMockValidation(plate, source);
+  }
+
+  if (!isColtrack && !isFagor) {
+    return {
+      status: 'inconcluyente',
+      reason: `La plataforma ${source} no está soportada por el agente de validación.`,
+    };
+  }
+
   const hasColtrackCreds = process.env.COLTRACK_WEB_USER && process.env.COLTRACK_WEB_PASSWORD;
   const hasFagorCreds = process.env.FAGOR_WEB_USER && process.env.FAGOR_WEB_PASSWORD;
 
   if ((isColtrack && !hasColtrackCreds) || (isFagor && !hasFagorCreds)) {
-    console.log(`[RPA Agent] Sin credenciales web reales configuradas para ${source}. Ejecutando SIMULACIÓN.`);
-    return await runMockValidation(plate, source);
+    return {
+      status: 'inconcluyente',
+      reason: `No hay credenciales configuradas para el portal de ${source}; no se pudo verificar la alerta.`,
+    };
   }
 
-  const browser = await getBrowser();
-  const page = await browser.newPage();
-  await page.setViewport({ width: 1280, height: 800 });
-
+  let browser: Browser | undefined;
   try {
-    let result: RpaValidationResult;
+    // getBrowser() dentro del try: en serverless no hay binario de Chrome y
+    // lanzaba fuera de aquí, escapando al manejo de errores del agente.
+    browser = await getBrowser();
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 800 });
 
-    if (isColtrack) {
-      result = await validateColtrackWeb(plate, timestamp, page);
-    } else if (isFagor) {
-      result = await validateFagorWeb(plate, timestamp, page);
-    } else {
-      throw new Error(`Plataforma ${source} no soportada por el agente RPA.`);
-    }
-
-    await browser.close();
-    return result;
+    return isColtrack
+      ? await validateColtrackWeb(plate, timestamp, page)
+      : await validateFagorWeb(plate, timestamp, page);
 
   } catch (error: any) {
-    console.error(`[RPA Agent] Error en ejecución de automatización:`, error.message);
-    if (browser) await browser.close();
-    
-    // Si la automatización real falla (por ejemplo, timeout o cambio en la web del GPS),
-    // caemos en modo de simulación de respaldo para que el sistema siga operando.
-    console.log('[RPA Agent] Ejecutando simulación de respaldo (Fallback) debido al error.');
-    return await runMockValidation(plate, source);
+    // Un fallo aquí significa "no pude verificar" — no "la alerta es falsa" ni
+    // "la alerta es real". Esa distinción es todo el punto de este servicio.
+    console.error(`[RPA Agent] No se pudo verificar ${plate} en ${source}:`, error?.message);
+    return {
+      status: 'inconcluyente',
+      reason: `No se pudo verificar en el portal de ${source}: ${error?.message || 'error desconocido'}. Requiere verificación manual.`,
+    };
+  } finally {
+    if (browser) await browser.close().catch(() => {});
   }
 }
