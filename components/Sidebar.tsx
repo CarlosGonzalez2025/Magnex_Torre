@@ -30,10 +30,12 @@ import {
     Radio,
     Fuel,
     Satellite,
+    FileUser,
+    CalendarClock,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
-export type TabType = 'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'history-analytics' | 'route-investigation' | 'batch-upload' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'geofences' | 'users' | 'maintenance' | 'fleet' | 'alert-config' | 'daily-reports' | 'monthly-reports' | 'contract-analysis' | 'telemetry-processor' | 'ralenti-reports' | 'geotab';
+export type TabType = 'dashboard' | 'table' | 'map' | 'alerts' | 'history' | 'saved' | 'history-analytics' | 'route-investigation' | 'batch-upload' | 'analytics' | 'inspections' | 'schedules' | 'drivers' | 'hoja-vida' | 'vencimientos' | 'geofences' | 'users' | 'maintenance' | 'fleet' | 'alert-config' | 'daily-reports' | 'monthly-reports' | 'contract-analysis' | 'telemetry-processor' | 'ralenti-reports' | 'geotab';
 
 interface SidebarProps {
     activeTab: TabType;
@@ -102,6 +104,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             icon: Wrench,
             items: [
                 { id: 'drivers', label: 'Conductores', icon: Users },
+                { id: 'hoja-vida', label: 'Hoja de Vida', icon: FileUser },
+                { id: 'vencimientos', label: 'Vencimientos', icon: CalendarClock },
                 { id: 'geofences', label: 'Geocercas', icon: MapPin },
                 { id: 'inspections', label: 'Inspecciones', icon: ClipboardCheck },
                 { id: 'schedules', label: 'Cronogramas', icon: Calendar },
