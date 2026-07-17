@@ -504,6 +504,26 @@ const server = http.createServer(async (req, res) => {
                 res.writeHead(out.error ? 502 : 200);
                 res.end(JSON.stringify(out));
             }
+        } else if (req.url.startsWith('/api/sheets-csv')) {
+            // Proxy CSV genérico (solo docs.google.com). Devuelve el CSV en crudo.
+            const u = new URL(req.url, 'http://localhost');
+            const target = u.searchParams.get('url') || '';
+            let allowed = false;
+            try { const t = new URL(target); allowed = t.protocol === 'https:' && /(^|\.)docs\.google\.com$/.test(t.hostname); } catch { allowed = false; }
+            if (!target) { res.writeHead(400); res.end(JSON.stringify({ success: false, error: 'Falta el parámetro url.' })); }
+            else if (!allowed) { res.writeHead(400); res.end(JSON.stringify({ success: false, error: 'URL no permitida (solo docs.google.com).' })); }
+            else {
+                try {
+                    const resp = await httpsRequest(target, { method: 'GET', headers: { 'Accept': 'text/csv,*/*' } });
+                    if (!resp.ok) throw new Error(`Google Sheets CSV returned ${resp.status}`);
+                    const csv = await resp.text();
+                    res.writeHead(200);
+                    res.end(JSON.stringify({ success: true, csv }));
+                } catch (e) {
+                    res.writeHead(500);
+                    res.end(JSON.stringify({ success: false, error: e.message }));
+                }
+            }
         } else if (req.url === '/api/health') {
             res.writeHead(200);
             res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }));

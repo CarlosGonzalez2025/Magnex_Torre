@@ -19,6 +19,9 @@ import { MaintenancePanel } from './components/MaintenancePanel';
 import { AlertSoundToggle } from './components/AlertSoundSettings';
 import { Dashboard } from './components/Dashboard';
 import { DriverManagement } from './components/DriverManagement';
+import { HojaDeVida } from './components/HojaDeVida';
+import { Vencimientos } from './components/Vencimientos';
+import { CarnetPublico } from './components/CarnetPublico';
 import { GeofenceEditor } from './components/GeofenceEditor';
 import { UserManagement } from './components/UserManagement';
 import { ThemeToggle } from './components/ThemeToggle';
@@ -413,6 +416,16 @@ export default function App() {
     prevCriticalAlertsRef.current = criticalAlertsCount;
   }, [criticalAlertsCount]);
 
+  // QR del carnet: si la URL trae ?carnet=<token>, mostramos la vista pública
+  // del carnet (solo lectura), sin importar el estado de sesión. El registro de
+  // comportamientos dentro de esa vista sí exige supervisor autenticado.
+  const carnetToken = typeof window !== 'undefined'
+    ? new URLSearchParams(window.location.search).get('carnet')
+    : null;
+  if (carnetToken) {
+    return <CarnetPublico token={carnetToken} />;
+  }
+
   if (!user) {
     return <Login />;
   }
@@ -467,6 +480,8 @@ export default function App() {
                                   activeTab === 'inspections' ? 'Inspecciones' :
                                     activeTab === 'schedules' ? 'Cronogramas' :
                                       activeTab === 'drivers' ? 'Gestión de Conductores' :
+                                        activeTab === 'hoja-vida' ? 'Hoja de Vida del Conductor' :
+                                        activeTab === 'vencimientos' ? 'Vencimientos próximos' :
                                         activeTab === 'geofences' ? 'Editor de Geocercas' :
                                           activeTab === 'users' ? 'Gestión de Usuarios' :
                                             activeTab === 'maintenance' ? 'Mantenimiento' :
@@ -693,6 +708,8 @@ export default function App() {
               {activeTab === 'inspections' && <Inspections />}
               {activeTab === 'schedules' && <RouteSchedules />}
               {activeTab === 'drivers' && <DriverManagement />}
+              {activeTab === 'hoja-vida' && <HojaDeVida />}
+              {activeTab === 'vencimientos' && <Vencimientos />}
               {activeTab === 'geofences' && <GeofenceEditor />}
               {activeTab === 'users' && <UserManagement />}
               {activeTab === 'maintenance' && <MaintenancePanel />}
