@@ -41,6 +41,9 @@ const MODULE_GROUPS = [
     label: 'Gestión',
     modules: [
       { id: 'drivers', label: 'Conductores' },
+      { id: 'hoja-vida', label: 'Hoja de Vida' },
+      { id: 'vencimientos', label: 'Vencimientos' },
+      { id: 'carnet_campo', label: 'Registro en campo (QR)' },
       { id: 'geofences', label: 'Geocercas' },
       { id: 'inspections', label: 'Inspecciones' },
       { id: 'schedules', label: 'Cronogramas' },
