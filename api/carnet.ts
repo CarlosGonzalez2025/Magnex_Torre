@@ -33,14 +33,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ success: false, error: 'Falta el token del carnet.' });
   }
 
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!supabaseUrl || !serviceKey) {
-    return res.status(500).json({ success: false, error: 'Faltan env vars SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY' });
-  }
+  // Preferimos service_role (si está configurado en Vercel), pero caemos a la
+  // anon key pública: hv_conductores y conductor_scores ya tienen política de
+  // lectura para `anon`, y este endpoint solo devuelve campos mínimos. Así el
+  // QR funciona sin depender de configurar env vars en el hosting.
+  const SUPABASE_URL_FALLBACK = 'https://cmzeijcyykzdmvisojte.supabase.co';
+  const SUPABASE_ANON_FALLBACK = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNtemVpamN5eWt6ZG12aXNvanRlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgwNzc5MTYsImV4cCI6MjA5MzY1MzkxNn0.qn5_sVmmZ1gb6YQCaO2RQYWRO-XwVTuLTY64LK8mAME';
+
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || SUPABASE_URL_FALLBACK;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || SUPABASE_ANON_FALLBACK;
 
   try {
-    const supabase = createClient(supabaseUrl, serviceKey);
+    const supabase = createClient(supabaseUrl, key);
 
     const { data: c, error: errC } = await supabase
       .from('hv_conductores')
