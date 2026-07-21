@@ -282,7 +282,11 @@ const CreateUserModal: React.FC<CreateUserModalProps> = ({ onClose, onCreated, c
       const newUser = result.data;
 
       if (needsModules && form.modules.length > 0) {
-        await userService.setModulePermissions(newUser.id, form.modules, currentUserId);
+        const permResult = await userService.setModulePermissions(newUser.id, form.modules, currentUserId);
+        if (!permResult.success) {
+          setError('Usuario creado, pero ocurrió un error al asignar los permisos de módulos: ' + permResult.error);
+          return;
+        }
       }
 
       onCreated({
@@ -457,6 +461,9 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ user, onClose, onUpdated,
       if (role === 'admin') {
         await userService.setModulePermissions(user.id, [], currentUserId);
         allowedModules = null;
+      } else if (user.role === 'admin' && role !== 'admin') {
+        // Al pasar de admin a operador/visitante, inicializar array de módulos si era null
+        allowedModules = user.allowedModules || [];
       }
 
       onUpdated({ ...user, name, role, allowedModules });
