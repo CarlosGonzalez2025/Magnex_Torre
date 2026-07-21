@@ -462,19 +462,51 @@ class UserService {
     grantedBy: string
   ): Promise<ServiceResult> {
     try {
-      const { error } = await supabase.rpc('set_user_module_permissions', {
+      // 1. Intentar actualización directa en la tabla user_module_permissions
+      const { error: deleteErr } = await supabase
+        .from('user_module_permissions')
+        .delete()
+        .eq('user_id', userId);
+
+      if (!deleteErr) {
+        if (modules && modules.length > 0) {
+          const rowsToInsert = modules.map(m => ({
+            user_id: userId,
+            module_id: m,
+            granted_by: grantedBy,
+          }));
+
+          const { error: insertErr } = await supabase
+            .from('user_module_permissions')
+            .insert(rowsToInsert);
+
+          if (insertErr) {
+            console.error('[UserService] Insert permissions error:', insertErr);
+            return { success: false, error: 'Error al insertar permisos: ' + insertErr.message };
+          }
+        }
+
+        await this.logAudit(grantedBy, 'MODULE_PERMISSIONS_UPDATED', 'user', userId, { modules });
+        return { success: true };
+      }
+
+      // 2. Si falla la operación directa (por RLS o restricciones), intentar llamada RPC
+      console.warn('[UserService] Direct delete failed, falling back to RPC:', deleteErr.message);
+      const { error: rpcError } = await supabase.rpc('set_user_module_permissions', {
         p_user_id: userId,
         p_modules: modules,
         p_granted_by: grantedBy,
       });
 
-      if (error) {
-        return { success: false, error: 'Error al guardar permisos: ' + error.message };
+      if (rpcError) {
+        return { success: false, error: 'Error al guardar permisos: ' + (deleteErr.message || rpcError.message) };
       }
 
       await this.logAudit(grantedBy, 'MODULE_PERMISSIONS_UPDATED', 'user', userId, { modules });
       return { success: true };
+
     } catch (error: any) {
+      console.error('[UserService] Set module permissions exception:', error);
       return { success: false, error: error.message || 'Error inesperado' };
     }
   }
