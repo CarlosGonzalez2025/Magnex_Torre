@@ -40,6 +40,7 @@ const MODULE_GROUPS = [
     id: 'management',
     label: 'Gestión',
     modules: [
+      { id: 'bitacora-gestion', label: 'Bitácora de Gestión' },
       { id: 'drivers', label: 'Conductores' },
       { id: 'hoja-vida', label: 'Hoja de Vida' },
       { id: 'vencimientos', label: 'Vencimientos' },

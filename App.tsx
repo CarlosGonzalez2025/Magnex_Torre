@@ -24,6 +24,7 @@ import { Vencimientos } from './components/Vencimientos';
 import { CarnetPublico } from './components/CarnetPublico';
 import { GeofenceEditor } from './components/GeofenceEditor';
 import { UserManagement } from './components/UserManagement';
+import { BitacoraGestion } from './components/BitacoraGestion';
 import { ThemeToggle } from './components/ThemeToggle';
 import { UserGuideButton } from './components/UserGuide';
 import { Login } from './components/Login';
@@ -485,6 +486,7 @@ export default function App() {
                                         activeTab === 'geofences' ? 'Editor de Geocercas' :
                                           activeTab === 'users' ? 'Gestión de Usuarios' :
                                             activeTab === 'maintenance' ? 'Mantenimiento' :
+                                              activeTab === 'bitacora-gestion' ? 'Bitácora de Gestión de Novedades' :
                                               activeTab === 'alert-config' ? 'Configuración de Alertas' :
                                               activeTab === 'daily-reports' ? 'Informes Diarios' :
                                               activeTab === 'monthly-reports' ? 'Informes Mensuales' :
@@ -707,6 +709,7 @@ export default function App() {
               {activeTab === 'analytics' && <Analytics vehicles={vehicles} alerts={alerts} />}
               {activeTab === 'inspections' && <Inspections />}
               {activeTab === 'schedules' && <RouteSchedules />}
+              {activeTab === 'bitacora-gestion' && <BitacoraGestion />}
               {activeTab === 'drivers' && <DriverManagement />}
               {activeTab === 'hoja-vida' && <HojaDeVida />}
               {activeTab === 'vencimientos' && <Vencimientos />}
