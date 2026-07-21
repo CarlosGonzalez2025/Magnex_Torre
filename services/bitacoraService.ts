@@ -366,10 +366,12 @@ class BitacoraService {
     }
   }
 
-  /**
-   * Crear un nuevo registro
-   */
   async create(entry: Omit<BitacoraEntry, 'id'>, userId?: string): Promise<{ success: boolean; data?: BitacoraEntry; error?: string }> {
+    const isValidUuid = (id?: string) => {
+      if (!id) return false;
+      return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+    };
+
     const payload = {
       fecha: entry.fecha,
       hora_alerta: entry.hora_alerta || null,
@@ -385,7 +387,7 @@ class BitacoraService {
       observacion: entry.observacion || null,
       evidencia_url: entry.evidencia_url || null,
       evidencia_nombre: entry.evidencia_nombre || null,
-      created_by: userId || null,
+      created_by: isValidUuid(userId) ? userId : null,
     };
 
     try {
@@ -395,7 +397,12 @@ class BitacoraService {
         .select()
         .single();
 
-      if (!error && data) {
+      if (error) {
+        console.error('[BitacoraService] Supabase insert error:', error.message);
+        throw error;
+      }
+
+      if (data) {
         const newEntry: BitacoraEntry = {
           id: data.id,
           fecha: data.fecha,
@@ -483,6 +490,11 @@ class BitacoraService {
       return { success: true, count: 0 };
     }
 
+    const isValidUuid = (id?: string) => {
+      if (!id) return false;
+      return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+    };
+
     const rowsToInsert = entries.map(entry => ({
       fecha: entry.fecha,
       hora_alerta: entry.hora_alerta || null,
@@ -498,7 +510,7 @@ class BitacoraService {
       observacion: entry.observacion || null,
       evidencia_url: entry.evidencia_url || null,
       evidencia_nombre: entry.evidencia_nombre || null,
-      created_by: userId || null,
+      created_by: isValidUuid(userId) ? userId : null,
     }));
 
     try {
