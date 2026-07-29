@@ -13,7 +13,7 @@ on:
       limite:
         description: 'Máximo de alertas a procesar'
         required: false
-        default: '200'
+        default: '500'
       dry_run:
         description: 'Calcular sin escribir'
         type: boolean
@@ -40,11 +40,15 @@ jobs:
       # Sin pip install: el worker usa solo la librería estándar (urllib + json).
       # No necesita pandas ni Playwright — valida contra datos que ya están en
       # Supabase, no contra un navegador.
+      # 500 por corrida (~4 min medidos) contra el cron de 2h da 6.000 alertas/día
+      # de capacidad. Con eso la cola drena en una corrida incluso partiendo del
+      # atasco de 1.670 que dejó el bug de InvalidURL, y sobra margen para los
+      # picos de un vehículo con el GPS averiado.
       - name: Validar alertas pendientes
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           python -m alerts.validate_alerts \
-            --limite "${{ github.event.inputs.limite || '200' }}" \
+            --limite "${{ github.event.inputs.limite || '500' }}" \
             ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
