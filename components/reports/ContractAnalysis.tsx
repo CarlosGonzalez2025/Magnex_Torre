@@ -9,6 +9,7 @@ import type { ConductorOption, ContratoOption, VehiculoOption } from '../../serv
 import { supabase } from '../../services/supabaseClient';
 import { descargarPDFAnalisisContrato, descargarPDFConsolidadoGlobal } from '../../services/pdfTemplates';
 import * as XLSX from 'xlsx';
+import { descargarBuffer, MIME_XLSX } from '../../utils/descargarArchivo';
 
 const primerDiaMes = () => {
   const d = new Date();
@@ -983,16 +984,13 @@ export const ContractAnalysis: React.FC = () => {
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Desglose Vehículos');
     
     const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
-    const blob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-    
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `desglose_multicontratos_${filtro.fechaInicio}_${filtro.fechaFin}.xlsx`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    window.URL.revokeObjectURL(url);
+    // Mismo archivo y mismo nombre; el helper difiere la liberación de la URL
+    // del blob, que abortaba la descarga en Safari, iOS y algunos WebView.
+    descargarBuffer(
+      excelBuffer,
+      `desglose_multicontratos_${filtro.fechaInicio}_${filtro.fechaFin}.xlsx`,
+      MIME_XLSX,
+    );
   };
 
   // Exportar consolidado global a XLSX
@@ -1034,16 +1032,13 @@ export const ContractAnalysis: React.FC = () => {
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Consolidado Global');
     
     const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
-    const blob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-    
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `consolidado_global_contratos_${filtro.fechaInicio}_${filtro.fechaFin}.xlsx`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    window.URL.revokeObjectURL(url);
+    // Mismo archivo y mismo nombre; el helper difiere la liberación de la URL
+    // del blob, que abortaba la descarga en Safari, iOS y algunos WebView.
+    descargarBuffer(
+      excelBuffer,
+      `consolidado_global_contratos_${filtro.fechaInicio}_${filtro.fechaFin}.xlsx`,
+      MIME_XLSX,
+    );
   };
 
   const exportarPDFIndividual = async () => {

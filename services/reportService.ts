@@ -1158,10 +1158,32 @@ export async function getReporteAlertasDiarias(filtro: Pick<FiltroReporte, 'fech
   };
 }
 
+/**
+ * Todas las columnas de `alertas_diarias_gps` MENOS `raw_data`.
+ *
+ * `raw_data` es el volcado JSONB del Excel original y duplica el peso de la
+ * respuesta: medido contra producción, 0,50 MB por cada 1.000 filas sin ella
+ * frente a 0,98 MB con ella. Con ~8.600 alertas al día, traerla suponía
+ * descargar y mantener en memoria el doble de datos en cada carga del
+ * Historial, que es justo lo que agotaba los dispositivos con menos memoria.
+ * Ninguna columna de negocio se pierde: solo desaparece el volcado en bruto.
+ */
+const COLUMNAS_ALERTA_DIARIA =
+  'id,carga_id,vehiculo_id,conductor_id,contrato_id,placa,conductor,conductor_identificado,' +
+  'lugar,latitud,longitud,fecha,fecha_dia,velocidad,estado,infraccion_80_kmh,' +
+  'excesos_varios_parametros,excesos_50_80_kmh,frenadas_bruscas,contrato_nombre,gps,' +
+  'tipo_activo,cliente,created_at';
+
+/** Equivalente para `alertas_diarias_pendientes` (no tiene vehiculo/conductor/contrato_id). */
+const COLUMNAS_ALERTA_PENDIENTE =
+  'id,carga_id,placa,conductor,conductor_identificado,lugar,latitud,longitud,fecha,fecha_dia,' +
+  'velocidad,estado,infraccion_80_kmh,excesos_varios_parametros,excesos_50_80_kmh,' +
+  'frenadas_bruscas,contrato_nombre,gps,estado_migracion,migrado_at,created_at';
+
 export async function listarAlertasDiarias(filtro: Pick<FiltroReporte, 'fechaInicio' | 'fechaFin' | 'contratoId'>) {
   let q = supabase
     .from('alertas_diarias_gps')
-    .select('*')
+    .select(COLUMNAS_ALERTA_DIARIA)
     .gte('fecha_dia', filtro.fechaInicio)
     .lte('fecha_dia', filtro.fechaFin)
     .not('vehiculo_id', 'is', null)
@@ -1204,7 +1226,7 @@ export async function listarAlertasDiariasPendientes(filtro: Pick<FiltroReporte,
 
   let q = supabase
     .from('alertas_diarias_pendientes')
-    .select('*')
+    .select(COLUMNAS_ALERTA_PENDIENTE)
     .gte('fecha_dia', filtro.fechaInicio)
     .lte('fecha_dia', filtro.fechaFin)
     .eq('estado_migracion', 'pendiente')

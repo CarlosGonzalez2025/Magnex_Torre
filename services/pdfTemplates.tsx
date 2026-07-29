@@ -7,6 +7,7 @@ import {
   Image, Svg, Circle, Line, Path, Polyline, Rect,
 } from '@react-pdf/renderer';
 import { ContratoOption, ReporteAlertasDiariasData, AlertaDiariaGps, ReporteConductorData, ReporteVehiculoData, esConductorIdentificado } from './reportService';
+import { descargarBlob } from '../utils/descargarArchivo';
 
 const magnexLogo = new URL('../Magnex.png', import.meta.url).href;
 const orionLogo = new URL('../Orion.png', import.meta.url).href;
@@ -450,14 +451,10 @@ function promedioNumerico(values: number[]): number {
 }
 
 function downloadBlob(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  // Delegado en el helper compartido: liberaba la URL del blob en la misma
+  // vuelta del bucle de eventos que el click, lo que abortaba la descarga sin
+  // avisar en Safari, iOS y algunos WebView de Android.
+  descargarBlob(blob, filename);
 }
 
 export interface ConsolidadoContratoResumen {
