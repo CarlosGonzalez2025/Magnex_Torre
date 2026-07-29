@@ -31,6 +31,16 @@ REGLA QUE SOSTIENE TODO EL DISEÑO
   Confundir esas dos cosas es exactamente como se acusa a un conductor con un
   dato que nadie verificó.
 
+  La regla tiene DOS condiciones, no una — y la segunda faltaba hasta el
+  2026-07-29. Que el informe del día esté cargado no implica que cubra al
+  vehículo de la alerta: el informe de COLTRACK del 2026-07-28 trae 242 filas y
+  67 placas sobre una flota de 1.019 vehículos. Es la lista de los vehículos que
+  el proveedor reportó, no un censo de la flota. Sin comprobar la cobertura por
+  placa, el worker cerró 101 alertas de PWQ878 —un vehículo con CERO filas en
+  `alertas_diarias_gps` en toda la historia— como "Falso positivo". Ver
+  `placa_cubierta()`: sin cobertura el veredicto es 'inconcluyente', no
+  'descartada'.
+
 Uso:
     export SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=...
     python -m alerts.validate_alerts [--limite 200] [--dry-run]
@@ -76,6 +86,12 @@ MAX_INTENTOS = 24
 # inconcluyente en vez de reintentar para siempre.
 DIAS_MAX_ESPERA = 3
 
+# Ventana hacia atrás para decidir si el informe de un proveedor cubre a un
+# vehículo. Ver `placa_cubierta`: 30 días es holgado de sobra para que cualquier
+# vehículo operativo aparezca al menos una vez, y corto como para no dar por
+# cubierto a uno que salió de la flota.
+COBERTURA_DIAS = 30
+
 
 def norm_placa(p) -> str:
     return re.sub(r'\s+', '', str(p or '').upper()).strip()
@@ -112,9 +128,8 @@ def es_exceso(ev: dict) -> bool:
 def informe_cargado(source: str, fecha_dia: str) -> bool:
     """¿Existe ya el informe diario de este proveedor para este día?
 
-    Es la pregunta que separa 'descartada' de 'todavía no sé'. Se responde
-    mirando si hay CUALQUIER evento de esa fuente ese día — el informe se carga
-    completo, para toda la flota, de una sola vez.
+    Primera de las dos preguntas que separan 'descartada' de 'todavía no sé'. Se
+    responde mirando si hay CUALQUIER evento de esa fuente ese día.
     """
     return count('alertas_diarias_gps', [
         f'gps=ilike.*{source}*',
@@ -122,11 +137,63 @@ def informe_cargado(source: str, fecha_dia: str) -> bool:
     ]) > 0
 
 
+def placa_cubierta(placa: str, source: str, fecha_dia: str) -> bool:
+    """¿El informe de este proveedor incluye alguna vez a este vehículo?
+
+    Segunda pregunta, y la que faltaba. El diseño original asumía que el informe
+    diario llega "completo, para toda la flota, de una sola vez", y por tanto que
+    si el informe del día estaba cargado y no mencionaba la placa, el exceso no
+    había ocurrido. La base dice otra cosa: el informe de COLTRACK del 2026-07-28
+    trae 242 filas y 67 placas sobre una flota de 1.019 vehículos. No es un censo
+    de la flota, es la lista de los vehículos que ese proveedor reportó.
+
+    La consecuencia de asumirlo mal ya se materializó: PWQ878 acumula 1.337
+    alertas en cola y CERO filas en `alertas_diarias_gps` en toda la historia —
+    ese vehículo no está en la ingesta de COLTRACK. Aun así el worker cerró 101 de
+    sus alertas como "Falso positivo". Eso es exactamente lo que la regla de
+    arriba prohíbe: ausencia de dato tratada como evidencia de ausencia.
+
+    Con esta comprobación, un vehículo que el proveedor nunca reporta produce
+    'inconcluyente' (revisión manual), no 'descartada'. Un vehículo que sí
+    aparece habitualmente y no figura ese día sí es un descarte legítimo: el
+    proveedor lo cubre y no le registró nada.
+    """
+    desde = (datetime.fromisoformat(fecha_dia) - timedelta(days=COBERTURA_DIAS)).strftime('%Y-%m-%d')
+    return count('alertas_diarias_gps', [
+        f'placa=eq.{placa}',
+        f'gps=ilike.*{source}*',
+        f'fecha_dia=gte.{desde}',
+        f'fecha_dia=lte.{fecha_dia}',
+    ]) > 0
+
+
+_COLS_EVENTO = ('placa,fecha,fecha_dia,velocidad,infraccion_80_kmh,excesos_50_80_kmh,'
+                'latitud,longitud,lugar,gps,estado')
+
+
 def eventos_de_placa(placa: str, fecha_dia: str) -> list[dict]:
+    """Eventos del día, solo para dar contexto en el motivo ('N excesos ese día')."""
     return fetch_all(
-        'alertas_diarias_gps',
-        'placa,fecha,fecha_dia,velocidad,infraccion_80_kmh,excesos_50_80_kmh,latitud,longitud,lugar,gps,estado',
+        'alertas_diarias_gps', _COLS_EVENTO,
         filters=[f'placa=eq.{placa}', f'fecha_dia=eq.{fecha_dia}'],
+        order='fecha.asc',
+    )
+
+
+def eventos_en_ventana(placa: str, t_alerta: datetime) -> list[dict]:
+    """Eventos dentro de ±VENTANA_MIN de la alerta. Esto es lo que decide el veredicto.
+
+    Se filtra por `fecha` (el timestamp real) y no por `fecha_dia`: una alerta a
+    las 23:55 hora Colombia tiene fecha_dia del día D, pero el evento del informe
+    que la respalda puede estar a las 00:05 del día D+1. Filtrando por día se
+    perdía y la alerta se descartaba como falso positivo por un problema de
+    calendario, no de velocidad.
+    """
+    desde = (t_alerta - timedelta(minutes=VENTANA_MIN)).isoformat()
+    hasta = (t_alerta + timedelta(minutes=VENTANA_MIN)).isoformat()
+    return fetch_all(
+        'alertas_diarias_gps', _COLS_EVENTO,
+        filters=[f'placa=eq.{placa}', f'fecha=gte.{desde}', f'fecha=lte.{hasta}'],
         order='fecha.asc',
     )
 
@@ -161,11 +228,28 @@ def validar(item: dict) -> dict:
             'ultimo_error': f'Informe diario de {source} del {fecha_dia} aún no cargado; se reintentará.',
         }
 
+    ahora = datetime.now(COL_OFFSET).isoformat()
+
+    # El informe del día está, pero eso no basta: hay que saber si cubre a ESTE
+    # vehículo. Si el proveedor nunca lo reporta, su silencio no dice nada.
+    if not placa_cubierta(placa, source, fecha_dia):
+        return {
+            'estado': 'inconcluyente',
+            'motivo': (f'{placa} no aparece en ningún informe diario de {source} en los últimos '
+                       f'{COBERTURA_DIAS} días, así que el informe del {fecha_dia} no sirve para '
+                       f'verificar ni desmentir esta alerta. Posible vehículo fuera de la ingesta de '
+                       f'{source} o discrepancia de placa entre el feed en vivo y el informe. '
+                       f'Requiere revisión manual.'),
+            'processed_at': ahora,
+        }
+
     eventos = [e for e in eventos_de_placa(placa, fecha_dia) if es_exceso(e)]
 
     # Eventos del proveedor dentro de la ventana alrededor de la alerta.
     cercanos = []
-    for e in eventos:
+    for e in eventos_en_ventana(placa, t_alerta):
+        if not es_exceso(e):
+            continue
         t_ev = _parse_ts(e.get('fecha'))
         if t_ev is None:
             continue
@@ -173,8 +257,6 @@ def validar(item: dict) -> dict:
         if delta <= VENTANA_MIN:
             cercanos.append((delta, e))
     cercanos.sort(key=lambda x: x[0])
-
-    ahora = datetime.now(COL_OFFSET).isoformat()
 
     if not cercanos:
         # El informe SÍ está cargado y no registra el exceso: es un falso positivo.
@@ -192,10 +274,20 @@ def validar(item: dict) -> dict:
     vel_max = max(float(e.get('velocidad') or 0) for _, e in cercanos)
     grave = vel_max >= UMBRAL_GRAVE
 
+    # Qué proveedor(es) respaldan realmente el veredicto. La búsqueda de eventos
+    # no se limita a `source` a propósito: un exceso corroborado por otra
+    # plataforma es evidencia más fuerte, no más débil. Pero el motivo es el
+    # registro de auditoría que lee un supervisor, así que tiene que nombrar la
+    # fuente de la evidencia y no la de la alerta — decir "confirmado contra el
+    # informe de COLTRACK" cuando el dato salió de GEOTAB es un motivo falso.
+    fuentes = sorted({str(e.get('gps') or '?').upper() for _, e in cercanos})
+    respaldo = ', '.join(fuentes)
+    nota_cruce = '' if fuentes == [source] else f' (alerta reportada por {source})'
+
     return {
         'estado': 'completado',
         'veredicto': 'confirmada',
-        'motivo': (f'Confirmado contra el informe diario de {source} ({fecha_dia}): '
+        'motivo': (f'Confirmado contra el informe diario de {respaldo} ({fecha_dia}){nota_cruce}: '
                    f'{len(cercanos)} evento(s) de exceso de {placa} en ±{VENTANA_MIN} min de la alerta. '
                    f'Velocidad máxima registrada {vel_max:.0f} km/h'
                    f'{" (exceso GRAVE ≥80)" if grave else ""}. Lugar: {mejor.get("lugar") or "n/d"}.'),
@@ -208,6 +300,9 @@ def validar(item: dict) -> dict:
 def _fila_traza(e: dict) -> dict:
     return {
         'fecha': e.get('fecha'),
+        # De qué proveedor salió esta fila: sin esto, la traza no permite
+        # reconstruir de dónde vino la evidencia que sostiene el veredicto.
+        'gps': e.get('gps'),
         'velocidad': float(e.get('velocidad') or 0),
         'lat': e.get('latitud'),
         'lon': e.get('longitud'),
@@ -231,9 +326,12 @@ def propagar_a_alertas(alert_id: str, res: dict) -> None:
     for tabla in ('saved_alerts', 'alert_history'):
         try:
             patch(tabla, [f'alert_id=eq.{alert_id}'], valores)
-        except RuntimeError as e:
+        except Exception as e:
             # Que la alerta no exista en una de las tablas es normal (puede haber
             # sido movida a histórico). No es motivo para fallar el lote.
+            # `Exception` y no `RuntimeError`: la propagación es un enriquecimiento
+            # y ninguna de sus formas de fallar justifica perder las 199 alertas
+            # restantes del lote (fue justo así como InvalidURL tumbó el worker).
             print(f'      aviso: no se pudo actualizar {tabla} para {alert_id}: {e}', file=sys.stderr)
 
 
@@ -260,8 +358,29 @@ def main() -> int:
     print(f'Procesando {len(pendientes)} alerta(s) pendiente(s)…\n')
     tally = {'confirmada': 0, 'descartada': 0, 'reintentar': 0, 'inconcluyente': 0, 'error': 0}
 
+    fallos = 0
+
     for item in pendientes:
-        res = validar(item)
+        # Cada alerta se aísla: un dato corrupto en una fila no puede costar el
+        # lote entero. Antes sí podía, y el resultado fue un worker que procesaba
+        # 1 de 200 alertas por corrida mientras la cola crecía sin límite.
+        try:
+            res = validar(item)
+        except Exception as e:
+            fallos += 1
+            tally['error'] += 1
+            print(f"  {item['plate']:9s} {str(item['alert_timestamp'])[:16]} "
+                  f"{item['source']:9s} -> FALLO INESPERADO: {type(e).__name__}: {e}", file=sys.stderr)
+            if not args.dry_run:
+                try:
+                    patch('alert_validation_queue', [f"id=eq.{item['id']}"], {
+                        'ultimo_error': f'{type(e).__name__}: {e}'[:500],
+                        'intentos': (item.get('intentos') or 0) + 1,
+                    })
+                except Exception as e2:
+                    print(f'      aviso: tampoco se pudo registrar el fallo: {e2}', file=sys.stderr)
+            continue
+
         estado = res['estado']
 
         if estado == 'pendiente':
@@ -290,6 +409,13 @@ def main() -> int:
     print(f'\nResumen: {tally}')
     if args.dry_run:
         print('[dry-run] No se escribió nada.')
+
+    # El lote se completó, pero un fallo inesperado es un bug, no un veredicto:
+    # salir en rojo es lo que hace que alguien lo mire.
+    if fallos:
+        print(f'{fallos} alerta(s) fallaron de forma inesperada; revisar `ultimo_error` en la cola.',
+              file=sys.stderr)
+        return 1
     return 0
 
 
