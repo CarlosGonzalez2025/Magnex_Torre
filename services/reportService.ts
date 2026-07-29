@@ -15,7 +15,9 @@ export async function fetchAllRows<T = Record<string, unknown>>(query: any): Pro
   let from = 0;
 
   while (true) {
-    const { data, error } = await query.range(from, from + PAGE_SIZE - 1);
+    // Con reintento: un "statement timeout" en cualquiera de las páginas dejaba
+    // sin informe al usuario aunque la misma petición funcionase al momento.
+    const { data, error } = await pedirPaginaConReintento(() => query.range(from, from + PAGE_SIZE - 1));
     if (error) throw new Error(error.message);
     const rows = (data ?? []) as T[];
     allRows.push(...rows);
@@ -24,6 +26,117 @@ export async function fetchAllRows<T = Record<string, unknown>>(query: any): Pro
   }
 
   return allRows;
+}
+
+/**
+ * Reintenta una página cuando el servidor devuelve un error transitorio.
+ *
+ * El cursor quita la causa estructural del "statement timeout", pero no la
+ * elimina del todo: es un timeout de servidor y sigue dependiendo de la carga
+ * del momento. Medido sobre el mes completo, dos pasadas seguidas: la primera
+ * (justo después de otra carga completa, con la base todavía ocupada) se topó
+ * con un 57014 y la segunda hizo las 152 páginas sin una sola incidencia. Es
+ * decir: la misma consulta falla o no según cómo esté la base en ese segundo, y
+ * es exactamente lo que los usuarios describían como fallos sin patrón.
+ *
+ * Como la página que falla es la misma que después funciona, reintentar la
+ * resuelve. Solo se reintentan los errores que pueden desaparecer solos
+ * —timeout de sentencia y 503/504 de la pasarela—; un error de permisos o de
+ * consulta mal formada se devuelve tal cual, sin insistir.
+ */
+const REINTENTOS_PAGINA = 3;
+
+function esErrorTransitorio(error: any): boolean {
+  const code = String(error?.code ?? '');
+  if (code === '57014') return true;                       // statement timeout
+  if (code === '503' || code === '504') return true;       // pasarela saturada
+  const msg = String(error?.message ?? '').toLowerCase();
+  return msg.includes('statement timeout') || msg.includes('fetch failed');
+}
+
+async function pedirPaginaConReintento(ejecutar: () => any): Promise<{ data: any; error: any }> {
+  let ultimo: any = null;
+
+  for (let intento = 1; intento <= REINTENTOS_PAGINA; intento++) {
+    const { data, error } = await ejecutar();
+    if (!error) return { data, error: null };
+    ultimo = error;
+    if (intento === REINTENTOS_PAGINA || !esErrorTransitorio(error)) break;
+    // Espera creciente: le da margen a la base para soltar la carga que la tenía
+    // ocupada antes de volver a pedir la misma página.
+    await new Promise(r => setTimeout(r, 400 * intento));
+    console.warn(`⚠️ Página reintentada (intento ${intento + 1}/${REINTENTOS_PAGINA}): ${error.message}`);
+  }
+
+  return { data: null, error: ultimo };
+}
+
+/**
+ * Paginado por cursor sobre `fecha`, para las consultas de `alertas_diarias_gps`.
+ *
+ * `fetchAllRows` pagina con `range`, que PostgREST traduce a OFFSET de Postgres.
+ * OFFSET no salta filas: las lee y las descarta, así que cada página cuesta más
+ * que la anterior. La tabla entera (151.649 filas) cabe en el rango jul 2-28, de
+ * modo que pedir "un mes" recorre offsets de hasta 150.000. Medido contra
+ * producción sobre ese mes:
+ *
+ *     offset       0 -> 1,0 s        offset  80.000 -> 3,0 s
+ *     offset  50.000 -> 2,6 s        offset 120.000 -> 500/57014 (intermitente)
+ *
+ * Ese 57014 ("statement timeout") es el fallo que los usuarios veían aparecer y
+ * desaparecer sin patrón. Con cursor, la página arranca donde terminó la
+ * anterior y el coste es constante a cualquier profundidad. Mismo mes completo:
+ *
+ *     152 páginas | 0 fallos | 69,3 s | por página: mediana 394 ms, p90 677 ms
+ *     151.649 filas únicas, idéntico al conteo exacto del servidor
+ *
+ * `construirQuery` recibe el último `fecha` leído y debe devolver la consulta
+ * ordenada ASCENDENTE por (fecha_dia, fecha, id) —el orden del índice de la
+ * v12— aplicando `.gte('fecha', desde)` cuando no es null. Si hacen falta las
+ * filas en orden inverso, se invierte el array resultante: como aquí siempre se
+ * cargan todas, es equivalente y no cuesta nada.
+ *
+ * El corte usa `gte` y no `gt` porque varias alertas comparten timestamp (157
+ * de las 151.649 medidas): con `gt` se perderían las que caen justo en el
+ * límite, así que las páginas se solapan un poco y se deduplica por `id`.
+ */
+export async function fetchAllRowsPorFecha<T extends { id: unknown; fecha: unknown }>(
+  construirQuery: (desde: string | null) => any,
+): Promise<T[]> {
+  const filas: T[] = [];
+  const vistos = new Set<string>();
+  let cursor: string | null = null;
+
+  while (true) {
+    const { data, error } = await pedirPaginaConReintento(() => construirQuery(cursor).limit(PAGE_SIZE));
+    if (error) throw new Error(error.message);
+    const pagina = (data ?? []) as T[];
+    if (pagina.length === 0) break;
+
+    let nuevas = 0;
+    for (const fila of pagina) {
+      const id = String(fila.id);
+      if (vistos.has(id)) continue;
+      vistos.add(id);
+      filas.push(fila);
+      nuevas++;
+    }
+
+    if (pagina.length < PAGE_SIZE) break;
+
+    const ultima = String(pagina[pagina.length - 1].fecha);
+    // Caso patológico: una página entera con el mismo timestamp que el cursor.
+    // El cursor no puede avanzar sin saltarse filas, así que se para y se avisa
+    // en lugar de girar en bucle. Requiere 1.000 alertas al mismo segundo, que
+    // no se da en los datos reales (el máximo medido son 3 filas por timestamp).
+    if (ultima === cursor && nuevas === 0) {
+      console.warn(`⚠️ Paginado por cursor detenido en ${cursor}: 1.000 filas comparten timestamp.`);
+      break;
+    }
+    cursor = ultima;
+  }
+
+  return filas;
 }
 
 // ── Tipos de dominio ─────────────────────────────────────────────────────────
@@ -958,17 +1071,26 @@ export async function getReporteAlertasDiarias(filtro: Pick<FiltroReporte, 'fech
   // Columnas explícitas (sin `raw_data` JSONB, que es pesado): evita el
   // "statement timeout" de Supabase al traer miles de filas. La categoría se
   // recalcula desde estado + velocidad, así que los contadores no se consultan.
-  let q = supabase
-    .from('alertas_diarias_gps')
-    .select('id, vehiculo_id, conductor_id, contrato_id, placa, conductor, lugar, latitud, longitud, fecha, fecha_dia, velocidad, estado, contrato_nombre, gps, tipo_activo, cliente')
-    .gte('fecha_dia', filtro.fechaInicio)
-    .lte('fecha_dia', filtro.fechaFin)
-    .not('vehiculo_id', 'is', null)
-    .order('fecha', { ascending: true });
+  // Orden por (fecha_dia, fecha, id): el mismo del índice de la v12, así que las
+  // filas llegan ya ordenadas y Postgres no tiene que ordenarlas en memoria. El
+  // resultado es idéntico a ordenar solo por `fecha` —`fecha_dia` es el día de
+  // `fecha`, verificado sobre producción— y además `id` lo vuelve un orden total,
+  // necesario para que el paginado no repita ni se salte filas empatadas.
+  const data = await fetchAllRowsPorFecha<Record<string, unknown> & { id: unknown; fecha: unknown }>(desde => {
+    let q = supabase
+      .from('alertas_diarias_gps')
+      .select('id, vehiculo_id, conductor_id, contrato_id, placa, conductor, lugar, latitud, longitud, fecha, fecha_dia, velocidad, estado, contrato_nombre, gps, tipo_activo, cliente')
+      .gte('fecha_dia', filtro.fechaInicio)
+      .lte('fecha_dia', filtro.fechaFin)
+      .not('vehiculo_id', 'is', null)
+      .order('fecha_dia', { ascending: true })
+      .order('fecha', { ascending: true })
+      .order('id', { ascending: true });
 
-  if (filtro.contratoId) q = q.eq('contrato_id', filtro.contratoId);
-
-  const data = await fetchAllRows<Record<string, unknown>>(q);
+    if (filtro.contratoId) q = q.eq('contrato_id', filtro.contratoId);
+    if (desde) q = q.gte('fecha', desde);
+    return q;
+  });
 
   const rows = (data ?? []) as Record<string, unknown>[];
   if (rows.length === 0) return null;
@@ -1158,34 +1280,78 @@ export async function getReporteAlertasDiarias(filtro: Pick<FiltroReporte, 'fech
   };
 }
 
+/**
+ * Todas las columnas de `alertas_diarias_gps` MENOS `raw_data`.
+ *
+ * `raw_data` es el volcado JSONB del Excel original y duplica el peso de la
+ * respuesta: medido contra producción, 0,50 MB por cada 1.000 filas sin ella
+ * frente a 0,98 MB con ella. Con ~8.600 alertas al día, traerla suponía
+ * descargar y mantener en memoria el doble de datos en cada carga del
+ * Historial, que es justo lo que agotaba los dispositivos con menos memoria.
+ * Ninguna columna de negocio se pierde: solo desaparece el volcado en bruto.
+ */
+const COLUMNAS_ALERTA_DIARIA =
+  'id,carga_id,vehiculo_id,conductor_id,contrato_id,placa,conductor,conductor_identificado,' +
+  'lugar,latitud,longitud,fecha,fecha_dia,velocidad,estado,infraccion_80_kmh,' +
+  'excesos_varios_parametros,excesos_50_80_kmh,frenadas_bruscas,contrato_nombre,gps,' +
+  'tipo_activo,cliente,created_at';
+
+/** Equivalente para `alertas_diarias_pendientes` (no tiene vehiculo/conductor/contrato_id). */
+const COLUMNAS_ALERTA_PENDIENTE =
+  'id,carga_id,placa,conductor,conductor_identificado,lugar,latitud,longitud,fecha,fecha_dia,' +
+  'velocidad,estado,infraccion_80_kmh,excesos_varios_parametros,excesos_50_80_kmh,' +
+  'frenadas_bruscas,contrato_nombre,gps,estado_migracion,migrado_at,created_at';
+
 export async function listarAlertasDiarias(filtro: Pick<FiltroReporte, 'fechaInicio' | 'fechaFin' | 'contratoId'>) {
-  let q = supabase
-    .from('alertas_diarias_gps')
-    .select('*')
-    .gte('fecha_dia', filtro.fechaInicio)
-    .lte('fecha_dia', filtro.fechaFin)
-    .not('vehiculo_id', 'is', null)
-    .order('fecha', { ascending: false });
-  if (filtro.contratoId) q = q.eq('contrato_id', filtro.contratoId);
-  const rows = await fetchAllRows<Record<string, unknown>>(q);
+  // Se carga ascendente (el único sentido en el que el cursor puede avanzar) y
+  // se invierte al final: el Historial sigue mostrando la alerta más reciente
+  // arriba, exactamente como antes.
+  const rows = await fetchAllRowsPorFecha<Record<string, unknown> & { id: unknown; fecha: unknown }>(desde => {
+    let q = supabase
+      .from('alertas_diarias_gps')
+      .select(COLUMNAS_ALERTA_DIARIA)
+      .gte('fecha_dia', filtro.fechaInicio)
+      .lte('fecha_dia', filtro.fechaFin)
+      .not('vehiculo_id', 'is', null)
+      .order('fecha_dia', { ascending: true })
+      .order('fecha', { ascending: true })
+      .order('id', { ascending: true });
+    if (filtro.contratoId) q = q.eq('contrato_id', filtro.contratoId);
+    if (desde) q = q.gte('fecha', desde);
+    return q;
+  });
+  rows.reverse();
   // Recalcula la categoría (contadores) desde nombre + velocidad al leer.
   return rows.map(r => ({ ...r, ...clasificarAlertaDiaria(r.estado, r.velocidad) }));
 }
 
 /**
  * Versión ligera para el overview de "Contratos con alertas": solo las columnas
- * necesarias para agrupar (sin `raw_data` ni orden), lo que reduce drásticamente el
- * payload frente a `listarAlertasDiarias` (que trae `select('*')`).
+ * necesarias para agrupar, lo que reduce drásticamente el payload frente a
+ * `listarAlertasDiarias`.
+ *
+ * Antes paginaba por offset y SIN orden, con lo que el orden entre páginas
+ * quedaba formalmente indefinido y en teoría podía repetir o saltarse filas. No
+ * se le añadía orden porque ordenar era precisamente lo que disparaba el
+ * timeout. Ya no aplica: se ordena por (fecha_dia, fecha, id), que es el orden
+ * en el que el índice entrega las filas, así que es gratis y además da el corte
+ * exacto que necesita el cursor. Se añaden `id` y `fecha` al select por eso.
  */
 export async function listarAlertasDiariasResumen(filtro: Pick<FiltroReporte, 'fechaInicio' | 'fechaFin' | 'contratoId'>) {
-  let q = supabase
-    .from('alertas_diarias_gps')
-    .select('contrato_id, contrato_nombre, placa, conductor, estado, velocidad, fecha_dia')
-    .gte('fecha_dia', filtro.fechaInicio)
-    .lte('fecha_dia', filtro.fechaFin)
-    .not('vehiculo_id', 'is', null);
-  if (filtro.contratoId) q = q.eq('contrato_id', filtro.contratoId);
-  const rows = await fetchAllRows<Record<string, unknown>>(q);
+  const rows = await fetchAllRowsPorFecha<Record<string, unknown> & { id: unknown; fecha: unknown }>(desde => {
+    let q = supabase
+      .from('alertas_diarias_gps')
+      .select('id, contrato_id, contrato_nombre, placa, conductor, estado, velocidad, fecha, fecha_dia')
+      .gte('fecha_dia', filtro.fechaInicio)
+      .lte('fecha_dia', filtro.fechaFin)
+      .not('vehiculo_id', 'is', null)
+      .order('fecha_dia', { ascending: true })
+      .order('fecha', { ascending: true })
+      .order('id', { ascending: true });
+    if (filtro.contratoId) q = q.eq('contrato_id', filtro.contratoId);
+    if (desde) q = q.gte('fecha', desde);
+    return q;
+  });
   // Contadores recalculados desde nombre + velocidad (categoría al leer).
   return rows.map(r => ({ ...r, ...clasificarAlertaDiaria(r.estado, r.velocidad) }));
 }
@@ -1204,7 +1370,7 @@ export async function listarAlertasDiariasPendientes(filtro: Pick<FiltroReporte,
 
   let q = supabase
     .from('alertas_diarias_pendientes')
-    .select('*')
+    .select(COLUMNAS_ALERTA_PENDIENTE)
     .gte('fecha_dia', filtro.fechaInicio)
     .lte('fecha_dia', filtro.fechaFin)
     .eq('estado_migracion', 'pendiente')

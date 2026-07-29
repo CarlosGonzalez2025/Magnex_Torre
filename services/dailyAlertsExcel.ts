@@ -1,6 +1,7 @@
 import type ExcelJSType from 'exceljs';
 import type { ReporteAlertasDiariasData, AlertaDiariaGps } from './reportService';
 import { esConductorIdentificado } from './reportService';
+import { descargarBuffer, MIME_XLSX } from '../utils/descargarArchivo';
 
 // ── Paleta y helpers de estilo ────────────────────────────────────────────────
 const COLORS = {
@@ -254,12 +255,12 @@ export async function descargarExcelAlertasDiarias(data: ReporteAlertasDiariasDa
   addDetalleSheet(wb, data);
 
   const buffer = await wb.xlsx.writeBuffer();
-  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-  const url = window.URL.createObjectURL(blob);
-  const link = document.createElement('a');
   const contrato = (data.contrato?.nombre ?? 'alertas').replace(/[^\p{L}\p{N}]+/gu, '_').slice(0, 40);
-  link.href = url;
-  link.download = `detalle_alertas_${contrato}_${data.periodoInicio}_${data.periodoFin}.xlsx`;
-  link.click();
-  window.URL.revokeObjectURL(url);
+  // Mismo archivo y mismo nombre; el helper corrige la liberación prematura de
+  // la URL del blob y añade el enlace al DOM, que Firefox necesita.
+  descargarBuffer(
+    buffer as ArrayBuffer,
+    `detalle_alertas_${contrato}_${data.periodoInicio}_${data.periodoFin}.xlsx`,
+    MIME_XLSX,
+  );
 }

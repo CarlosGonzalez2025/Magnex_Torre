@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { FileDown, FileText, AlertTriangle, ChevronUp, ChevronDown } from 'lucide-react';
 import type ExcelJS from 'exceljs';
 import { ValidationError } from '../../services/importService';
+import { descargarBuffer, MIME_XLSX } from '../../utils/descargarArchivo';
 
 export const ErroresTable: React.FC<{ errores: ValidationError[] }> = ({ errores }) => {
   if (errores.length === 0) return null;
@@ -435,13 +436,9 @@ export const ReportsTable: React.FC<ReportsTableProps> = ({
 
   const downloadWorkbook = async (workbook: ExcelJS.Workbook, filename: string) => {
     const buffer = await workbook.xlsx.writeBuffer();
-    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    link.click();
-    window.URL.revokeObjectURL(url);
+    // Mismo archivo y mismo nombre; el helper corrige la liberación prematura
+    // de la URL del blob y añade el enlace al DOM, que Firefox necesita.
+    descargarBuffer(buffer as ArrayBuffer, filename, MIME_XLSX);
   };
 
   const handleExport = async () => {

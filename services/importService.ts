@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { supabase } from './supabaseClient';
+import { supabase, fetchPaginado } from './supabaseClient';
 import { processFile, BatchAlert } from './fileProcessingService';
 import { clasificarAlertaDiaria } from './reportService';
 
@@ -1917,19 +1917,21 @@ async function consolidarConBaseDeDatosVehiculos(
   // IMPORTANTE: filtramos por `fuente` para que cada plataforma reutilice SOLO su propia
   // fila (modelo multiplataforma v18). Así Coltrack/Fagor/Geotab conviven como filas
   // separadas del mismo vehículo/período y el informe las suma.
-  const { data: dbRecords, error } = await supabase
+  // Paginado igual que en la versión de conductores. Aquí el período más grande
+  // medido en producción son 753 filas, todavía por debajo del tope de 1.000 de
+  // PostgREST, pero la consulta tiene la misma forma y el mismo efecto si lo
+  // cruza al crecer la flota: los vehículos que quedaran fuera del mapa se
+  // insertarían duplicados en vez de actualizarse.
+  const dbRecords = await fetchPaginado<{ id: string; vehiculo_id: string }>(() => supabase
     .from('reportes_vehiculos')
     .select('id, vehiculo_id')
     .eq('periodo_inicio', periodoInicio)
     .eq('periodo_fin', periodoFin)
-    .eq('fuente', fuente);
-
-  if (error) {
-    console.error('Error cargando IDs de vehículos de la BD:', error);
-  }
+    .eq('fuente', fuente)
+    .order('vehiculo_id', { ascending: true }), { estricto: true });
 
   const dbIdMap = new Map<string, string>();
-  for (const r of (dbRecords ?? [])) {
+  for (const r of dbRecords) {
     dbIdMap.set(r.vehiculo_id, r.id);
   }
 
@@ -1950,19 +1952,21 @@ async function consolidarConBaseDeDatosConductores(
   // Solo obtenemos los IDs existentes para reutilizarlos en el upsert (UPDATE en lugar de INSERT).
   // NO acumulamos sobre los valores de la BD — los datos del nuevo import REEMPLAZAN los anteriores.
   // Filtramos por `fuente` (modelo multiplataforma v18): cada plataforma reutiliza solo su fila.
-  const { data: dbRecords, error } = await supabase
+  // Paginado obligatorio: un período tiene MÁS de 1.000 conductores (medido en
+  // producción: 2.133, 2.438 y 1.519 filas en los períodos de abr, may y jun).
+  // Sin paginar, PostgREST devolvía el primer millar y los conductores restantes
+  // se quedaban fuera del mapa, así que el upsert no encontraba su `id` y hacía
+  // INSERT en vez de UPDATE: al reimportar un período se duplicaban sus filas.
+  const dbRecords = await fetchPaginado<{ id: string; conductor_id: string }>(() => supabase
     .from('reportes_conductores')
     .select('id, conductor_id')
     .eq('periodo_inicio', periodoInicio)
     .eq('periodo_fin', periodoFin)
-    .eq('fuente', fuente);
-
-  if (error) {
-    console.error('Error cargando IDs de conductores de la BD:', error);
-  }
+    .eq('fuente', fuente)
+    .order('conductor_id', { ascending: true }), { estricto: true });
 
   const dbIdMap = new Map<string, string>();
-  for (const r of (dbRecords ?? [])) {
+  for (const r of dbRecords) {
     dbIdMap.set(r.conductor_id, r.id);
   }
 

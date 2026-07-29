@@ -1,6 +1,7 @@
 import type ExcelJSType from 'exceljs';
 import type { ContratoOption, ConductorOption, VehiculoOption } from './reportService';
 import type { FiltroState } from '../components/reports/ReportFilters';
+import { descargarBuffer, MIME_XLSX } from '../utils/descargarArchivo';
 
 // ── Paleta y helpers de estilo (mínimos, sin acoplar con la lógica GPS de ReportsTable) ──
 const COLORS = {
@@ -430,13 +431,11 @@ export async function descargarExcelInformesMensuales(params: BuildParams): Prom
   if (params.vehiculoRows.length > 0) addDetalleVehiculos(workbook, params);
 
   const buffer = await workbook.xlsx.writeBuffer();
-  const blob = new Blob([buffer], {
-    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  });
-  const url = window.URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `informes_mensuales_resumen_${params.filtro.fechaInicio}_${params.filtro.fechaFin}.xlsx`;
-  link.click();
-  window.URL.revokeObjectURL(url);
+  // Mismo archivo y mismo nombre; el helper corrige la liberación prematura de
+  // la URL del blob y añade el enlace al DOM, que Firefox necesita.
+  descargarBuffer(
+    buffer as ArrayBuffer,
+    `informes_mensuales_resumen_${params.filtro.fechaInicio}_${params.filtro.fechaFin}.xlsx`,
+    MIME_XLSX,
+  );
 }
