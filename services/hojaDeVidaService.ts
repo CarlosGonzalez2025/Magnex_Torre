@@ -21,7 +21,7 @@
  *   conductor_scores            -> puntaje/semáforo (se calcula en Fase 4) [nueva]
  */
 
-import { supabase } from './supabaseClient';
+import { supabase, fetchPaginado } from './supabaseClient';
 import {
   getVerificacionByCedula, getCapacitacionesByCedula,
   type VerificacionDoc, type CapacitacionesResumen,
@@ -431,14 +431,20 @@ export async function getHojaDeVida(
             .order('periodo_fin', { ascending: false })
             .then(r => r, () => ({ data: [], error: null }))
         : Promise.resolve({ data: [], error: null }),
+      // Paginado por la misma razón que en puntajeService: PostgREST corta en
+      // 1.000 filas sin avisar, y en la ventana de 90 días hay conductores con
+      // 2.311 alertas. La Hoja de Vida mostraba los contadores de las primeras
+      // mil y el resto no existía. Se carga ascendente (el orden estable para
+      // paginar) y se invierte, así la lista sigue mostrando lo más reciente
+      // arriba.
       telemetriaId
-        ? supabase
+        ? fetchPaginado<any>(() => supabase
             .from('alertas_diarias_gps')
             .select('fecha, velocidad, infraccion_80_kmh, excesos_50_80_kmh, frenadas_bruscas, lugar')
             .eq('conductor_id', telemetriaId)
             .gte('fecha', desde)
-            .order('fecha', { ascending: false })
-            .then(r => r, () => ({ data: [], error: null }))
+            .order('fecha', { ascending: true })
+          ).then(data => ({ data: data.reverse(), error: null }))
         : Promise.resolve({ data: [], error: null }),
       telemetriaId
         ? supabase

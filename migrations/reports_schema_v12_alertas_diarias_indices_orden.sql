@@ -7,28 +7,30 @@
 --     57014: canceling statement due to statement timeout
 --
 -- El módulo consulta siempre con esta forma (getReporteAlertasDiarias, que
--- alimenta el PDF, el Excel y el generador de correos):
+-- alimenta el PDF, el Excel y el generador de correos; también
+-- listarAlertasDiarias y listarAlertasDiariasResumen):
 --
 --     SELECT ... FROM alertas_diarias_gps
 --     WHERE fecha_dia BETWEEN :a AND :b
 --       AND vehiculo_id IS NOT NULL
 --       [AND contrato_id = :c]
---     ORDER BY fecha
---     LIMIT 1000 OFFSET :n;
+--     ORDER BY fecha_dia, fecha, id
+--     LIMIT 1000;
 --
 -- La v7 creó índices sobre (fecha_dia), (placa, fecha_dia) y
--- (contrato_id, fecha_dia), pero NINGUNO incluye `fecha`, que es la columna
--- por la que se ordena. Postgres resuelve el filtro con el índice y después
--- ordena en memoria todo el conjunto filtrado. Con ~151.000 filas esa
--- ordenación a veces termina a tiempo y a veces supera el statement timeout.
+-- (contrato_id, fecha_dia), pero NINGUNO incluye `fecha`, que es la columna por
+-- la que se ordena dentro del día. Postgres resuelve el filtro con el índice y
+-- después ordena en memoria el conjunto filtrado. Toda la tabla (151.649 filas)
+-- cae en el rango jul 2-28, así que pedir "un mes" es ordenar la tabla entera:
+-- a veces termina a tiempo y a veces supera el statement timeout.
 --
--- Medido contra producción sobre el histórico completo, tres intentos:
---     con ORDER BY fecha     ->  500/57014   500/57014   2385 ms   (2 de 3 fallan)
---     sin ORDER BY           ->      697 ms      523 ms    502 ms   (siempre OK)
+-- Medido contra producción sobre un mes, tres intentos:
+--     ORDER BY fecha             ->  2947 ms   600 ms   289 ms
+--     ORDER BY fecha_dia, fecha  ->   277 ms   294 ms   266 ms
 --
--- Por eso el fallo parecía depender del dispositivo: no dependía. Es un
--- timeout de servidor que salta según la carga y el estado de la caché, y
--- cada usuario se lo encuentra en un momento distinto.
+-- Por eso el fallo parecía depender del dispositivo: no dependía. Es un timeout
+-- de servidor que salta según la carga y el estado de la caché, y cada usuario
+-- se lo encuentra en un momento distinto.
 --
 -- SOLUCIÓN
 -- --------
@@ -38,22 +40,45 @@
 -- filtro que aplican todas las consultas del módulo: así ocupan menos y el
 -- planificador los elige con más facilidad.
 --
--- EJECUCIÓN
--- ---------
--- CREATE INDEX CONCURRENTLY no bloquea escrituras, pero NO puede ejecutarse
--- dentro de una transacción. En el editor SQL de Supabase hay que lanzar cada
--- sentencia POR SEPARADO. Si alguna queda en estado inválido (por ejemplo, si
--- se cancela a media construcción), basta con DROP INDEX y repetirla.
+-- El código acompaña a estos índices: las tres consultas ordenan por
+-- (fecha_dia, fecha, id) y no por `fecha` a secas. Ordenar solo por `fecha` NO
+-- puede usar estos índices —`fecha` no es la primera columna—, así que el orden
+-- del código y el de los índices tienen que coincidir. Da exactamente el mismo
+-- resultado porque `fecha_dia` es el día de `fecha` (verificado sobre
+-- producción, 1.000 filas muestreadas, 0 discrepancias), y `id` lo convierte en
+-- un orden total, necesario para que el paginado no repita ni se salte filas
+-- cuando varias alertas comparten timestamp (157 de las 151.649 lo hacen).
+--
+-- EJECUCIÓN  (leer antes de lanzar)
+-- ---------------------------------
+-- Se lanza tal cual, de una vez, en el editor SQL de Supabase.
+--
+-- La primera versión de esta migración usaba CREATE INDEX CONCURRENTLY y NO se
+-- puede aplicar desde ese editor: envuelve lo que recibe en una transacción y
+-- CONCURRENTLY lo prohíbe, así que devuelve
+--
+--     ERROR: 25001: CREATE INDEX CONCURRENTLY cannot run inside a transaction block
+--
+-- y falla igual aunque se lance una sola sentencia. Se quita CONCURRENTLY.
+--
+-- La diferencia es que un CREATE INDEX normal toma un lock que bloquea las
+-- ESCRITURAS de la tabla mientras construye el índice (las lecturas siguen
+-- funcionando). Aquí no importa: son 151.649 filas y dos columnas, del orden de
+-- un par de segundos, y `alertas_diarias_gps` no recibe escrituras continuas
+-- sino cargas por lotes que dispara una persona desde el módulo de importación.
+-- Basta con no lanzarlo a la vez que un import.
+--
+-- Si en el futuro la tabla crece hasta que esos segundos molesten, la vía para
+-- usar CONCURRENTLY es una conexión directa con psql (autocommit), no el editor.
 -- ============================================================================
 
 
 -- 1) Caso por defecto y consultas sin contrato.
---    El módulo abre con fechaInicio = fechaFin = ayer, así que `fecha_dia`
---    toma un único valor y el índice devuelve las filas directamente
---    ordenadas por `fecha`: la ordenación desaparece por completo.
---    Sirve a getReporteAlertasDiarias, listarAlertasDiarias y
---    listarAlertasDiariasResumen.
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_alertas_diarias_fechadia_fecha
+--    El módulo abre con fechaInicio = fechaFin = ayer, así que `fecha_dia` toma
+--    un único valor y el índice devuelve las filas directamente ordenadas por
+--    `fecha`: la ordenación desaparece por completo. Sirve a
+--    getReporteAlertasDiarias, listarAlertasDiarias y listarAlertasDiariasResumen.
+CREATE INDEX IF NOT EXISTS idx_alertas_diarias_fechadia_fecha
   ON public.alertas_diarias_gps (fecha_dia, fecha)
   WHERE vehiculo_id IS NOT NULL;
 
@@ -63,7 +88,7 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_alertas_diarias_fechadia_fecha
 --    getReporteAlertasDiarias con contratoId, de modo que esta es la consulta
 --    más repetida del módulo. Con las tres columnas en el índice se resuelve
 --    entera sin ordenar.
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_alertas_diarias_contrato_fechadia_fecha
+CREATE INDEX IF NOT EXISTS idx_alertas_diarias_contrato_fechadia_fecha
   ON public.alertas_diarias_gps (contrato_id, fecha_dia, fecha)
   WHERE vehiculo_id IS NOT NULL;
 
@@ -74,29 +99,69 @@ ANALYZE public.alertas_diarias_gps;
 
 
 -- ============================================================================
--- COMPROBACIÓN
--- ------------
--- Tras aplicar la migración, este plan NO debe contener ningún nodo "Sort"
--- ni "Seq Scan" sobre alertas_diarias_gps:
+-- APLICADA Y VERIFICADA EN PRODUCCIÓN — 2026-07-29
+-- -----------------------------------------------
+-- Los dos índices se crearon correctamente: 4.584 kB el de fecha_dia y 7.344 kB
+-- el de contrato. Los dos están en uso, cada uno en el caso para el que se hizo.
+-- Se deja aquí lo que devolvieron los planes, porque no es lo que uno esperaría
+-- leyendo solo el primero.
 --
---     EXPLAIN ANALYZE
---     SELECT id, placa, conductor, fecha
---     FROM public.alertas_diarias_gps
---     WHERE fecha_dia BETWEEN CURRENT_DATE - 1 AND CURRENT_DATE - 1
---       AND vehiculo_id IS NOT NULL
---     ORDER BY fecha
---     LIMIT 1000;
+-- CASO A — un día suelto con LIMIT 1000 (la vista al abrir el módulo).
+-- El planificador NO usa estos índices, y hace bien: elige
+-- `idx_alertas_diarias_fecha` (1.088 kB, el de la v7) y ordena dentro del día.
 --
--- Lo esperado es un "Index Scan using idx_alertas_diarias_fechadia_fecha".
+--     Limit -> Incremental Sort
+--                Sort Key:     fecha_dia, fecha, id
+--                Presorted Key: fecha_dia
+--                -> Index Scan using idx_alertas_diarias_fecha
+--                     Filter: (vehiculo_id IS NOT NULL)
+--     Execution Time: 212 ms
 --
+-- Ordenar 8.600 filas de un día con LIMIT 1000 (top-N heapsort) sale más barato
+-- que leer un índice cuatro veces mayor. El predicado parcial no ayuda a
+-- descartar nada: las 151.649 filas de la tabla tienen `vehiculo_id` no nulo, así
+-- que sobre un solo día estos índices son versiones más grandes de uno que ya
+-- existía. Por eso aparece como `Filter` y no como predicado del índice.
 --
--- NOTA SOBRE UN RIESGO LATENTE (no corregido aquí a propósito)
--- -----------------------------------------------------------
--- `listarAlertasDiariasResumen` pagina por offset sin ORDER BY. En Postgres
--- eso deja el orden entre páginas formalmente indefinido, así que en teoría
--- podría repetir o saltarse filas bajo escritura concurrente. Se comprobó dos
--- veces sobre producción y devolvió resultados idénticos, de modo que NO es un
--- fallo observado. No se le añade un ORDER BY porque, sin estos índices, era
--- precisamente la ordenación lo que disparaba el timeout: conviene aplicar la
--- migración primero y valorarlo después con los índices ya en su sitio.
+-- CASO B — export por contrato sobre 27 días (el botón más pulsado del módulo).
+-- Aquí sí, y es donde estaba el problema:
+--
+--     Limit -> Incremental Sort
+--                Sort Key:     fecha_dia, fecha, id
+--                Presorted Key: fecha_dia, fecha        <- las dos, ya ordenadas
+--                Full-sort Groups: 32   Peak Memory: 29 kB
+--                -> Index Scan using idx_alertas_diarias_contrato_fechadia_fecha
+--                     Index Cond: contrato_id = ... AND fecha_dia BETWEEN ...
+--     Execution Time: 118 ms
+--
+-- El índice entrega las filas ya ordenadas por (fecha_dia, fecha) y lo único que
+-- queda por ordenar son los empates de timestamp para desempatar `id`: 32 grupos
+-- y 29 kB de memoria, frente a ordenar el rango entero. Y no hay línea
+-- `Filter: vehiculo_id IS NOT NULL`, porque el predicado parcial del índice ya lo
+-- demuestra.
+--
+-- Conclusión: cuanto más ancho el rango, más caro ordenar y más gana el índice.
+-- El caso estrecho se sigue resolviendo con el índice pequeño de la v7 y no hay
+-- nada que arreglar ahí.
+--
+-- CÓMO REPETIR LA COMPROBACIÓN
+-- ----------------------------
+--     -- existencia y uso acumulado de cada índice de la tabla
+--     SELECT s.indexrelname AS indice,
+--            pg_size_pretty(pg_relation_size(s.indexrelid)) AS tamano,
+--            s.idx_scan AS veces_usado
+--     FROM pg_stat_user_indexes s
+--     WHERE s.relname = 'alertas_diarias_gps'
+--     ORDER BY s.idx_scan DESC;
+--
+-- Los planes se lanzan con EXPLAIN ANALYZE desde el editor SQL o psql: la API
+-- REST de Supabase tiene los planes deshabilitados y responde PGRST107, así que
+-- desde el cliente esto no se puede verificar.
+--
+-- NOTA sobre el índice dominante de la tabla (no lo toques)
+-- --------------------------------------------------------
+-- `alertas_diarias_gps_unique_event_uidx` son 41 MB con 417.943 usos: es la clave
+-- de deduplicación del upsert de importación y la razón de que reimportar no
+-- duplique filas. Es también quien pone el precio de las cargas por lotes, porque
+-- cada fila que entra tiene que consultarlo y mantenerlo.
 -- ============================================================================

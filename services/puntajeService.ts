@@ -19,7 +19,7 @@
  *   no_ibutton · simit_vigente · reincidencia_grave · protocolo_critico
  */
 
-import { supabase } from './supabaseClient';
+import { supabase, fetchPaginado } from './supabaseClient';
 import { normalizeConductorKey } from './hojaDeVidaService';
 import { getVerificacionByCedula, getCapacitacionesByCedula } from './documentosService';
 
@@ -150,13 +150,20 @@ export async function calcularPuntaje(
 
     // 2) Eventos en paralelo (aislados: un fallo no tumba el cálculo)
     const [alertasRes, ralentiRes, campoRes, mensualRes, inspRes] = await Promise.all([
+      // Paginado: sin él PostgREST devolvía solo las primeras 1.000 alertas y el
+      // puntaje ignoraba el resto, precisamente en los conductores que más
+      // eventos acumulan. Medido en producción sobre la ventana de 90 días, dos
+      // conductores la superan: 2.311 y 1.687 alertas, de las que se contaban
+      // 1.000. Al truncar por arriba, el peor conductor de la flota podía salir
+      // mejor puntuado que otro con menos eventos.
       telemetriaId
-        ? supabase
+        ? fetchPaginado<any>(() => supabase
             .from('alertas_diarias_gps')
             .select('velocidad, infraccion_80_kmh, excesos_50_80_kmh, frenadas_bruscas')
             .eq('conductor_id', telemetriaId)
             .gte('fecha', desde)
-            .then(r => r, () => ({ data: [] }))
+            .order('fecha', { ascending: true })
+          ).then(data => ({ data }))
         : Promise.resolve({ data: [] }),
       telemetriaId
         ? supabase
