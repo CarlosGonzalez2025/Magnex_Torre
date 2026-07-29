@@ -1,5 +1,8 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+// Estilos compilados en el build (Tailwind + Leaflet + ajustes propios).
+// Antes llegaban por CDN externo en runtime; ahora viajan en el bundle.
+import './index.css';
 import App from './App';
 import { AuthProvider } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';

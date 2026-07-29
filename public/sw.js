@@ -1,5 +1,9 @@
 // Service Worker for Torre de Control PWA
-const CACHE_NAME = 'torre-control-v1';
+// Subir este número en cada despliegue que cambie los estáticos: el evento
+// `activate` borra las cachés cuyo nombre no coincida, y así los usuarios
+// reciben la versión nueva sin tener que forzar una recarga con Ctrl+F5.
+// v2 = migración de Tailwind desde el CDN externo al CSS compilado.
+const CACHE_NAME = 'torre-control-v2';
 const OFFLINE_URL = '/offline.html';
 
 // Assets to cache on install
