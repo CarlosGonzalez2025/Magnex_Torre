@@ -1,6 +1,5 @@
 import { supabase, isSupabaseAvailable, markSupabaseUnavailable, isQuotaError } from './supabaseClient';
 import { DATA_RETENTION_CONFIG, getRetentionCutoffDate } from '../config/dataRetentionConfig';
-import * as XLSX from 'xlsx';
 
 export interface CleanupResult {
   success: boolean;
@@ -246,6 +245,15 @@ export class DataCleanupService {
    */
   private static async archiveToExcel(data: any[], filename: string): Promise<string> {
     try {
+      // xlsx pesa unos 415 KB y este es el único punto del servicio que lo
+      // usa. Al cargarlo aquí y no en la cabecera del archivo deja de entrar
+      // en el arranque de la aplicación: App.tsx importa este servicio de
+      // forma estática a través del hook useAutoCleanup, así que un import
+      // normal obligaba a descargar la librería completa aunque nunca se
+      // llegara a archivar nada. La función ya era async, de modo que ni su
+      // firma ni su comportamiento cambian.
+      const XLSX = await import('xlsx');
+
       const worksheet = XLSX.utils.json_to_sheet(data);
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, 'Datos Archivados');

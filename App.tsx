@@ -1,44 +1,56 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, Suspense, lazy } from 'react';
 import { LayoutDashboard, Map as MapIcon, RefreshCw, Search, Server, Wifi, Radio, AlertTriangle, XCircle, CloudOff, CheckCircle, Database, Bell, History, BarChart3, ClipboardCheck, Calendar, Settings, Users, MapPin, Home, Menu, Satellite } from 'lucide-react';
 import { Vehicle, ApiSource, VehicleStatus, FilterType, StatusFilterType, Alert } from './types';
 import { AuthProvider, useAuth, ProtectedRoute } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
+
+// --- Carga inmediata -------------------------------------------------------
+// Solo lo que aparece en el primer render: el armazón de la interfaz y la
+// vista inicial ('dashboard'). Diferir esto provocaría un parpadeo al entrar.
 import { KpiCards } from './components/KpiCards';
-import { VehicleTable } from './components/VehicleTable';
-import FleetMap from './components/FleetMap';
-import { AlertPanel } from './components/AlertPanel';
-import { AlertHistory } from './components/AlertHistory';
-import { HistorialAnalytics } from './components/HistorialAnalytics';
-import { RouteInvestigation } from './components/RouteInvestigation';
-import { BatchUpload } from './components/BatchUpload';
-import { SavedAlertsPanel } from './components/SavedAlertsPanel';
-import { Analytics } from './components/Analytics';
-import { Inspections } from './components/Inspections';
-import { RouteSchedules } from './components/RouteSchedules';
-import { MaintenancePanel } from './components/MaintenancePanel';
 import { AlertSoundToggle } from './components/AlertSoundSettings';
 import { Dashboard } from './components/Dashboard';
-import { DriverManagement } from './components/DriverManagement';
-import { HojaDeVida } from './components/HojaDeVida';
-import { Vencimientos } from './components/Vencimientos';
-import { CarnetPublico } from './components/CarnetPublico';
-import { GeofenceEditor } from './components/GeofenceEditor';
-import { UserManagement } from './components/UserManagement';
-import { BitacoraGestion } from './components/BitacoraGestion';
 import { ThemeToggle } from './components/ThemeToggle';
 import { UserGuideButton } from './components/UserGuide';
 import { Login } from './components/Login';
 import { AiChat } from './components/AiChat';
 import { Sidebar } from './components/Sidebar';
 import type { TabType } from './components/Sidebar';
-import { FleetManagement } from './components/FleetManagement';
-import { AlertSeverityConfig } from './components/AlertSeverityConfig';
-import { DailyReports } from './components/reports/DailyReports';
-import { MonthlyReports } from './components/reports/MonthlyReports';
-import { ContractAnalysis } from './components/reports/ContractAnalysis';
-import { TelemetryProcessor } from './components/reports/TelemetryProcessor';
-import { RalentiReports } from './components/reports/RalentiReports';
-import { GeotabPanel } from './components/GeotabPanel';
+
+// --- Carga diferida --------------------------------------------------------
+// Cada una de estas vistas ya se montaba solo al activarse su pestaña, así que
+// diferir también su descarga no altera ningún comportamiento: cambia cuándo
+// llega el código, no qué hace. Antes el navegador bajaba las 27 vistas (y con
+// ellas xlsx, leaflet y @react-pdf/renderer) antes de pintar el panel.
+// `lazy` espera un export por defecto; los componentes con export nombrado se
+// adaptan con el `.then(...)`.
+const VehicleTable = lazy(() => import('./components/VehicleTable').then(m => ({ default: m.VehicleTable })));
+const FleetMap = lazy(() => import('./components/FleetMap'));
+const AlertPanel = lazy(() => import('./components/AlertPanel').then(m => ({ default: m.AlertPanel })));
+const AlertHistory = lazy(() => import('./components/AlertHistory').then(m => ({ default: m.AlertHistory })));
+const HistorialAnalytics = lazy(() => import('./components/HistorialAnalytics').then(m => ({ default: m.HistorialAnalytics })));
+const RouteInvestigation = lazy(() => import('./components/RouteInvestigation').then(m => ({ default: m.RouteInvestigation })));
+const BatchUpload = lazy(() => import('./components/BatchUpload').then(m => ({ default: m.BatchUpload })));
+const SavedAlertsPanel = lazy(() => import('./components/SavedAlertsPanel').then(m => ({ default: m.SavedAlertsPanel })));
+const Analytics = lazy(() => import('./components/Analytics').then(m => ({ default: m.Analytics })));
+const Inspections = lazy(() => import('./components/Inspections').then(m => ({ default: m.Inspections })));
+const RouteSchedules = lazy(() => import('./components/RouteSchedules').then(m => ({ default: m.RouteSchedules })));
+const MaintenancePanel = lazy(() => import('./components/MaintenancePanel').then(m => ({ default: m.MaintenancePanel })));
+const DriverManagement = lazy(() => import('./components/DriverManagement').then(m => ({ default: m.DriverManagement })));
+const HojaDeVida = lazy(() => import('./components/HojaDeVida').then(m => ({ default: m.HojaDeVida })));
+const Vencimientos = lazy(() => import('./components/Vencimientos').then(m => ({ default: m.Vencimientos })));
+const CarnetPublico = lazy(() => import('./components/CarnetPublico').then(m => ({ default: m.CarnetPublico })));
+const GeofenceEditor = lazy(() => import('./components/GeofenceEditor').then(m => ({ default: m.GeofenceEditor })));
+const UserManagement = lazy(() => import('./components/UserManagement').then(m => ({ default: m.UserManagement })));
+const BitacoraGestion = lazy(() => import('./components/BitacoraGestion').then(m => ({ default: m.BitacoraGestion })));
+const FleetManagement = lazy(() => import('./components/FleetManagement').then(m => ({ default: m.FleetManagement })));
+const AlertSeverityConfig = lazy(() => import('./components/AlertSeverityConfig').then(m => ({ default: m.AlertSeverityConfig })));
+const DailyReports = lazy(() => import('./components/reports/DailyReports').then(m => ({ default: m.DailyReports })));
+const MonthlyReports = lazy(() => import('./components/reports/MonthlyReports').then(m => ({ default: m.MonthlyReports })));
+const ContractAnalysis = lazy(() => import('./components/reports/ContractAnalysis').then(m => ({ default: m.ContractAnalysis })));
+const TelemetryProcessor = lazy(() => import('./components/reports/TelemetryProcessor').then(m => ({ default: m.TelemetryProcessor })));
+const RalentiReports = lazy(() => import('./components/reports/RalentiReports').then(m => ({ default: m.RalentiReports })));
+const GeotabPanel = lazy(() => import('./components/GeotabPanel').then(m => ({ default: m.GeotabPanel })));
 import { fetchFleetData, FleetResponse, fetchGeotabAlertsViaAPI } from './services/fleetService';
 import { detectAlerts, buildGeotabAlerts, esAlertaVisibleCentroAlertas, saveAlertsToStorage, getAlertsFromStorage, getUnsavedAlerts, markAlertAsSent, markAlertAsSaved, cleanOldAlerts, processVehiclesForIdleDetection } from './services/alertService';
 import { saveAlertToDatabase, autoSaveAlert } from './services/databaseService';
@@ -49,6 +61,18 @@ import { usePWA } from './hooks/usePWA';
 
 // Constants
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
+
+// Indicador mientras se descarga el código de una vista diferida. Reserva la
+// misma altura mínima que el contenedor de vistas para que el cambio de
+// pestaña no produzca saltos de maquetación.
+function ViewLoader() {
+  return (
+    <div className="min-h-[500px] flex flex-col items-center justify-center gap-3 text-slate-500 dark:text-slate-400">
+      <RefreshCw className="w-8 h-8 animate-spin" />
+      <span className="text-sm font-medium">Cargando módulo…</span>
+    </div>
+  );
+}
 
 // Alert sound function using Web Audio API
 function playAlertSound() {
@@ -424,7 +448,11 @@ export default function App() {
     ? new URLSearchParams(window.location.search).get('carnet')
     : null;
   if (carnetToken) {
-    return <CarnetPublico token={carnetToken} />;
+    return (
+      <Suspense fallback={<ViewLoader />}>
+        <CarnetPublico token={carnetToken} />
+      </Suspense>
+    );
   }
 
   if (!user) {
@@ -663,6 +691,7 @@ export default function App() {
 
             {/* Content Views */}
             <div className="min-h-[500px] relative transition-all">
+              <Suspense fallback={<ViewLoader />}>
               {activeTab === 'dashboard' && (
                 <Dashboard
                   vehicles={vehicles}
@@ -724,6 +753,7 @@ export default function App() {
               {activeTab === 'telemetry-processor' && <TelemetryProcessor />}
               {activeTab === 'ralenti-reports' && <RalentiReports />}
               {activeTab === 'geotab' && <GeotabPanel />}
+              </Suspense>
             </div>
           </div>
         </main>
