@@ -27,92 +27,16 @@
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <link rel="apple-touch-icon" href="/icons/icon-192x192.png" />
     
-    <!-- Stylesheets -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link
-      rel="stylesheet"
-      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-      crossorigin=""
-    />
-    
-    <!-- Tailwind Dark Mode Config -->
-    <script>
-      tailwind.config = {
-        darkMode: 'class',
-        theme: {
-          extend: {
-            colors: {
-              primary: {
-                50: '#eff6ff',
-                100: '#dbeafe',
-                200: '#bfdbfe',
-                300: '#93c5fd',
-                400: '#60a5fa',
-                500: '#3b82f6',
-                600: '#2563eb',
-                700: '#1d4ed8',
-                800: '#1e40af',
-                900: '#1e3a8a',
-              }
-            }
-          }
-        }
-      }
-    </script>
-    
-    <style>
-      /* Custom scrollbar */
-      ::-webkit-scrollbar {
-        width: 8px;
-        height: 8px;
-      }
-      ::-webkit-scrollbar-track {
-        background: #f1f5f9;
-      }
-      .dark ::-webkit-scrollbar-track {
-        background: #1e293b;
-      }
-      ::-webkit-scrollbar-thumb {
-        background: #cbd5e1;
-        border-radius: 4px;
-      }
-      .dark ::-webkit-scrollbar-thumb {
-        background: #475569;
-      }
-      ::-webkit-scrollbar-thumb:hover {
-        background: #94a3b8;
-      }
-      .dark ::-webkit-scrollbar-thumb:hover {
-        background: #64748b;
-      }
-      
-      /* Leaflet container */
-      .leaflet-container {
-        width: 100%;
-        height: 100%;
-        z-index: 10;
-      }
-      
-      /* Dark mode for leaflet */
-      .dark .leaflet-tile-pane {
-        filter: brightness(0.8) invert(1) contrast(2) hue-rotate(200deg) saturate(0.4) brightness(0.8);
-      }
-      
-      /* Line clamp utility */
-      .line-clamp-2 {
-        display: -webkit-box;
-        -webkit-line-clamp: 2;
-        -webkit-box-orient: vertical;
-        overflow: hidden;
-      }
-      
-      /* Smooth transitions */
-      * {
-        transition-property: background-color, border-color, color;
-        transition-duration: 150ms;
-      }
-    </style>
+    <!--
+      Los estilos (Tailwind, Leaflet y los ajustes propios) se compilan en
+      index.css y Vite inyecta aquí la hoja resultante, servida desde el propio
+      dominio.
+
+      No añadir hojas de estilo ni scripts de CDN externos en este archivo: la
+      versión anterior generaba el diseño en el navegador en tiempo de ejecución
+      y cualquier bloqueo de red, proxy o extensión dejaba el sistema entero sin
+      estilos. La configuración de Tailwind vive ahora en tailwind.config.js.
+    -->
   </head>
   <body class="bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 antialiased">
     <div id="root"></div>
