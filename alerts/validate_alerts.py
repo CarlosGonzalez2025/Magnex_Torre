@@ -125,16 +125,28 @@ def es_exceso(ev: dict) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 # Núcleo
 # ─────────────────────────────────────────────────────────────────────────────
+# Las dos preguntas de cobertura se repiten muchísimo dentro de un mismo lote:
+# un vehículo con el GPS averiado genera cientos de alertas del mismo (proveedor,
+# día) — PWQ878 llegó a 759 pendientes. Sin memo, el worker preguntaba lo mismo
+# una vez por alerta. El proceso es de un solo uso (lo lanza el cron y muere), así
+# que un dict a nivel de módulo alcanza: no hay invalidación que gestionar.
+_CACHE_INFORME: dict[tuple[str, str], bool] = {}
+_CACHE_COBERTURA: dict[tuple[str, str, str], bool] = {}
+
+
 def informe_cargado(source: str, fecha_dia: str) -> bool:
     """¿Existe ya el informe diario de este proveedor para este día?
 
     Primera de las dos preguntas que separan 'descartada' de 'todavía no sé'. Se
     responde mirando si hay CUALQUIER evento de esa fuente ese día.
     """
-    return count('alertas_diarias_gps', [
-        f'gps=ilike.*{source}*',
-        f'fecha_dia=eq.{fecha_dia}',
-    ]) > 0
+    clave = (source, fecha_dia)
+    if clave not in _CACHE_INFORME:
+        _CACHE_INFORME[clave] = count('alertas_diarias_gps', [
+            f'gps=ilike.*{source}*',
+            f'fecha_dia=eq.{fecha_dia}',
+        ]) > 0
+    return _CACHE_INFORME[clave]
 
 
 def placa_cubierta(placa: str, source: str, fecha_dia: str) -> bool:
@@ -158,13 +170,16 @@ def placa_cubierta(placa: str, source: str, fecha_dia: str) -> bool:
     aparece habitualmente y no figura ese día sí es un descarte legítimo: el
     proveedor lo cubre y no le registró nada.
     """
-    desde = (datetime.fromisoformat(fecha_dia) - timedelta(days=COBERTURA_DIAS)).strftime('%Y-%m-%d')
-    return count('alertas_diarias_gps', [
-        f'placa=eq.{placa}',
-        f'gps=ilike.*{source}*',
-        f'fecha_dia=gte.{desde}',
-        f'fecha_dia=lte.{fecha_dia}',
-    ]) > 0
+    clave = (placa, source, fecha_dia)
+    if clave not in _CACHE_COBERTURA:
+        desde = (datetime.fromisoformat(fecha_dia) - timedelta(days=COBERTURA_DIAS)).strftime('%Y-%m-%d')
+        _CACHE_COBERTURA[clave] = count('alertas_diarias_gps', [
+            f'placa=eq.{placa}',
+            f'gps=ilike.*{source}*',
+            f'fecha_dia=gte.{desde}',
+            f'fecha_dia=lte.{fecha_dia}',
+        ]) > 0
+    return _CACHE_COBERTURA[clave]
 
 
 _COLS_EVENTO = ('placa,fecha,fecha_dia,velocidad,infraccion_80_kmh,excesos_50_80_kmh,'
@@ -349,7 +364,8 @@ def main() -> int:
         filters=['estado=eq.pendiente'],
         order='created_at.asc',
         page=min(args.limite, 1000),
-    )[:args.limite]
+        max_rows=args.limite,
+    )
 
     if not pendientes:
         print('No hay alertas pendientes de validación.')

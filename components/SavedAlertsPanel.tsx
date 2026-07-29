@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { AlertTriangle, AlertCircle, Bell, BellRing, CheckCircle, Clock, MapPin, User, Gauge, FileDown, Search, Calendar, Database, Info, Save, Copy, MessageCircle, FolderCheck, Trash2, CheckSquare, Square } from 'lucide-react';
+import { AlertTriangle, AlertCircle, Bell, BellRing, CheckCircle, Clock, MapPin, User, Gauge, FileDown, Search, Calendar, Database, Info, Save, Copy, MessageCircle, FolderCheck, Trash2, CheckSquare, Square, XCircle, HelpCircle } from 'lucide-react';
 import { Alert } from '../types';
 import {
   getFilteredAutoSavedAlerts,
@@ -542,6 +542,37 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
     );
   };
 
+  // Veredicto del worker de validación (alerts/validate_alerts.py), contrastado
+  // contra el informe diario del proveedor.
+  //
+  // `is_real_alert` NULL significa "nadie lo verificó todavía" — o está en cola, o
+  // el informe del proveedor no cubre a ese vehículo y quedó como inconcluyente.
+  // Tiene que verse DISTINTO de "descartada": si no verificado se leyera como
+  // exonerado, el panel repetiría el mismo error que el worker cometía al tratar
+  // la ausencia de dato como evidencia de ausencia.
+  const getValidationBadge = (isReal?: boolean, reason?: string) => {
+    const base = 'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold border';
+    if (isReal === true) {
+      return (
+        <span className={`${base} bg-rose-100 text-rose-800 border-rose-300`} title={reason || 'Exceso confirmado contra el informe del proveedor'}>
+          <CheckCircle className="w-3 h-3" /> Confirmada
+        </span>
+      );
+    }
+    if (isReal === false) {
+      return (
+        <span className={`${base} bg-slate-100 text-slate-600 border-slate-300`} title={reason || 'Descartada contra el informe del proveedor'}>
+          <XCircle className="w-3 h-3" /> Descartada
+        </span>
+      );
+    }
+    return (
+      <span className={`${base} bg-amber-50 text-amber-700 border-amber-200`} title="Sin verificar: la validación contra el informe del proveedor aún no arrojó veredicto. No implica que la alerta sea falsa.">
+        <HelpCircle className="w-3 h-3" /> Sin verificar
+      </span>
+    );
+  };
+
   return (
     <div className="space-y-3">
       {/* Info Banner - Compacto */}
@@ -767,6 +798,7 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
                 <th className="px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">Placa/Contrato</th>
                 <th className="px-2 py-2 text-center text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">Estado</th>
                 <th className="px-2 py-2 text-center text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">Severidad</th>
+                <th className="px-2 py-2 text-center text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">Validación</th>
                 <th className="px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wider">Detalles</th>
                 <th className="px-2 py-2 text-left text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">Conductor</th>
                 <th className="px-2 py-2 text-center text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">Vel.</th>
@@ -861,6 +893,11 @@ export const SavedAlertsPanel: React.FC<SavedAlertsPanelProps> = ({ onRefresh, o
                     <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${getSeverityColor(alert.severity)}`}>
                       {alert.severity}
                     </span>
+                  </td>
+
+                  {/* Validación contra el informe del proveedor */}
+                  <td className="px-2 py-1.5 text-center whitespace-nowrap">
+                    {getValidationBadge(alert.is_real_alert, alert.validation_reason)}
                   </td>
 
                   {/* Detalles */}

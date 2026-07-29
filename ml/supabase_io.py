@@ -104,12 +104,22 @@ def _encode_filters(filters: list[str] | None) -> list[str]:
 
 
 def fetch_all(table: str, select: str = '*', filters: list[str] | None = None,
-              order: str | None = None, page: int = 1000) -> list[dict]:
-    """Pagina hasta traer todo. PostgREST corta en 1000 filas por defecto."""
+              order: str | None = None, page: int = 1000,
+              max_rows: int | None = None) -> list[dict]:
+    """Pagina hasta traer todo. PostgREST corta en 1000 filas por defecto.
+
+    `max_rows` corta la paginación en seco. Sin él, un llamador que solo quiere
+    las primeras N filas de una tabla grande se las trae todas y descarta el
+    resto: la cola de validación tenía 1.670 pendientes y el worker hacía 9
+    peticiones para quedarse con 200.
+    """
     out: list[dict] = []
     offset = 0
     while True:
-        parts = [f"select={urllib.parse.quote(select, safe='*,')}", f'limit={page}', f'offset={offset}']
+        lote = page if max_rows is None else min(page, max_rows - len(out))
+        if lote <= 0:
+            return out
+        parts = [f"select={urllib.parse.quote(select, safe='*,')}", f'limit={lote}', f'offset={offset}']
         if order:
             parts.append(f'order={order}')
         parts.extend(_encode_filters(filters))
@@ -118,9 +128,9 @@ def fetch_all(table: str, select: str = '*', filters: list[str] | None = None,
         with urllib.request.urlopen(req, timeout=60) as r:
             chunk = json.loads(r.read().decode('utf-8'))
         out.extend(chunk)
-        if len(chunk) < page:
+        if len(chunk) < lote:
             return out
-        offset += page
+        offset += lote
 
 
 def upsert(table: str, rows: list[dict], on_conflict: str, chunk: int = 500) -> int:
