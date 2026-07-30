@@ -3,6 +3,7 @@ import { BarChart3, FileText, RefreshCw, Download } from 'lucide-react';
 import { ReportFilters, FiltroState } from './ReportFilters';
 import { ReportsTable, SemaforoBadge } from './ReportsTable';
 import { SheetsSyncPanel } from './SheetsSyncPanel';
+import { MonthlyContractAnalysis } from './MonthlyContractAnalysis';
 import {
   getConductores, getVehiculos, getContratos,
   getReporteConductor, getReporteVehiculo,
@@ -12,11 +13,12 @@ import {
   descargarPDFConductor,
   descargarPDFVehiculo,
   descargarLotePDFs,
-  descargarConsolidadoConductoresContrato,
-  descargarConsolidadoVehiculosContrato,
 } from '../../services/pdfTemplates';
 import type { ConductorOption, ContratoOption, ReporteConductorData, ReporteVehiculoData, VehiculoOption } from '../../services/reportService';
 import { descargarExcelInformesMensuales } from '../../services/monthlyReportExport';
+import { descargarInformesMensualesContrato, obtenerPeriodoAnterior } from '../../services/monthlyContractReports';
+
+type Vista = 'historial' | 'analisis';
 
 const primerDiaMes = () => {
   const d = new Date();
@@ -40,44 +42,6 @@ const defaultFiltro: FiltroState = {
   cliente: '',
   contratoId: '',
 };
-
-function obtenerPeriodoAnterior(fechaInicioStr: string, fechaFinStr: string): { fechaInicio: string; fechaFin: string } {
-  // Usar mediodía para evitar problemas de redondeo con DST y diferencias de zona horaria
-  const inicio = new Date(fechaInicioStr + 'T12:00:00');
-
-  if (inicio.getDate() === 1) {
-    // Mes completo: el período anterior es el mes calendario previo
-    const prevMesInicio = new Date(Date.UTC(inicio.getFullYear(), inicio.getMonth() - 1, 1));
-    const prevMesFin = new Date(Date.UTC(inicio.getFullYear(), inicio.getMonth(), 0));
-    return {
-      fechaInicio: prevMesInicio.toISOString().slice(0, 10),
-      fechaFin: prevMesFin.toISOString().slice(0, 10),
-    };
-  } else {
-    const fin = new Date(fechaFinStr + 'T12:00:00');
-    // diffDays = diferencia exacta en días entre inicio y fin (ej: 29 para 29/04–28/05)
-    const diffDays = Math.round((fin.getTime() - inicio.getTime()) / (1000 * 60 * 60 * 24));
-
-    // prevFin = día anterior al inicio del período actual (ej: 28/04)
-    const prevFin = new Date(fechaInicioStr + 'T12:00:00');
-    prevFin.setDate(prevFin.getDate() - 1);
-
-    // prevInicio = prevFin retrocedido diffDays días (ej: 28/04 - 29 = 30/03)
-    const prevInicio = new Date(prevFin.getTime());
-    prevInicio.setDate(prevInicio.getDate() - diffDays);
-
-    return {
-      fechaInicio: prevInicio.toISOString().slice(0, 10),
-      fechaFin: prevFin.toISOString().slice(0, 10),
-    };
-  }
-}
-
-
-function tieneGpsConfigurado(valor?: string | null): boolean {
-  const normalizado = String(valor ?? '').trim().toUpperCase();
-  return Boolean(normalizado) && !['NO', 'N/A', 'NA', 'SIN GPS', 'NINGUNO', 'NO APLICA', '0'].includes(normalizado);
-}
 
 function esMoto(tipo: unknown): boolean {
   return String(tipo ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toUpperCase().includes('MOTO');
@@ -107,6 +71,7 @@ function StatGroup({ title, children }: { title: string; children: React.ReactNo
 }
 
 export const MonthlyReports: React.FC = () => {
+  const [vista, setVista] = useState<Vista>('historial');
   const [filtro, setFiltro] = useState<FiltroState>(defaultFiltro);
 
   const [conductores, setConductores] = useState<ConductorOption[]>([]);
@@ -201,7 +166,7 @@ export const MonthlyReports: React.FC = () => {
     }
   }, [filtro.tipo, filtro.conductorId, filtro.vehiculoId, filtro.fechaInicio, filtro.fechaFin, resolverContratoIds]);
 
-  useEffect(() => { cargarHistorial(); }, [cargarHistorial]);
+  useEffect(() => { if (vista === 'historial') cargarHistorial(); }, [vista, cargarHistorial]);
 
   // Generar PDF individual
   const handleGenerar = async () => {
@@ -281,79 +246,15 @@ export const MonthlyReports: React.FC = () => {
 
     setGenerandoContrato(true);
     try {
-      const conductoresContrato = conductores.filter(c => c.contrato_id === filtro.contratoId);
-      const vehiculosContrato = vehiculos.filter(v => v.contrato_id === filtro.contratoId);
-
-      const prevPeriodo = obtenerPeriodoAnterior(filtro.fechaInicio, filtro.fechaFin);
-
-      const [datosConductores, datosVehiculos, datosConductoresAnterior, datosVehiculosAnterior] = await Promise.all([
-        Promise.all(conductoresContrato.map(c => getReporteConductor({
-          conductorId: c.id,
-          fechaInicio: filtro.fechaInicio,
-          fechaFin: filtro.fechaFin,
-          contratoId: filtro.contratoId,
-        }))),
-        Promise.all(vehiculosContrato.map(v => getReporteVehiculo({
-          vehiculoId: v.id,
-          fechaInicio: filtro.fechaInicio,
-          fechaFin: filtro.fechaFin,
-          contratoId: filtro.contratoId,
-        }))),
-        Promise.all(conductoresContrato.map(c => getReporteConductor({
-          conductorId: c.id,
-          fechaInicio: prevPeriodo.fechaInicio,
-          fechaFin: prevPeriodo.fechaFin,
-          contratoId: filtro.contratoId,
-        }))),
-        Promise.all(vehiculosContrato.map(v => getReporteVehiculo({
-          vehiculoId: v.id,
-          fechaInicio: prevPeriodo.fechaInicio,
-          fechaFin: prevPeriodo.fechaFin,
-          contratoId: filtro.contratoId,
-        }))),
-      ]);
-
-      const conductoresValidos = datosConductores.filter(Boolean) as ReporteConductorData[];
-      const vehiculosValidos = datosVehiculos.filter(Boolean) as ReporteVehiculoData[];
-      const conductoresAnteriorValidos = datosConductoresAnterior.filter(Boolean) as ReporteConductorData[];
-      const vehiculosAnteriorValidos = datosVehiculosAnterior.filter(Boolean) as ReporteVehiculoData[];
-
-      const vehiculosConGps = vehiculosContrato.filter(v => tieneGpsConfigurado(v.gps_compañia)).length;
-      const resumenContrato = {
-        totalVehiculos: vehiculosContrato.length,
-        totalConductores: conductoresContrato.length,
-        vehiculosConGps,
-        vehiculosSinGps: Math.max(0, vehiculosContrato.length - vehiculosConGps),
-      };
-
-      if (conductoresValidos.length === 0 && vehiculosValidos.length === 0) {
+      const generados = await descargarInformesMensualesContrato({
+        contrato,
+        conductores,
+        vehiculos,
+        fechaInicio: filtro.fechaInicio,
+        fechaFin: filtro.fechaFin,
+      });
+      if (generados.length === 0) {
         alert('No hay datos mensuales para el contrato seleccionado en el periodo indicado.');
-        return;
-      }
-
-      if (conductoresValidos.length > 0) {
-        await descargarConsolidadoConductoresContrato(
-          contrato,
-          conductoresValidos,
-          vehiculosValidos,
-          resumenContrato,
-          filtro.fechaInicio,
-          filtro.fechaFin,
-          conductoresAnteriorValidos,
-          vehiculosAnteriorValidos
-        );
-      }
-      if (vehiculosValidos.length > 0) {
-        await descargarConsolidadoVehiculosContrato(
-          contrato,
-          vehiculosValidos,
-          conductoresValidos,
-          resumenContrato,
-          filtro.fechaInicio,
-          filtro.fechaFin,
-          vehiculosAnteriorValidos,
-          conductoresAnteriorValidos
-        );
       }
     } catch (err) {
       console.error(err);
@@ -487,8 +388,8 @@ export const MonthlyReports: React.FC = () => {
             <p className="text-sm text-slate-500 dark:text-slate-400">Genera y gestiona informes por período mensual</p>
           </div>
         </div>
-        <div className="flex gap-2">
-          {seleccionados.size > 0 && (
+        <div className="flex items-center gap-2 flex-wrap">
+          {vista === 'historial' && seleccionados.size > 0 && (
             <button
               onClick={handleLote}
               disabled={generandoLote}
@@ -501,12 +402,41 @@ export const MonthlyReports: React.FC = () => {
               Descargar {seleccionados.size} PDF{seleccionados.size !== 1 ? 's' : ''}
             </button>
           )}
+
+          <div className="flex gap-1 p-1 bg-slate-100 dark:bg-slate-900 rounded-lg">
+            {([
+              ['historial', 'Historial', FileText],
+              ['analisis', 'Análisis por contrato', BarChart3],
+            ] as const).map(([v, label, Icon]) => (
+              <button
+                key={v}
+                onClick={() => setVista(v)}
+                className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
+                  vista === v
+                    ? 'bg-purple-600 text-white shadow-sm'
+                    : 'text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-slate-800/60'
+                }`}
+              >
+                <Icon className="w-4 h-4" /> {label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
       {/* Panel de sincronización Google Sheets (siempre visible) */}
       <SheetsSyncPanel />
 
+      {vista === 'analisis' ? (
+        <MonthlyContractAnalysis
+          contratos={contratos}
+          conductores={conductores}
+          vehiculos={vehiculos}
+          fechaInicio={filtro.fechaInicio}
+          fechaFin={filtro.fechaFin}
+          onPeriodoChange={(fechaInicio, fechaFin) => setFiltro(f => ({ ...f, fechaInicio, fechaFin }))}
+        />
+      ) : (
       <div className="space-y-4">
           <ReportFilters
             filtro={filtro}
@@ -619,6 +549,7 @@ export const MonthlyReports: React.FC = () => {
             )}
           </div>
       </div>
+      )}
     </div>
   );
 };
