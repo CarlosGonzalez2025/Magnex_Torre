@@ -1800,6 +1800,27 @@ async function asegurarConductorEnMaestro(
   return data;
 }
 
+/**
+ * Tokens que aparecen en los archivos satelitales como filas de cierre o de prueba y que
+ * NO son vehículos. Sin este filtro se auto-creaban en el maestro y contaminaban el informe:
+ * la fila "TOTAL" del consolidado entró como una placa con 1.470 h de ralentí en una quincena
+ * (más que las 384 h que físicamente tiene el período) y sin horas de motor, así que además
+ * quedaba fuera del % Ralentí pero sumaba galones y CO₂.
+ */
+const PLACAS_NO_VEHICULO = new Set([
+  'TOTAL', 'TOTALES', 'SUMA', 'SUMATORIA', 'PROMEDIO', 'PROMEDIOS',
+  'SUBTOTAL', 'SUBTOTALES', 'GENERAL', 'RESUMEN', 'NA', 'NINGUNO', 'SINPLACA',
+  'PRUEBA', 'PRUEBAS', 'PRUEBASIBUTTON', 'TEST',
+]);
+
+/** Una placa colombiana válida: 3 letras + 2-3 dígitos (+1 alfanumérico para remolques/motos). */
+const FORMATO_PLACA = /^[A-Z]{3}[0-9]{2,3}[A-Z0-9]?$/;
+
+function esPlacaDeVehiculo(placaNorm: string): boolean {
+  if (!placaNorm || PLACAS_NO_VEHICULO.has(placaNorm)) return false;
+  return FORMATO_PLACA.test(placaNorm);
+}
+
 async function asegurarVehiculoEnMaestro(
   placaOriginal: string,
   vehicPorPlaca: Map<string, any>,
@@ -1810,6 +1831,13 @@ async function asegurarVehiculoEnMaestro(
 
   let found = vehicPorPlaca.get(placaNorm);
   if (found) return found;
+
+  // Solo se auto-crea si parece una placa real. Un vehículo legítimo con placa atípica que ya
+  // exista en el maestro se resuelve por el `get` de arriba, así que este guard nunca lo bloquea.
+  if (!esPlacaDeVehiculo(placaNorm)) {
+    console.warn(`Fila omitida: "${placaOriginal}" no es una placa de vehículo (fila de totales o de prueba).`);
+    return null;
+  }
 
   const newVeh = {
     placa: placaOriginal.trim().toUpperCase(),

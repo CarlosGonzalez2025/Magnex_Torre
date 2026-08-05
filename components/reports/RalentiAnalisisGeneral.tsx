@@ -20,6 +20,10 @@ import {
 import { supabase } from '../../services/supabaseClient';
 import { descargarPDFAnalisisGeneral, AnalisisGeneralPDFData } from '../../services/pdfTemplates';
 import { computeMotorMetrics } from '../../services/ralentiMetrics';
+import {
+  regresionLineal, proyectar, correlacion, fuerzaCorrelacion, detectarAtipicos,
+  descomponerCambio, type Punto, type Regresion,
+} from '../../services/ralentiAnalytics';
 
 // ── CO₂ factors (kg/gal) — FECOC/UPME ──
 const CO2_FACTORES: { test: (t: string) => boolean; factor: number }[] = [
@@ -106,6 +110,15 @@ interface PeriodoData {
   datoInconsistente: boolean;    // bandera de validación cruzada (cobertura/identidad)
   filasRalentiMayorEnc: number;  // filas con ralentí > encendido (violación física)
   pctGalonesRalenti: number | null; // % galones en ralentí vs total (null si no hay total fiable)
+  // ── Banderas de completitud (ago-2026) ──
+  enCurso: boolean;              // la quincena todavía no termina: cifras parciales por definición
+  sinCombustible: boolean;       // hay ralentí pero 0 galones → CO₂/costo NO comparables
+}
+
+/** Fecha de hoy en formato YYYY-MM-DD, hora local. */
+function hoyISO(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 // ── Helpers ──
@@ -613,6 +626,12 @@ export const RalentiAnalisisGeneral: React.FC<{
         ralentiHuerfano: m.ralentiHuerfano, coberturaMotorPct: m.coberturaMotorPct,
         datoInconsistente: m.datoInconsistente, filasRalentiMayorEnc: m.filasRalentiMayorEnc,
         pctGalonesRalenti: null, // total de galones no se persiste hoy (ver ETL) → N/D
+        // Una quincena que aún no cierra trae solo los días transcurridos; compararla contra
+        // un período completo produce caídas ficticias. Un período con ralentí pero sin
+        // galones tampoco es comparable en CO₂/costo (p. ej. cuando solo cargó Geotab, que
+        // no reporta combustible de ralentí).
+        enCurso: first.periodo_fin >= hoyISO(),
+        sinCombustible: m.totalGalones <= 0 && m.totalHorasRalenti > 0,
       });
     });
 
@@ -666,6 +685,59 @@ export const RalentiAnalisisGeneral: React.FC<{
       horasExcluidas,
       pctExcluido: totalReal > 0 ? (horasExcluidas / totalReal) * 100 : 0,
       peor: [...afectados].sort((a, b) => b.ralentiHuerfano - a.ralentiHuerfano)[0],
+    };
+  }, [periods]);
+
+  /**
+   * Modelos estadísticos sobre la serie de quincenas CERRADAS.
+   *
+   * Se excluye la quincena en curso: sus valores son parciales y arrastrarían la
+   * pendiente hacia abajo inventando una mejora. Las fórmulas viven en
+   * services/ralentiAnalytics.ts (con suite de pruebas propia).
+   */
+  const analitica = useMemo(() => {
+    const cerrados = periods.filter(p => !p.enCurso);
+    if (cerrados.length < 3) return null;
+
+    const serie = (sel: (p: PeriodoData) => number): Punto[] =>
+      cerrados.map((p, x) => ({ x, y: sel(p) }));
+
+    const regPctRalenti = regresionLineal(serie(p => p.pctRalenti));
+    const regEventos = regresionLineal(serie(p => p.totalEventos));
+    const regKmVeh = regresionLineal(serie(p => p.kmPorVehiculoActivo));
+    // Intensidad = ralentí por vehículo con motor. Es la métrica de CONDUCTA: no la
+    // mueve que la flota crezca, a diferencia del ralentí total.
+    const regIntensidad = regresionLineal(
+      serie(p => (p.vehiculosConMotor > 0 ? p.totalHorasRalenti / p.vehiculosConMotor : 0))
+    );
+
+    const proyeccionPct = regPctRalenti ? proyectar(regPctRalenti, cerrados.length) : null;
+
+    // ¿El ralentí acompaña a la operación o es independiente de ella?
+    const corrKmRalenti = correlacion(
+      cerrados.map(p => p.kmPorVehiculoActivo),
+      cerrados.map(p => p.pctRalenti)
+    );
+    const corrEventosGalones = correlacion(
+      cerrados.map(p => p.totalEventos),
+      cerrados.map(p => p.totalGalones)
+    );
+
+    const atipicosPct = detectarAtipicos(serie(p => p.pctRalenti));
+    const atipicosEventos = detectarAtipicos(serie(p => p.totalEventos));
+
+    const base = cerrados[0];
+    const act = cerrados[cerrados.length - 1];
+    const descHoras = descomponerCambio(
+      base.totalHorasRalenti, base.vehiculosConMotor,
+      act.totalHorasRalenti, act.vehiculosConMotor
+    );
+
+    return {
+      cerrados, base, act,
+      regPctRalenti, regEventos, regKmVeh, regIntensidad,
+      proyeccionPct, corrKmRalenti, corrEventosGalones,
+      atipicosPct, atipicosEventos, descHoras,
     };
   }, [periods]);
 
@@ -750,7 +822,12 @@ export const RalentiAnalisisGeneral: React.FC<{
   }
 
   const baseline = periods[0];
-  const latest = periods[periods.length - 1];
+  // Las tarjetas usan el último período CERRADO como "actual". Con la quincena en curso
+  // mostraban caídas ficticias (-73% de eventos, CO₂ 0,00 t, costo $0) que solo reflejaban
+  // los días que aún no han ocurrido y la carga pendiente de Coltrack/Fagor.
+  const periodosCerrados = periods.filter(p => !p.enCurso);
+  const latest = periodosCerrados.length > 0 ? periodosCerrados[periodosCerrados.length - 1] : periods[periods.length - 1];
+  const periodoEnCurso = periods.find(p => p.enCurso) ?? null;
 
   return (
     <div className="space-y-6">
@@ -861,9 +938,14 @@ export const RalentiAnalisisGeneral: React.FC<{
             <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 tracking-wider">Períodos Analizados</span>
             <BarChart3 className="w-4 h-4 text-indigo-400" />
           </div>
-          <div className="text-3xl font-bold text-slate-800 dark:text-slate-100">{periods.length}</div>
+          <div className="text-3xl font-bold text-slate-800 dark:text-slate-100">{periodosCerrados.length || periods.length}</div>
           <div className="text-[11px] text-slate-400 dark:text-slate-500">{baseline.labelCorto} → {latest.labelCorto}</div>
-          <TrendSparkline values={periods.map(p => p.totalEventos)} color="#003366" />
+          {periodoEnCurso && (
+            <div className="text-[10px] text-amber-600 dark:text-amber-400 font-semibold">
+              {periodoEnCurso.labelCorto} en curso — excluida
+            </div>
+          )}
+          <TrendSparkline values={periodosCerrados.map(p => p.totalEventos)} color="#003366" />
         </div>
 
         {(() => {
@@ -878,8 +960,11 @@ export const RalentiAnalisisGeneral: React.FC<{
               <div className={`text-3xl font-bold ${improved ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
                 {fmtPct(pct)}
               </div>
-              <div className="text-[11px] text-slate-400 dark:text-slate-500">{baseline.totalEventos} → {latest.totalEventos} eventos</div>
-              <TrendSparkline values={periods.map(p => p.totalEventos)} color={improved ? '#10b981' : '#ef4444'} />
+              <div className="text-[11px] text-slate-400 dark:text-slate-500">
+                {baseline.totalEventos.toLocaleString('es-CO')} → {latest.totalEventos.toLocaleString('es-CO')} eventos
+                <span className="block text-[10px]">{baseline.labelCorto} → {latest.labelCorto}</span>
+              </div>
+              <TrendSparkline values={periodosCerrados.map(p => p.totalEventos)} color={improved ? '#10b981' : '#ef4444'} />
             </div>
           );
         })()}
@@ -893,11 +978,22 @@ export const RalentiAnalisisGeneral: React.FC<{
                 <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 tracking-wider">CO₂ Período Actual</span>
                 <Leaf className="w-4 h-4 text-emerald-400" />
               </div>
-              <div className="text-3xl font-bold text-slate-800 dark:text-slate-100">{(latest.co2Kg / 1000).toFixed(2)} t</div>
-              <div className={`text-[11px] font-semibold ${improved ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500 dark:text-red-400'}`}>
-                {fmtPct(pct)} vs línea base
-              </div>
-              <TrendSparkline values={periods.map(p => p.co2Kg)} color="#10b981" />
+              {latest.sinCombustible ? (
+                <>
+                  <div className="text-3xl font-bold text-slate-300 dark:text-slate-600">N/D</div>
+                  <div className="text-[11px] font-semibold text-amber-600 dark:text-amber-400">
+                    Sin galones cargados en {latest.labelCorto}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="text-3xl font-bold text-slate-800 dark:text-slate-100">{(latest.co2Kg / 1000).toFixed(2)} t</div>
+                  <div className={`text-[11px] font-semibold ${improved ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500 dark:text-red-400'}`}>
+                    {fmtPct(pct)} vs línea base
+                  </div>
+                </>
+              )}
+              <TrendSparkline values={periodosCerrados.map(p => p.co2Kg)} color="#10b981" />
             </div>
           );
         })()}
@@ -907,11 +1003,186 @@ export const RalentiAnalisisGeneral: React.FC<{
             <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 tracking-wider">Costo Combustible</span>
             <DollarSign className="w-4 h-4 text-amber-400" />
           </div>
-          <div className="text-2xl font-bold text-slate-800 dark:text-slate-100 leading-tight">{fmtCOP(latest.costoCOP)}</div>
-          <div className="text-[11px] text-slate-400 dark:text-slate-500">{latest.totalGalones.toFixed(1)} gal — {latest.label}</div>
-          <TrendSparkline values={periods.map(p => p.costoCOP)} color="#f59e0b" />
+          {latest.sinCombustible ? (
+            <>
+              <div className="text-2xl font-bold text-slate-300 dark:text-slate-600 leading-tight">N/D</div>
+              <div className="text-[11px] text-amber-600 dark:text-amber-400">
+                {latest.label} sin galones — cargue Coltrack/Fagor
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-2xl font-bold text-slate-800 dark:text-slate-100 leading-tight">{fmtCOP(latest.costoCOP)}</div>
+              <div className="text-[11px] text-slate-400 dark:text-slate-500">{latest.totalGalones.toFixed(1)} gal — {latest.label}</div>
+            </>
+          )}
+          <TrendSparkline values={periodosCerrados.map(p => p.costoCOP)} color="#f59e0b" />
         </div>
       </div>
+
+      {/* ── Modelo estadístico de la serie ── */}
+      {analitica && (
+        <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-6 shadow-sm space-y-5">
+          <div>
+            <h3 className="font-bold text-slate-800 dark:text-slate-200 text-sm flex items-center gap-2">
+              <BrainCircuit className="w-4 h-4 text-violet-500" />
+              Modelo Estadístico de la Serie
+              <span className="text-[10px] font-normal text-slate-400 dark:text-slate-500">
+                — regresión por mínimos cuadrados sobre {analitica.cerrados.length} quincenas cerradas
+              </span>
+            </h3>
+            <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
+              Una pendiente solo se reporta como tendencia si supera su propio error estándar
+              (contraste t al 95%). Con series cortas lo habitual es que el movimiento sea ruido,
+              y en ese caso aquí se dice explícitamente.
+            </p>
+          </div>
+
+          {/* Tendencias */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {([
+              { r: analitica.regPctRalenti, titulo: '% Ralentí', unidad: 'puntos %', decimales: 2, bajarEsBueno: true },
+              { r: analitica.regIntensidad, titulo: 'Ralentí por vehículo', unidad: 'h/veh', decimales: 2, bajarEsBueno: true },
+              { r: analitica.regEventos, titulo: 'Alertas de ralentí', unidad: 'eventos', decimales: 0, bajarEsBueno: true },
+              { r: analitica.regKmVeh, titulo: 'Km por vehículo', unidad: 'km', decimales: 1, bajarEsBueno: false },
+            ] as { r: Regresion | null; titulo: string; unidad: string; decimales: number; bajarEsBueno: boolean }[])
+              .map(({ r, titulo, unidad, decimales, bajarEsBueno }) => {
+                if (!r) return null;
+                const mejora = bajarEsBueno ? r.pendiente < 0 : r.pendiente > 0;
+                const color = !r.significativa
+                  ? 'text-slate-500 dark:text-slate-400'
+                  : mejora ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400';
+                return (
+                  <div key={titulo} className="rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 p-3 space-y-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-bold text-slate-700 dark:text-slate-200">{titulo}</span>
+                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${r.significativa
+                        ? 'bg-violet-50 dark:bg-violet-950/30 text-violet-700 dark:text-violet-300'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'}`}>
+                        {r.significativa ? 'TENDENCIA' : 'SIN TENDENCIA'}
+                      </span>
+                    </div>
+                    <div className={`text-lg font-bold ${color}`}>
+                      {r.pendiente > 0 ? '+' : ''}{r.pendiente.toFixed(decimales)} {unidad}
+                      <span className="text-[10px] font-normal text-slate-400 dark:text-slate-500"> / quincena</span>
+                    </div>
+                    <div className="text-[10px] text-slate-400 dark:text-slate-500">
+                      R²={r.r2.toFixed(2)} · t={r.tStat.toFixed(2)} · gl={r.gl}
+                      {!r.significativa && <span className="block text-amber-600 dark:text-amber-400">El dato no distingue esta pendiente del ruido.</span>}
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+
+          {/* Proyección */}
+          {analitica.regPctRalenti && analitica.proyeccionPct && analitica.regPctRalenti.significativa && (
+            <div className="rounded-lg border border-violet-200 dark:border-violet-800/50 bg-violet-50 dark:bg-violet-950/20 p-3 text-[11px] text-violet-900 dark:text-violet-200">
+              <strong>Proyección para la próxima quincena:</strong> el % Ralentí se ubicaría alrededor de{' '}
+              <strong>{analitica.proyeccionPct.valor.toFixed(2)}%</strong>{' '}
+              (± {analitica.proyeccionPct.banda.toFixed(2)} pp) si la tendencia se mantiene.
+              Es una extrapolación lineal, no un pronóstico: cualquier cambio de flota o de plataforma la invalida.
+            </div>
+          )}
+
+          {/* Descomposición flota vs conducta */}
+          {analitica.descHoras && (
+            <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 space-y-2">
+              <span className="text-[11px] font-bold text-slate-700 dark:text-slate-200">
+                ¿El cambio viene de la flota o de la conducta? — {analitica.base.labelCorto} → {analitica.act.labelCorto}
+              </span>
+              <p className="text-[10.5px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                El ralentí total pasó de {Math.round(analitica.descHoras.totalBase).toLocaleString('es-CO')} h a{' '}
+                {Math.round(analitica.descHoras.totalActual).toLocaleString('es-CO')} h
+                ({analitica.descHoras.cambioTotal > 0 ? '+' : ''}{Math.round(analitica.descHoras.cambioTotal).toLocaleString('es-CO')} h).
+                Separando cuánto se debe a que cambió el número de vehículos y cuánto a que cada vehículo se comporta distinto:
+              </p>
+              <div className="flex h-6 rounded-md overflow-hidden border border-slate-200 dark:border-slate-700">
+                <div className="bg-sky-500/80 flex items-center justify-center text-[9px] font-bold text-white"
+                     style={{ width: `${Math.max(analitica.descHoras.pctFlota, 6)}%` }}>
+                  {analitica.descHoras.pctFlota.toFixed(0)}%
+                </div>
+                <div className="bg-amber-500/80 flex items-center justify-center text-[9px] font-bold text-white"
+                     style={{ width: `${Math.max(analitica.descHoras.pctIntensidad, 6)}%` }}>
+                  {analitica.descHoras.pctIntensidad.toFixed(0)}%
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-[10.5px]">
+                <div className="text-slate-600 dark:text-slate-300">
+                  <span className="inline-block w-2 h-2 rounded-sm bg-sky-500 mr-1" />
+                  <strong>Tamaño de flota:</strong> {analitica.descHoras.efectoFlota > 0 ? '+' : ''}
+                  {Math.round(analitica.descHoras.efectoFlota).toLocaleString('es-CO')} h
+                </div>
+                <div className="text-slate-600 dark:text-slate-300">
+                  <span className="inline-block w-2 h-2 rounded-sm bg-amber-500 mr-1" />
+                  <strong>Conducta por vehículo:</strong> {analitica.descHoras.efectoIntensidad > 0 ? '+' : ''}
+                  {Math.round(analitica.descHoras.efectoIntensidad).toLocaleString('es-CO')} h
+                </div>
+              </div>
+              <p className="text-[10px] text-slate-400 dark:text-slate-500 italic">
+                Sin esta separación, la incorporación de una plataforma satelital —que suma vehículos de golpe—
+                se leería como un empeoramiento de conducta que no ocurrió.
+              </p>
+            </div>
+          )}
+
+          {/* Correlaciones y atípicos */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 space-y-1.5">
+              <span className="text-[11px] font-bold text-slate-700 dark:text-slate-200">Relaciones entre variables</span>
+              {analitica.corrKmRalenti != null && (
+                <p className="text-[10.5px] text-slate-600 dark:text-slate-300">
+                  <strong>Km/vehículo vs % Ralentí:</strong> r = {analitica.corrKmRalenti.toFixed(2)}{' '}
+                  (correlación {fuerzaCorrelacion(analitica.corrKmRalenti)}
+                  {analitica.corrKmRalenti < 0 ? ', inversa' : ''}).{' '}
+                  {Math.abs(analitica.corrKmRalenti) < 0.3
+                    ? 'El ralentí no acompaña al nivel de operación: reducirlo no exige mover menos la flota.'
+                    : analitica.corrKmRalenti < 0
+                      ? 'Los períodos de mayor recorrido muestran menos ralentí proporcional.'
+                      : 'A mayor recorrido, mayor proporción de ralentí.'}
+                </p>
+              )}
+              {analitica.corrEventosGalones != null && (
+                <p className="text-[10.5px] text-slate-600 dark:text-slate-300">
+                  <strong>Alertas vs galones:</strong> r = {analitica.corrEventosGalones.toFixed(2)} (
+                  {fuerzaCorrelacion(analitica.corrEventosGalones)}).
+                </p>
+              )}
+              <p className="text-[10px] text-slate-400 dark:text-slate-500 italic">
+                Correlación no implica causalidad; sirve para orientar dónde mirar.
+              </p>
+            </div>
+
+            <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 space-y-1.5">
+              <span className="text-[11px] font-bold text-slate-700 dark:text-slate-200">Períodos atípicos</span>
+              {analitica.atipicosPct.length === 0 && analitica.atipicosEventos.length === 0 ? (
+                <p className="text-[10.5px] text-slate-500 dark:text-slate-400">
+                  Ningún período se desvía significativamente de la recta ajustada. La serie es homogénea.
+                </p>
+              ) : (
+                <ul className="space-y-1 text-[10.5px] text-slate-600 dark:text-slate-300">
+                  {analitica.atipicosPct.map(a => (
+                    <li key={`p${a.indice}`}>
+                      <strong>{analitica.cerrados[a.indice]?.label}</strong> — % Ralentí {a.valor.toFixed(2)}% frente a{' '}
+                      {a.esperado.toFixed(2)}% esperado (z={a.z.toFixed(1)})
+                    </li>
+                  ))}
+                  {analitica.atipicosEventos.map(a => (
+                    <li key={`e${a.indice}`}>
+                      <strong>{analitica.cerrados[a.indice]?.label}</strong> — {Math.round(a.valor).toLocaleString('es-CO')} alertas
+                      frente a {Math.round(a.esperado).toLocaleString('es-CO')} esperadas (z={a.z.toFixed(1)})
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="text-[10px] text-slate-400 dark:text-slate-500 italic">
+                El residuo se mide contra la tendencia, no contra el promedio, para no marcar como
+                anomalía lo que es simple evolución.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Comparison Table ── */}
       <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-6 shadow-sm">
@@ -944,10 +1215,26 @@ export const RalentiAnalisisGeneral: React.FC<{
                 return (
                   <tr key={p.key} className={`transition-colors hover:bg-slate-50/70 dark:hover:bg-slate-700/30 ${isBaseline ? 'bg-blue-50/60 dark:bg-blue-950/20' : ''} ${isLatest && !isBaseline ? 'bg-slate-50/40 dark:bg-slate-700/10' : ''}`}>
                     <td className="py-3 px-4 font-semibold text-slate-800 dark:text-slate-200">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         {p.label}
                         {isBaseline && <span className="text-[9px] bg-[#003366] text-white px-1.5 py-0.5 rounded-full font-bold">BASE</span>}
-                        {isLatest && !isBaseline && <span className="text-[9px] bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-300 px-1.5 py-0.5 rounded-full font-bold">ACTUAL</span>}
+                        {isLatest && !isBaseline && !p.enCurso && <span className="text-[9px] bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-300 px-1.5 py-0.5 rounded-full font-bold">ACTUAL</span>}
+                        {p.enCurso && (
+                          <span
+                            className="text-[9px] bg-amber-100 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 px-1.5 py-0.5 rounded-full font-bold"
+                            title="La quincena aún no termina: las cifras son parciales y no se usan en las tarjetas ni en el modelo estadístico."
+                          >
+                            EN CURSO
+                          </span>
+                        )}
+                        {p.sinCombustible && (
+                          <span
+                            className="text-[9px] bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-1.5 py-0.5 rounded-full font-bold"
+                            title="Hay ralentí registrado pero 0 galones: CO₂ y costo no son comparables en este período."
+                          >
+                            SIN GALONES
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td className="py-3 px-3 text-slate-600 dark:text-slate-400">{p.vehiculosActivos}</td>
