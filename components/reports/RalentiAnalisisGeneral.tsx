@@ -24,6 +24,10 @@ import {
   regresionLineal, proyectar, correlacion, fuerzaCorrelacion, detectarAtipicos,
   descomponerCambio, type Punto, type Regresion,
 } from '../../services/ralentiAnalytics';
+import {
+  estandarizar, elegirK, distanciaAlCentroide,
+  entrenarLogistica, predecirProbabilidad, evaluar,
+} from '../../services/ralentiML';
 
 // ── CO₂ factors (kg/gal) — FECOC/UPME ──
 const CO2_FACTORES: { test: (t: string) => boolean; factor: number }[] = [
@@ -741,6 +745,146 @@ export const RalentiAnalisisGeneral: React.FC<{
     };
   }, [periods]);
 
+  /**
+   * Capa ML sobre el VEHÍCULO (no sobre la quincena).
+   *
+   * A nivel de serie solo hay 8 puntos y cualquier modelo sobreajusta; a nivel de vehículo
+   * hay cientos de unidades y miles de filas vehículo-quincena, que sí sostienen:
+   *   • segmentación no supervisada (k-means++ con k por silueta),
+   *   • detección de atípicos por distancia al propio centroide,
+   *   • predicción de reincidencia (logística con validación TEMPORAL: se entrena con las
+   *     quincenas antiguas y se evalúa sobre la última transición, jamás vista).
+   *
+   * Se recalcula con los filtros activos: la segmentación de un contrato no tiene por qué
+   * coincidir con la de la flota completa.
+   */
+  const ml = useMemo(() => {
+    const cerradas = new Set(
+      allRows.filter(r => isQuincenaPeriodo(r.periodo_inicio, r.periodo_fin) && r.periodo_fin < hoyISO())
+        .map(r => `${r.periodo_inicio}_${r.periodo_fin}`)
+    );
+    const quincenas = [...cerradas].sort();
+    if (quincenas.length < 3) return null;
+
+    interface Celda { mot: number; ral: number; nEv: number; segEv: number; largos: number }
+    const celda = new Map<string, Celda>();
+    const clave = (v: string, q: string) => `${v}|${q}`;
+    const tomar = (k: string) => {
+      let c = celda.get(k);
+      if (!c) { c = { mot: 0, ral: 0, nEv: 0, segEv: 0, largos: 0 }; celda.set(k, c); }
+      return c;
+    };
+
+    for (const r of allRows) {
+      const q = `${r.periodo_inicio}_${r.periodo_fin}`;
+      if (!cerradas.has(q)) continue;
+      if (hasFilter && !filteredVehIds.has(String(r.vehiculo_id))) continue;
+      const c = tomar(clave(String(r.vehiculo_id), q));
+      c.mot += Number(r.horas_motor_encendido) || 0;
+      c.ral += Number(r.horas_motor_ralenti) || 0;
+    }
+    for (const e of allEvents) {
+      const q = `${e.periodo_inicio}_${e.periodo_fin}`;
+      if (!cerradas.has(q)) continue;
+      if (hasFilter && !filteredVehIds.has(String(e.vehiculo_id))) continue;
+      if (esConductorTaller(e.conductor_nombre)) continue;
+      const d = Number(e.duracion_segundos) || 0;
+      if (d < umbralRalentiSeg(e.proveedor)) continue;
+      const c = tomar(clave(String(e.vehiculo_id), q));
+      c.nEv++; c.segEv += d; if (d > 1800) c.largos++;
+    }
+
+    // Perfil agregado por vehículo (mínimo 3 quincenas para que el promedio signifique algo)
+    const porVeh = new Map<string, Celda[]>();
+    for (const [k, c] of celda) {
+      const v = k.split('|')[0];
+      const arr = porVeh.get(v) ?? [];
+      arr.push(c); porVeh.set(v, arr);
+    }
+    const ids = [...porVeh.keys()].filter(v => porVeh.get(v)!.length >= 3);
+    if (ids.length < 12) return null;
+
+    const NOMBRES = ['% Ralentí', 'Horas ralentí/quincena', 'Duración media (min)', 'Eventos/quincena', '% eventos >30 min'];
+    const rasgos = (cs: Celda[]): number[] => {
+      const n = cs.length;
+      const mot = cs.reduce((a, c) => a + c.mot, 0), ral = cs.reduce((a, c) => a + c.ral, 0);
+      const nEv = cs.reduce((a, c) => a + c.nEv, 0), seg = cs.reduce((a, c) => a + c.segEv, 0);
+      const lg = cs.reduce((a, c) => a + c.largos, 0);
+      return [mot > 0 ? (ral / mot) * 100 : 0, ral / n, nEv > 0 ? (seg / nEv) / 60 : 0, nEv / n, nEv > 0 ? (lg / nEv) * 100 : 0];
+    };
+    const X = ids.map(v => rasgos(porVeh.get(v)!));
+    const est = estandarizar(X);
+    const seg = elegirK(est.datos, 2, 5, 42);
+    if (!seg) return null;
+
+    const grupos = Array.from({ length: seg.k }, (_, c) => {
+      const idx = seg.modelo.asignaciones.flatMap((a, i) => a === c ? [i] : []);
+      const perfil = NOMBRES.map((_, j) => idx.reduce((a, i) => a + X[i][j], 0) / Math.max(idx.length, 1));
+      return { c, idx, perfil };
+    }).sort((a, b) => b.perfil[1] - a.perfil[1]);
+
+    const dist = distanciaAlCentroide(est.datos, seg.modelo);
+    const atipicos = dist.map((d, i) => ({ d, i })).sort((a, b) => b.d - a.d).slice(0, 5)
+      .filter(o => o.d > 3);
+
+    // ── Reincidencia: ¿estará en el quintil superior de ralentí la próxima quincena? ──
+    const umbralQuintil = quincenas.map(q => {
+      const vals = ids.map(v => celda.get(clave(v, q))?.ral ?? 0).filter(x => x > 0).sort((a, b) => b - a);
+      return vals.length > 0 ? (vals[Math.floor(vals.length * 0.2)] ?? Infinity) : Infinity;
+    });
+    const filas: { qi: number; x: number[]; y: number; v: string }[] = [];
+    for (let qi = 0; qi < quincenas.length - 1; qi++) {
+      for (const v of ids) {
+        const a = celda.get(clave(v, quincenas[qi])), b = celda.get(clave(v, quincenas[qi + 1]));
+        if (!a || !b || a.mot <= 0) continue;
+        filas.push({
+          qi, v,
+          x: [(a.ral / a.mot) * 100, a.ral, a.nEv > 0 ? (a.segEv / a.nEv) / 60 : 0, a.nEv, a.nEv > 0 ? (a.largos / a.nEv) * 100 : 0],
+          y: b.ral >= umbralQuintil[qi + 1] ? 1 : 0,
+        });
+      }
+    }
+    const corte = quincenas.length - 2;
+    const tr = filas.filter(f => f.qi < corte), te = filas.filter(f => f.qi === corte);
+
+    let prediccion: null | {
+      metricas: ReturnType<typeof evaluar>; tasaBase: number; pesos: number[];
+      riesgo: { vehiculoId: string; prob: number }[];
+    } = null;
+
+    if (tr.length > 40 && te.length > 15 && tr.some(f => f.y === 1) && tr.some(f => f.y === 0)) {
+      const e2 = estandarizar(tr.map(f => f.x));
+      const modelo = entrenarLogistica(e2.datos, tr.map(f => f.y), { tasa: 0.3, iteraciones: 3000, l2: 0.01 });
+      if (modelo) {
+        const escalar = (x: number[]) => x.map((v, j) => (v - e2.medias[j]) / e2.desviaciones[j]);
+        const pTest = te.map(f => predecirProbabilidad(modelo, escalar(f.x)));
+        // Riesgo hacia adelante: se puntúa la ÚLTIMA quincena observada de cada vehículo.
+        const ultima = quincenas[quincenas.length - 1];
+        const riesgo = ids.flatMap(v => {
+          const c = celda.get(clave(v, ultima));
+          if (!c || c.mot <= 0) return [];
+          const x = [(c.ral / c.mot) * 100, c.ral, c.nEv > 0 ? (c.segEv / c.nEv) / 60 : 0, c.nEv, c.nEv > 0 ? (c.largos / c.nEv) * 100 : 0];
+          return [{ vehiculoId: v, prob: predecirProbabilidad(modelo, escalar(x)) }];
+        }).sort((a, b) => b.prob - a.prob).slice(0, 8);
+
+        prediccion = {
+          metricas: evaluar(pTest, te.map(f => f.y)),
+          tasaBase: te.filter(f => f.y === 1).length / te.length,
+          pesos: modelo.pesos,
+          riesgo,
+        };
+      }
+    }
+
+    return { NOMBRES, ids, X, seg, grupos, dist, atipicos, prediccion, nQuincenas: quincenas.length, nFilas: filas.length };
+  }, [allRows, allEvents, filteredVehIds, hasFilter]);
+
+  const placaDe = useMemo(() => {
+    const m = new Map<string, string>();
+    vehicles.forEach(v => m.set(String(v.id), v.placa));
+    return (id: string) => m.get(String(id)) ?? id.slice(0, 8);
+  }, [vehicles]);
+
   const BAR_COLORS = ['#003366', '#f97316', '#10b981', '#6366f1', '#ec4899', '#f59e0b'];
   const barColors = periods.map((_, i) => BAR_COLORS[i % BAR_COLORS.length]);
 
@@ -1181,6 +1325,130 @@ export const RalentiAnalisisGeneral: React.FC<{
               </p>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* ── Segmentación y predicción (ML por vehículo) ── */}
+      {ml && (
+        <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-6 shadow-sm space-y-5">
+          <div>
+            <h3 className="font-bold text-slate-800 dark:text-slate-200 text-sm flex items-center gap-2">
+              <BrainCircuit className="w-4 h-4 text-fuchsia-500" />
+              Segmentación de Flota y Predicción
+              <span className="text-[10px] font-normal text-slate-400 dark:text-slate-500">
+                — {ml.ids.length} vehículos · {ml.nQuincenas} quincenas
+              </span>
+            </h3>
+            <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
+              El modelo trabaja sobre el <strong>vehículo</strong>, no sobre la serie: a nivel de quincena solo
+              hay {ml.nQuincenas} puntos y cualquier modelo sobreajustaría. Se recalcula con los filtros activos.
+            </p>
+          </div>
+
+          {/* Grupos */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[11px] font-bold text-slate-700 dark:text-slate-200">
+                {ml.seg.k} perfiles de comportamiento
+              </span>
+              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${ml.seg.silueta > 0.25
+                ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400'
+                : 'bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400'}`}>
+                silueta {ml.seg.silueta.toFixed(2)} — {ml.seg.silueta > 0.25 ? 'estructura creíble' : 'estructura débil'}
+              </span>
+              <span className="text-[10px] text-slate-400 dark:text-slate-500">
+                k elegido automáticamente por silueta, no fijado a ojo
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[700px] text-left border-collapse text-[11px]">
+                <thead>
+                  <tr className="bg-slate-100/70 dark:bg-slate-900/60 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-200 dark:border-slate-700">
+                    <th className="py-2 px-3">Perfil</th>
+                    <th className="py-2 px-3 text-right">Veh.</th>
+                    {ml.NOMBRES.map(n => <th key={n} className="py-2 px-3 text-right">{n}</th>)}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-700/60">
+                  {ml.grupos.map((g, orden) => {
+                    // La etiqueta se deriva del centroide, no se codifica a mano.
+                    const [pct, horas, dur, nEv, largos] = g.perfil;
+                    const inconsistente = pct > 100;
+                    const estacionario = !inconsistente && dur > 25 && nEv < 25;
+                    const cronico = !inconsistente && !estacionario && horas > 40;
+                    const nombre = inconsistente ? 'Datos inconsistentes'
+                      : estacionario ? 'Operación estacionaria'
+                      : cronico ? 'Ralentí crónico'
+                      : orden === ml.grupos.length - 1 ? 'Uso eficiente' : 'Ralentí moderado';
+                    const desc = inconsistente ? 'Ralentí mayor que las horas de motor: revisar la fuente, no la conducta.'
+                      : estacionario ? 'Pocos episodios pero muy largos: equipo trabajando detenido. Ralentí probablemente legítimo.'
+                      : cronico ? 'Muchos episodios y muchas horas: es aquí donde hay desperdicio evitable.'
+                      : orden === ml.grupos.length - 1 ? 'Episodios cortos y esporádicos.' : 'Comportamiento intermedio.';
+                    const tono = inconsistente ? 'text-slate-500' : cronico ? 'text-red-600 dark:text-red-400'
+                      : estacionario ? 'text-sky-600 dark:text-sky-400' : 'text-emerald-600 dark:text-emerald-400';
+                    return (
+                      <tr key={g.c} className="align-top">
+                        <td className="py-2.5 px-3">
+                          <span className={`block font-bold ${tono}`}>{nombre}</span>
+                          <span className="block text-[10px] text-slate-400 dark:text-slate-500 max-w-[260px]">{desc}</span>
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-semibold text-slate-700 dark:text-slate-200">{g.idx.length}</td>
+                        {g.perfil.map((v, j) => (
+                          <td key={j} className="py-2.5 px-3 text-right text-slate-600 dark:text-slate-300">{v.toFixed(1)}</td>
+                        ))}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {ml.atipicos.length > 0 && (
+              <p className="text-[10.5px] text-amber-700 dark:text-amber-400">
+                <strong>{ml.atipicos.length} vehículo(s) no encajan ni en su propio perfil</strong> (distancia al centroide &gt; 3σ):{' '}
+                {ml.atipicos.map(o => placaDe(ml.ids[o.i])).join(', ')}. Suelen ser errores de telemetría antes que conducta extrema.
+              </p>
+            )}
+          </div>
+
+          {/* Predicción */}
+          {ml.prediccion ? (
+            <div className="rounded-lg border border-fuchsia-200 dark:border-fuchsia-900/50 bg-fuchsia-50/50 dark:bg-fuchsia-950/20 p-3 space-y-2">
+              <span className="text-[11px] font-bold text-slate-700 dark:text-slate-200">
+                Predicción de reincidencia — ¿qué vehículos seguirán en el 20% de mayor ralentí?
+              </span>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10.5px] text-slate-600 dark:text-slate-300">
+                <span><strong>AUC {ml.prediccion.metricas.auc.toFixed(3)}</strong></span>
+                <span>exactitud {(ml.prediccion.metricas.exactitud * 100).toFixed(1)}%</span>
+                <span>precisión {(ml.prediccion.metricas.precision * 100).toFixed(1)}%</span>
+                <span>sensibilidad {(ml.prediccion.metricas.sensibilidad * 100).toFixed(1)}%</span>
+                <span className="text-slate-400">tasa base {(ml.prediccion.tasaBase * 100).toFixed(1)}%</span>
+              </div>
+              <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                Regresión logística con <strong>validación temporal</strong>: se entrena con las quincenas antiguas y
+                se mide sobre la última transición, que el modelo nunca vio. No hay fuga de información.
+                {ml.prediccion.metricas.auc > 0.7
+                  ? ' El AUC confirma que la señal es real y no azar.'
+                  : ' El AUC es bajo: tómelo como indicativo, no como criterio de decisión.'}
+                {ml.prediccion.metricas.sensibilidad < 0.5 &&
+                  ' Con umbral 0,5 el modelo prioriza acertar cuando señala (alta precisión) a costa de dejar pasar reincidentes.'}
+              </p>
+              {ml.prediccion.riesgo.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {ml.prediccion.riesgo.map(r => (
+                    <span key={r.vehiculoId}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200">
+                      {placaDe(r.vehiculoId)}
+                      <span className="text-fuchsia-600 dark:text-fuchsia-400">{(r.prob * 100).toFixed(0)}%</span>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="text-[10.5px] text-slate-400 dark:text-slate-500 italic">
+              Historial insuficiente para entrenar el modelo de reincidencia con validación temporal honesta.
+            </p>
+          )}
         </div>
       )}
 
