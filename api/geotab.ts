@@ -12,9 +12,14 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
  *   POST /api/geotab  { action: 'counts' }        -> { vehicleCount, driverCount }
  *   POST /api/geotab  { action: 'dailyMetrics', fromDate, toDate }
  *                                                 -> { metrics: [{date, deviceId, plate, km, drivingHours, idlingHours, trips}] }
+ *   POST /api/geotab  { action: 'idlingEvents', fromDate, toDate }
+ *                                                 -> { rule, events: [{plate, deviceId, from, to, durationSeconds}] }
  *
  * Credenciales: SOLO por variables de entorno (Vercel). Nunca hardcodear.
  */
+
+// Rangos de una quincena completa pueden superar el timeout por defecto.
+export const config = { maxDuration: 60 };
 
 const GEOTAB_DATABASE = process.env.GEOTAB_DATABASE;
 const GEOTAB_USER = process.env.GEOTAB_USER;
@@ -316,6 +321,75 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           success: true,
           source: 'geotab',
           data: { fromDate, toDate, metrics: Object.values(agg) },
+        });
+      }
+
+      // ---- Eventos individuales de ralentí (regla "Idling" de MyGeotab) ----
+      // A diferencia del export "Reporte avanzado de viajes en detalle" —que solo trae
+      // el ralentí ACUMULADO por viaje— la regla Idling genera un ExceptionEvent por cada
+      // episodio, con inicio y fin reales. Es lo que permite alimentar ralentis_eventos
+      // sin estimar duraciones.
+      case 'idlingEvents': {
+        const fromDate = req.body?.fromDate as string;
+        const toDate = req.body?.toDate as string;
+        if (!fromDate || !toDate) {
+          return res.status(400).json({ error: 'idlingEvents requiere fromDate y toDate (ISO)' });
+        }
+
+        const [rules, deviceMap] = await Promise.all([
+          call('Get', { typeName: 'Rule' }),
+          buildDeviceMap(),
+        ]);
+        const idlingRule = rules.find((r: any) => /^idling$/i.test(r.name || ''))
+          ?? rules.find((r: any) => /ralent|idl/i.test(r.name || ''));
+        if (!idlingRule) {
+          return res.status(200).json({
+            success: true,
+            source: 'geotab',
+            data: { rule: null, events: [], message: 'No hay regla de ralentí configurada en MyGeotab' },
+          });
+        }
+
+        const RESULTS_LIMIT = 50000;
+        const raw: any[] = await call('Get', {
+          typeName: 'ExceptionEvent',
+          search: { fromDate, toDate, ruleSearch: { id: idlingRule.id } },
+          resultsLimit: RESULTS_LIMIT,
+        });
+        // Geotab no pagina `Get`: si se alcanza el tope, el rango debe partirse.
+        const truncado = raw.length >= RESULTS_LIMIT;
+
+        const events = raw
+          .filter((e) => e.device?.id && e.activeFrom)
+          .map((e) => {
+            const dev = deviceMap[e.device.id] || {};
+            const ini = new Date(e.activeFrom).getTime();
+            const fin = e.activeTo ? new Date(e.activeTo).getTime() : NaN;
+            // `duration` viene como "HH:MM:SS"; si falta se deriva de activeFrom/activeTo.
+            const durH = durationToHours(e.duration);
+            const durationSeconds = durH > 0
+              ? Math.round(durH * 3600)
+              : (Number.isFinite(fin) && fin > ini ? Math.round((fin - ini) / 1000) : 0);
+            return {
+              plate: dev.plate || e.device.id,
+              deviceId: e.device.id,
+              driverId: e.driver?.id && e.driver.id !== 'UnknownDriverId' ? e.driver.id : null,
+              from: e.activeFrom,
+              to: e.activeTo ?? null,
+              durationSeconds,
+            };
+          })
+          .filter((e) => e.durationSeconds > 0);
+
+        return res.status(200).json({
+          success: true,
+          source: 'geotab',
+          data: {
+            rule: { id: idlingRule.id, name: idlingRule.name },
+            count: events.length,
+            truncado,
+            events,
+          },
         });
       }
 

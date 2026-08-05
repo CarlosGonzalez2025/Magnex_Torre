@@ -103,7 +103,10 @@ const precioCombustiblePorGalon = (tipoCombustible?: string | null): number | nu
 // Cada plataforma define la alerta con un umbral propio: Coltrack a partir de 10 min,
 // Fagor a partir de 5 min. El conteo de alertas y la analítica de excesos se calcula
 // SOLO sobre los eventos que superan el umbral nativo de su proveedor (no se normaliza).
-const UMBRAL_RALENTI_SEG: Record<string, number> = { COLTRACK: 600, FAGOR: 300 };
+// GEOTAB va en 0 a propósito: sus eventos provienen de la regla "Idling" de MyGeotab, que
+// YA aplica su propio umbral en la plataforma — todo evento que llega es, por definición,
+// un exceso. Filtrarlo aquí otra vez descartaría alertas legítimas.
+const UMBRAL_RALENTI_SEG: Record<string, number> = { COLTRACK: 600, FAGOR: 300, GEOTAB: 0 };
 const umbralRalentiSeg = (proveedor?: string | null): number =>
   UMBRAL_RALENTI_SEG[(proveedor ?? '').toUpperCase().trim()] ?? 300;
 
