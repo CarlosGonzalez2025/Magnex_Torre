@@ -58,7 +58,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   // Ventana a sincronizar (idempotente por la llave única fecha+device_id).
-  const days = Math.min(Math.max(Number(req.query.days) || DEFAULT_SYNC_DAYS, 1), 90);
+  // El tope se subió de 90 a 400 días para permitir el backfill histórico del informe de
+  // ralentí (alinear Geotab con Coltrack/Fagor desde abril 2026 exige 126 días).
+  const days = Math.min(Math.max(Number(req.query.days) || DEFAULT_SYNC_DAYS, 1), 400);
 
   try {
     const toDate = new Date().toISOString();
