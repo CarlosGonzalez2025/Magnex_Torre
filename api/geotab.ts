@@ -292,12 +292,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const deviceMap = await buildDeviceMap();
         const trips = await getFeedAll('Trip', { fromDate, toDate });
 
+        // El feed de Trip respeta `fromDate` pero IGNORA `toDate`: pedir un rango de 2 días
+        // devuelve todo desde fromDate hasta hoy (verificado contra la API en ago-2026). Por
+        // eso el corte superior se aplica aquí, sobre la fecha local, o el agregado incluiría
+        // días fuera de la ventana solicitada.
+        const desde = colombiaDate(fromDate);
+        const hasta = colombiaDate(toDate);
+
         // Agregación por (fecha local, dispositivo).
         const agg: Record<string, any> = {};
         for (const t of trips) {
           const deviceId = t.device?.id;
           if (!deviceId || !t.start) continue;
           const date = colombiaDate(t.start);
+          if (date < desde || date > hasta) continue;
           const key = `${date}::${deviceId}`;
           if (!agg[key]) {
             const dev = deviceMap[deviceId] || {};
