@@ -37,12 +37,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
   }
 
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  // El proyecto declara la URL de Supabase como VITE_SUPABASE_URL (la usa el bundle del
+  // cliente). En las funciones serverless el prefijo VITE_ no significa nada, así que se
+  // acepta cualquiera de los dos nombres en vez de exigir un duplicado en Vercel.
+  const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
   if (!supabaseUrl || !serviceKey) {
     return res.status(500).json({
       error: 'Sync no configurado',
-      message: 'Faltan env vars SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY',
+      // Se indica exactamente cuál falta (solo presencia, nunca el valor).
+      message: 'Faltan variables de entorno en Vercel',
+      detalle: {
+        SUPABASE_URL: !!process.env.SUPABASE_URL,
+        VITE_SUPABASE_URL: !!process.env.VITE_SUPABASE_URL,
+        SUPABASE_SERVICE_ROLE_KEY: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+        SUPABASE_SERVICE_KEY: !!process.env.SUPABASE_SERVICE_KEY,
+      },
+      ayuda: 'Defina la URL (SUPABASE_URL o VITE_SUPABASE_URL) y la service role key, y vuelva a desplegar: Vercel solo aplica variables nuevas a despliegues posteriores.',
     });
   }
 

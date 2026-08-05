@@ -11,6 +11,10 @@
     {
       "path": "/api/geotab-sync",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/geotab-ralenti-sync",
+      "schedule": "30 5 * * *"
     }
   ]
 }

@@ -1846,7 +1846,8 @@ async function asegurarVehiculoEnMaestro(
 async function upsertRalentisPeriodos(
   records: any[],
   periodoInicio: string,
-  periodoFin: string
+  periodoFin: string,
+  fuente: 'COLTRACK' | 'FAGOR'
 ): Promise<void> {
   const ralentisData = records
     .filter(r =>
@@ -1865,6 +1866,8 @@ async function upsertRalentisPeriodos(
       kms_recorridos:        Number(r.km_recorridos_ralenti ?? r.kms_recorridos ?? 0),
       consumo_combustible:   Number(r.consumo_combustible ?? 0),
       encendidos_apagados:   Number(r.encendidos_apagados ?? 0),
+      // Marca de procedencia: el sync de Geotab respeta las filas que no son suyas.
+      fuente,
     }));
 
   if (ralentisData.length === 0) return;
@@ -1984,6 +1987,7 @@ export async function importarDatosPlanosColtrack(
   usuarioId?: string
 ): Promise<ImportResult> {
   const erroresGlobales: ValidationError[] = [];
+  const advertenciasGlobales: string[] = [];
   let registrosInsertados = 0;
   const detailedEvents: any[] = [];
   // Agregación por vehículo del archivo semanal de excesos (galones / horas / conteo REALES).
@@ -2022,9 +2026,11 @@ export async function importarDatosPlanosColtrack(
   let fileFaltasVeh: File | null = null;
   let fileRalenti: File | null = null;
   let fileRalentiDetalle: File | null = null;
-  // Archivo semanal de "Excesos de Ralentí" (XLSX): trae duración y galones REALES por evento.
-  // Cuando está presente reemplaza la estimación sintética del CSV "Ralenti 2".
-  let fileExcesosSemanal: File | null = null;
+  // Archivos semanales de "Excesos de Ralentí" (XLSX): traen duración y galones REALES por evento.
+  // Cuando están presentes reemplazan la estimación sintética del CSV "Ralenti 2".
+  // Se acepta MÁS DE UNO porque una quincena la cubren 2–3 exports semanales; antes solo se
+  // procesaba el último y su agregado sobrescribía los totales del período (subconteo).
+  const filesExcesosSemanal: File[] = [];
 
   for (const file of files) {
     // El semanal de Coltrack es XLSX; los demás insumos Coltrack son CSV de texto plano.
@@ -2038,7 +2044,7 @@ export async function importarDatosPlanosColtrack(
         const hasPlaca = firstRow.some(h => /^placa$/i.test(h));
         const hasInicio = firstRow.some(h => /inicio\s*exceso/i.test(h));
         const hasDuracion = firstRow.some(h => /duracion/i.test(h));
-        if (hasPlaca && hasInicio && hasDuracion) fileExcesosSemanal = file;
+        if (hasPlaca && hasInicio && hasDuracion) filesExcesosSemanal.push(file);
       } catch {
         // Si no se puede leer como workbook, se ignora.
       }
@@ -2060,7 +2066,7 @@ export async function importarDatosPlanosColtrack(
     }
   }
 
-  if (!fileFaltasCond && !fileFaltasVeh && !fileRalenti && !fileRalentiDetalle && !fileExcesosSemanal) {
+  if (!fileFaltasCond && !fileFaltasVeh && !fileRalenti && !fileRalentiDetalle && filesExcesosSemanal.length === 0) {
     throw new Error('No se detectó ningún archivo válido para procesar en Coltrack (consolidado de faltas, ralentí o excesos semanales).');
   }
 
@@ -2308,7 +2314,7 @@ export async function importarDatosPlanosColtrack(
           .upsert(consolizadosFinal, { onConflict: 'vehiculo_id,periodo_inicio,periodo_fin,fuente' });
         if (error) throw new Error(`Error insertando vehículos Coltrack: ${error.message}`);
         // Guardar ralentís en tabla dedicada (idempotente por periodo)
-        await upsertRalentisPeriodos(consolizadosFinal, periodoInicio, periodoFin);
+        await upsertRalentisPeriodos(consolizadosFinal, periodoInicio, periodoFin, 'COLTRACK');
         registrosInsertados += consolizados.length;
       }
     }
@@ -2316,7 +2322,7 @@ export async function importarDatosPlanosColtrack(
     // 4. Procesar Eventos Detallados de Ralentí Coltrack (Ralenti 2).
     //    Esta ruta ESTIMA la duración por reparto uniforme; solo se usa si NO vino el
     //    archivo semanal de excesos (que sí trae duración y galones reales por evento).
-    if (fileRalentiDetalle && !fileExcesosSemanal) {
+    if (fileRalentiDetalle && filesExcesosSemanal.length === 0) {
       console.log('Procesando eventos detallados de ralentí Coltrack (Ralenti 2, duración estimada)...');
       const detContent = await fileRalentiDetalle.text();
       const detLines = detContent.split('\n').filter(l => l.trim().length > 0);
@@ -2450,81 +2456,109 @@ export async function importarDatosPlanosColtrack(
 
     // 4b. Procesar archivo SEMANAL de Excesos de Ralentí Coltrack (duración y galones REALES por evento).
     //     Reemplaza la estimación sintética del CSV "Ralenti 2".
-    if (fileExcesosSemanal) {
-      console.log('Procesando archivo semanal de excesos de ralentí Coltrack (datos reales)...');
-      const ab = await fileExcesosSemanal.arrayBuffer();
-      const wb = XLSX.read(new Uint8Array(ab), { type: 'array' });
-      const sheet = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' }) as any[];
+    if (filesExcesosSemanal.length > 0) {
+      console.log(`Procesando ${filesExcesosSemanal.length} archivo(s) semanal(es) de excesos de ralentí Coltrack (datos reales)...`);
       const eventosSemanal: any[] = [];
+      // Dedupe entre semanas solapadas: el mismo evento no debe sumar dos veces al agregado.
+      const vistos = new Set<string>();
+      // Los exports semanales no se alinean con la quincena: los eventos fuera del período
+      // seleccionado se descartan (si no, contaminarían los totales de ralentis_periodos).
+      let eventosFueraDeRango = 0;
 
-      for (const row of rows) {
-        const placaRaw = String(row['Placa'] ?? '').trim();
-        const placaNorm = normPlate(placaRaw);
-        if (!placaNorm) continue;
+      for (const fileSemanal of filesExcesosSemanal) {
+        const ab = await fileSemanal.arrayBuffer();
+        const wb = XLSX.read(new Uint8Array(ab), { type: 'array' });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' }) as any[];
 
-        const fechaInicioISO = excelDateTimeToISO(row['Inicio Exceso']);
-        if (!fechaInicioISO) continue;
-        const fechaFinISO = excelDateTimeToISO(row['Fin Exceso']);
+        for (const row of rows) {
+          const placaRaw = String(row['Placa'] ?? '').trim();
+          const placaNorm = normPlate(placaRaw);
+          if (!placaNorm) continue;
 
-        // Duración real: preferir (Fin - Inicio) sobre los seriales Excel; fallback al texto "hh:mm:ss".
-        let duracionSegundos = 0;
-        const ini = row['Inicio Exceso'];
-        const fin = row['Fin Exceso'];
-        if (typeof ini === 'number' && typeof fin === 'number' && fin > ini) {
-          duracionSegundos = Math.round((fin - ini) * 86400);
-        }
-        if (duracionSegundos <= 0) {
-          const parts = String(row['Duracion (24hh:mm:ss)'] ?? '').split(':').map(n => parseInt(n, 10) || 0);
-          if (parts.length === 3) duracionSegundos = parts[0] * 3600 + parts[1] * 60 + parts[2];
-        }
-        if (duracionSegundos <= 0) continue;
+          const fechaInicioISO = excelDateTimeToISO(row['Inicio Exceso']);
+          if (!fechaInicioISO) continue;
+          const fechaFinISO = excelDateTimeToISO(row['Fin Exceso']);
 
-        const galones = num(row['Número Estimado de Galones'] ?? row['Numero Estimado de Galones']);
-
-        const foundVeh = await asegurarVehiculoEnMaestro(placaRaw, vehicPorPlaca, normPlate);
-        if (!foundVeh) continue;
-
-        const conductorNombre = String(row['Conductor'] ?? '').trim();
-        let conductorId = null;
-        if (!esConductorNoIdentificado(conductorNombre)) {
-          const foundCond = await asegurarConductorEnMaestro(
-            conductorNombre, undefined, undefined,
-            conductPorNombreNorm, conductPorCedula, normName
-          );
-          conductorId = foundCond?.id ?? null;
-        }
-
-        let fechaFinFinal = fechaFinISO;
-        if (!fechaFinFinal) {
-          const startDate = new Date(fechaInicioISO);
-          if (!isNaN(startDate.getTime())) {
-            fechaFinFinal = new Date(startDate.getTime() + duracionSegundos * 1000).toISOString();
+          // excelDateTimeToISO devuelve reloj de pared local (YYYY-MM-DDTHH:MM:SS),
+          // por eso basta comparar la fecha como texto contra el rango del período.
+          const diaEvento = fechaInicioISO.slice(0, 10);
+          if (diaEvento < periodoInicio || diaEvento > periodoFin) {
+            eventosFueraDeRango++;
+            continue;
           }
+
+          const claveEvento = `${placaNorm}|${fechaInicioISO}`;
+          if (vistos.has(claveEvento)) continue;
+          vistos.add(claveEvento);
+
+          // Duración real: preferir (Fin - Inicio) sobre los seriales Excel; fallback al texto "hh:mm:ss".
+          let duracionSegundos = 0;
+          const ini = row['Inicio Exceso'];
+          const fin = row['Fin Exceso'];
+          if (typeof ini === 'number' && typeof fin === 'number' && fin > ini) {
+            duracionSegundos = Math.round((fin - ini) * 86400);
+          }
+          if (duracionSegundos <= 0) {
+            const parts = String(row['Duracion (24hh:mm:ss)'] ?? '').split(':').map(n => parseInt(n, 10) || 0);
+            if (parts.length === 3) duracionSegundos = parts[0] * 3600 + parts[1] * 60 + parts[2];
+          }
+          if (duracionSegundos <= 0) continue;
+
+          const galones = num(row['Número Estimado de Galones'] ?? row['Numero Estimado de Galones']);
+
+          const foundVeh = await asegurarVehiculoEnMaestro(placaRaw, vehicPorPlaca, normPlate);
+          if (!foundVeh) continue;
+
+          const conductorNombre = String(row['Conductor'] ?? '').trim();
+          let conductorId = null;
+          if (!esConductorNoIdentificado(conductorNombre)) {
+            const foundCond = await asegurarConductorEnMaestro(
+              conductorNombre, undefined, undefined,
+              conductPorNombreNorm, conductPorCedula, normName
+            );
+            conductorId = foundCond?.id ?? null;
+          }
+
+          let fechaFinFinal = fechaFinISO;
+          if (!fechaFinFinal) {
+            const startDate = new Date(fechaInicioISO);
+            if (!isNaN(startDate.getTime())) {
+              fechaFinFinal = new Date(startDate.getTime() + duracionSegundos * 1000).toISOString();
+            }
+          }
+
+          eventosSemanal.push({
+            vehiculo_id: foundVeh.id,
+            conductor_id: conductorId,
+            placa: placaNorm,
+            conductor_nombre: conductorNombre || 'NO REGISTRA',
+            fecha_inicio: fechaInicioISO,
+            fecha_fin: fechaFinFinal,
+            duracion_segundos: duracionSegundos,
+            galones_consumidos: galones,
+            ubicacion: String(row['Lugar'] || row['Dirección (Click para Maps)'] || row['Ciudad'] || '').trim(),
+            latitud: null,
+            longitud: null,
+            proveedor: 'COLTRACK',
+            periodo_inicio: periodoInicio,
+            periodo_fin: periodoFin,
+          });
+
+          const agg = weeklyAgg.get(foundVeh.id) ?? { count: 0, galones: 0, horas: 0 };
+          agg.count++;
+          agg.galones += galones;
+          agg.horas += duracionSegundos / 3600;
+          weeklyAgg.set(foundVeh.id, agg);
         }
+      }
 
-        eventosSemanal.push({
-          vehiculo_id: foundVeh.id,
-          conductor_id: conductorId,
-          placa: placaNorm,
-          conductor_nombre: conductorNombre || 'NO REGISTRA',
-          fecha_inicio: fechaInicioISO,
-          fecha_fin: fechaFinFinal,
-          duracion_segundos: duracionSegundos,
-          galones_consumidos: galones,
-          ubicacion: String(row['Lugar'] || row['Dirección (Click para Maps)'] || row['Ciudad'] || '').trim(),
-          latitud: null,
-          longitud: null,
-          proveedor: 'COLTRACK',
-          periodo_inicio: periodoInicio,
-          periodo_fin: periodoFin,
-        });
-
-        const agg = weeklyAgg.get(foundVeh.id) ?? { count: 0, galones: 0, horas: 0 };
-        agg.count++;
-        agg.galones += galones;
-        agg.horas += duracionSegundos / 3600;
-        weeklyAgg.set(foundVeh.id, agg);
+      if (eventosFueraDeRango > 0) {
+        advertenciasGlobales.push(
+          `Se omitieron ${eventosFueraDeRango} eventos de los archivos semanales de Coltrack por estar fuera ` +
+          `del período ${periodoInicio}…${periodoFin}. Si esos días pertenecen al período, vuelva a cargar ` +
+          `con el rango correcto; si pertenecen a la otra quincena, cárguelos en esa quincena.`
+        );
       }
 
       if (eventosSemanal.length > 0) {
@@ -2583,6 +2617,7 @@ export async function importarDatosPlanosColtrack(
                   ? num(row['Consumo de combustible']) * (num(row['Horas motor en ralenti'] ?? row['Horas motor en ralentí']) / num(row['Horas motor encendido']))
                   : 0,
                 encendidos_apagados:   num(row['Encendido/Apagado']),
+                fuente:                'COLTRACK',
               });
             }
           }
@@ -2616,6 +2651,7 @@ export async function importarDatosPlanosColtrack(
           kms_recorridos:        0,
           consumo_combustible:   stats.combustible,
           encendidos_apagados:   0,
+          fuente:                'COLTRACK',
         }));
 
         if (ralentisDirectos.length > 0) {
@@ -2632,7 +2668,7 @@ export async function importarDatosPlanosColtrack(
     //     los totales de galones y nº de excesivos en ralentis_periodos se derivan de esos eventos,
     //     para que las tarjetas de resumen del informe coincidan exactamente con el detalle.
     //     Se preservan las horas de motor encendido/ralentí (Ralenti 1) como denominador del % ralentí.
-    if (fileExcesosSemanal && weeklyAgg.size > 0) {
+    if (filesExcesosSemanal.length > 0 && weeklyAgg.size > 0) {
       const existentes = await fetchAllRows(
         supabase
           .from('ralentis_periodos')
@@ -2656,6 +2692,7 @@ export async function importarDatosPlanosColtrack(
           horas_motor_encendido: ex ? Number(ex.horas_motor_encendido ?? 0) : 0,
           kms_recorridos: ex ? Number(ex.kms_recorridos ?? 0) : 0,
           encendidos_apagados: ex ? Number(ex.encendidos_apagados ?? 0) : 0,
+          fuente: 'COLTRACK',
         };
       });
 
@@ -2666,9 +2703,10 @@ export async function importarDatosPlanosColtrack(
     }
 
     const advCobertura = await advertenciaCoberturaMotor(periodoInicio, periodoFin);
+    if (advCobertura) advertenciasGlobales.push(advCobertura);
     return {
       cargaId, exito: true, registrosInsertados, errores: erroresGlobales,
-      advertencias: advCobertura ? [advCobertura] : undefined,
+      advertencias: advertenciasGlobales.length > 0 ? advertenciasGlobales : undefined,
     };
 
   } catch (err: any) {
@@ -2726,6 +2764,16 @@ export async function importarDatosPlanosFagor(
   const filesExcesos: File[] = [];
   const filesFrenadas: File[] = [];
   const filesAceleraciones: File[] = [];
+  // Grillas de telemetría con horas de motor a nivel de MATRÍCULA
+  // (`Grid_telemetría*.xlsx`, `Km_Vehículos_Fagor*.xlsx`, «Documento Ralenti 1 … Fagor.xlsx»).
+  //
+  // Fagor no exporta hoy un consolidado por vehículo con horas de motor: la única fuente es
+  // esta grilla diaria, que trae `Matrícula` y `Conductor` en la misma fila. Por eso la cadena
+  // if/else de abajo la clasificaba como «Km por conductor» y el informe de ralentí se quedaba
+  // sin `horas_motor_encendido` (denominador del % Ralentí) — con el efecto de que TODO el
+  // ralentí de Fagor quedaba excluido del cálculo. Esta detección es ADITIVA: el archivo sigue
+  // alimentando `reportes_conductores` y además se agrega por matrícula para `ralentis_periodos`.
+  const filesGridVehiculo: File[] = [];
 
   for (const file of files) {
     const arrayBuffer = await file.arrayBuffer();
@@ -2733,6 +2781,14 @@ export async function importarDatosPlanosFagor(
     const sheetName = wb.SheetNames[0];
     const sheet = wb.Sheets[sheetName];
     const rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
+
+    for (let i = 0; i < Math.min(rawRows.length, 15); i++) {
+      const rowStr = (rawRows[i] || []).map(c => String(c ?? '').trim());
+      if (rowStr.includes('Matrícula') && rowStr.includes('Horas Motor') && rowStr.includes('Ralentí Tiempo Total')) {
+        filesGridVehiculo.push(file);
+        break;
+      }
+    }
 
     if (rawRows.length > 0 && rawRows[0].includes('Código iButton') && rawRows[0].includes('DNI')) {
       fileConductores = file;
@@ -2816,7 +2872,7 @@ export async function importarDatosPlanosFagor(
   }
 
 
-  if (!fileKmCond && !fileKmVeh && filesRalenti.length === 0 && filesExcesos.length === 0 && filesFrenadas.length === 0 && filesAceleraciones.length === 0) {
+  if (!fileKmCond && !fileKmVeh && filesGridVehiculo.length === 0 && filesRalenti.length === 0 && filesExcesos.length === 0 && filesFrenadas.length === 0 && filesAceleraciones.length === 0) {
     throw new Error('No se detectó ningún archivo válido para procesar en Fagor (Km consolidado, Ralentí o archivos de Alertas).');
   }
 
@@ -3108,6 +3164,55 @@ export async function importarDatosPlanosFagor(
 
     // 3. Procesar Vehículos Fagor
 
+    // 3a. Agregado por MATRÍCULA de la grilla de telemetría diaria.
+    //
+    // Criterio acordado (ago-2026): cuando la grilla está presente es la fuente única de las
+    // métricas de motor/ralentí del período — horas de motor, ralentí TOTAL, km y galones de
+    // ralentí salen todos del mismo archivo. Así la definición de "% Ralentí" de Fagor queda
+    // alineada con la de Coltrack (que también reporta ralentí total, no solo los excesos) y la
+    // identidad física ralentí ≤ motor se cumple por construcción. Los archivos de alarmas
+    // siguen siendo la fuente del detalle por evento/conductor y del CONTEO de ralentís excesivos.
+    interface GridVehStats { horasMotor: number; horasRalenti: number; km: number; galones: number; placaOriginal: string; }
+    const gridVehMap = new Map<string, GridVehStats>();
+
+    for (const file of filesGridVehiculo) {
+      const abGrid = await file.arrayBuffer();
+      const wbGrid = XLSX.read(new Uint8Array(abGrid), { type: 'array' });
+      const sheetGrid = wbGrid.Sheets[wbGrid.SheetNames[0]];
+      const rawGrid = XLSX.utils.sheet_to_json(sheetGrid, { header: 1 }) as any[][];
+
+      // La cabecera no siempre está en la fila 0 (Km_Vehículos la trae desplazada).
+      let headerIdx = -1;
+      for (let i = 0; i < Math.min(rawGrid.length, 15); i++) {
+        const rowStr = (rawGrid[i] || []).map(c => String(c ?? '').trim());
+        if (rowStr.includes('Matrícula') && rowStr.includes('Horas Motor') && rowStr.includes('Ralentí Tiempo Total')) {
+          headerIdx = i;
+          break;
+        }
+      }
+      if (headerIdx < 0) continue;
+      const headersGrid = (rawGrid[headerIdx] || []).map(h => String(h ?? '').trim());
+
+      for (let i = headerIdx + 1; i < rawGrid.length; i++) {
+        const rowData = rawGrid[i];
+        if (!rowData || rowData.length <= 1) continue;
+        const row: any = {};
+        headersGrid.forEach((h, idx) => { row[h] = rowData[idx]; });
+
+        const placaOrig = String(row['Matrícula'] ?? '').trim();
+        const placa = normPlate(placaOrig);
+        if (!placa) continue;
+
+        const acc = gridVehMap.get(placa)
+          ?? { horasMotor: 0, horasRalenti: 0, km: 0, galones: 0, placaOriginal: placaOrig };
+        acc.horasMotor   += parseTimeStringToHours(row['Horas Motor']);
+        acc.horasRalenti += parseTimeStringToHours(row['Ralentí Tiempo Total']);
+        acc.km           += num(row['Km. Recorridos']);
+        acc.galones      += num(row['Ralentí Galones Total']);
+        gridVehMap.set(placa, acc);
+      }
+    }
+
     // Pre-procesar Ralentí fuera del bloque KmVeh para soportar uploads de solo-Ralentí
     interface RalentiStats { count: number; horas: number; combustible: number; placaOriginal: string; }
     const ralentiStatsMap = new Map<string, RalentiStats>();
@@ -3396,26 +3501,36 @@ export async function importarDatosPlanosFagor(
           });
         }
       }
-    } else if (ralentiStatsMap.size > 0) {
-      // Solo archivos de Ralentí: escribir ÚNICAMENTE en ralentis_periodos.
+    } else if (ralentiStatsMap.size > 0 || gridVehMap.size > 0) {
+      // Sin consolidado por vehículo: escribir ÚNICAMENTE en ralentis_periodos.
       // No crear filas en reportes_vehiculos con kms=0 porque taparían registros
       // de Km existentes y bloquearían el fallback a Coltrack en los informes.
+      //
+      // El universo es la UNIÓN de la grilla (aporta motor/ralentí/km/galones) y de las alarmas
+      // (aportan el conteo de excesivos). Un vehículo que solo aparece en la grilla también entra:
+      // suma al denominador y mejora la cobertura de motor del período.
+      const placasUnion = new Set<string>([...gridVehMap.keys(), ...ralentiStatsMap.keys()]);
       const ralentisDirectos: any[] = [];
-      for (const [, stats] of ralentiStatsMap.entries()) {
-        const foundVeh = await asegurarVehiculoEnMaestro(stats.placaOriginal, vehicPorPlaca, normPlate);
-        if (foundVeh) {
-          ralentisDirectos.push({
-            vehiculo_id:           foundVeh.id,
-            periodo_inicio:        periodoInicio,
-            periodo_fin:           periodoFin,
-            ralentis_excesivos:    stats.count,
-            horas_motor_encendido: 0,
-            horas_motor_ralenti:   stats.horas,
-            kms_recorridos:        0,
-            consumo_combustible:   stats.combustible,
-            encendidos_apagados:   0,
-          });
-        }
+      for (const placa of placasUnion) {
+        const grid = gridVehMap.get(placa);
+        const stats = ralentiStatsMap.get(placa);
+        const placaOriginal = grid?.placaOriginal ?? stats?.placaOriginal ?? placa;
+        const foundVeh = await asegurarVehiculoEnMaestro(placaOriginal, vehicPorPlaca, normPlate);
+        if (!foundVeh) continue;
+        ralentisDirectos.push({
+          vehiculo_id:           foundVeh.id,
+          periodo_inicio:        periodoInicio,
+          periodo_fin:           periodoFin,
+          ralentis_excesivos:    stats?.count ?? 0,
+          horas_motor_encendido: grid?.horasMotor ?? 0,
+          // Criterio acordado: con grilla presente, el ralentí y los galones salen de ella
+          // (ralentí TOTAL, comparable con Coltrack). Sin grilla se cae al agregado de alarmas.
+          horas_motor_ralenti:   grid ? grid.horasRalenti : (stats?.horas ?? 0),
+          kms_recorridos:        grid?.km ?? 0,
+          consumo_combustible:   grid ? grid.galones : (stats?.combustible ?? 0),
+          encendidos_apagados:   0,
+          fuente:                'FAGOR',
+        });
       }
       if (ralentisDirectos.length > 0) {
         const { error } = await supabase
@@ -3442,8 +3557,36 @@ export async function importarDatosPlanosFagor(
         .upsert(consolizadosFinal, { onConflict: 'vehiculo_id,periodo_inicio,periodo_fin,fuente' });
       if (error) throw new Error(`Error insertando vehículos Fagor: ${error.message}`);
       // Guardar ralentís en tabla dedicada (idempotente por periodo)
-      await upsertRalentisPeriodos(consolizadosFinal, periodoInicio, periodoFin);
+      await upsertRalentisPeriodos(consolizadosFinal, periodoInicio, periodoFin, 'FAGOR');
       registrosInsertados += consolizados.length;
+
+      // Vehículos que solo aparecen en la grilla de telemetría y no en el consolidado por
+      // vehículo: sin esto quedarían sin horas de motor y su ralentí se descartaría del % .
+      const cubiertos = new Set(consolizadosFinal.map((r: any) => String(r.vehiculo_id)));
+      const complemento: any[] = [];
+      for (const [placa, grid] of gridVehMap.entries()) {
+        const foundVeh = await asegurarVehiculoEnMaestro(grid.placaOriginal, vehicPorPlaca, normPlate);
+        if (!foundVeh || cubiertos.has(String(foundVeh.id))) continue;
+        complemento.push({
+          vehiculo_id:           foundVeh.id,
+          periodo_inicio:        periodoInicio,
+          periodo_fin:           periodoFin,
+          ralentis_excesivos:    ralentiStatsMap.get(placa)?.count ?? 0,
+          horas_motor_encendido: grid.horasMotor,
+          horas_motor_ralenti:   grid.horasRalenti,
+          kms_recorridos:        grid.km,
+          consumo_combustible:   grid.galones,
+          encendidos_apagados:   0,
+          fuente:                'FAGOR',
+        });
+      }
+      if (complemento.length > 0) {
+        const { error: errComp } = await supabase
+          .from('ralentis_periodos')
+          .upsert(complemento, { onConflict: 'vehiculo_id,periodo_inicio,periodo_fin' });
+        if (errComp) throw new Error(`Error completando ralentis_periodos con la grilla Fagor: ${errComp.message}`);
+        registrosInsertados += complemento.length;
+      }
     }
 
     const advCobertura = await advertenciaCoberturaMotor(periodoInicio, periodoFin);

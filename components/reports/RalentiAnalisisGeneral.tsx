@@ -49,7 +49,9 @@ const getPrecioGalon = (tipo?: string | null): number => {
 // excesos (conteo de alertas, tiempo >5 min, eventos >30 min) se calculan SOLO sobre los
 // eventos que superan el umbral nativo de su proveedor, no sobre el agregado de la tabla
 // ralentis_periodos (que incluye todos los ralentís, también los cortos).
-const UMBRAL_RALENTI_SEG: Record<string, number> = { COLTRACK: 600, FAGOR: 300 };
+// GEOTAB en 0: la regla "Idling" de MyGeotab ya aplica su umbral en la plataforma,
+// así que todo evento recibido es un exceso por definición.
+const UMBRAL_RALENTI_SEG: Record<string, number> = { COLTRACK: 600, FAGOR: 300, GEOTAB: 0 };
 const umbralRalentiSeg = (proveedor?: string | null): number =>
   UMBRAL_RALENTI_SEG[(proveedor ?? '').toUpperCase().trim()] ?? 300;
 // Registros con conductor "Taller" = vehículos en mantenimiento; se excluyen por completo.
@@ -643,6 +645,30 @@ export const RalentiAnalisisGeneral: React.FC<{
     return { baseline, latest, prev, bestPeriodo, worstPeriodo, latestVsPrevPct, trending };
   }, [periods]);
 
+  /**
+   * Ralentí que el informe DESCARTA por falta de horas de motor encendido.
+   *
+   * `computeMotorMetrics` solo agrega las filas con `horas_motor_encendido > 0`, porque una
+   * fila con ralentí pero sin encendido suma al numerador del % sin aportar al denominador.
+   * El efecto secundario es que una plataforma cargada sin su consolidado de horas de motor
+   * (típicamente Fagor sin `Km_Vehículos`) desaparece por completo de H. Motor, Ralentí Total,
+   * Km y % Ralentí — aunque sus galones y sus eventos sí se cuenten. Eso produce un informe
+   * internamente incoherente y silencioso, así que aquí lo cuantificamos para exponerlo.
+   */
+  const exclusionRalenti = useMemo(() => {
+    const afectados = periods.filter(p => p.ralentiHuerfano > 0);
+    if (afectados.length === 0) return null;
+    const horasExcluidas = afectados.reduce((a, p) => a + p.ralentiHuerfano, 0);
+    const horasContadas = afectados.reduce((a, p) => a + p.totalHorasRalenti, 0);
+    const totalReal = horasExcluidas + horasContadas;
+    return {
+      periodos: afectados,
+      horasExcluidas,
+      pctExcluido: totalReal > 0 ? (horasExcluidas / totalReal) * 100 : 0,
+      peor: [...afectados].sort((a, b) => b.ralentiHuerfano - a.ralentiHuerfano)[0],
+    };
+  }, [periods]);
+
   const BAR_COLORS = ['#003366', '#f97316', '#10b981', '#6366f1', '#ec4899', '#f59e0b'];
   const barColors = periods.map((_, i) => BAR_COLORS[i % BAR_COLORS.length]);
 
@@ -728,6 +754,40 @@ export const RalentiAnalisisGeneral: React.FC<{
 
   return (
     <div className="space-y-6">
+
+      {/* ── Aviso de ralentí excluido por falta de horas de motor ──
+          Sin esto la exclusión es invisible: el informe muestra cifras "OK" mientras
+          descarta el ralentí completo de una plataforma. Ver services/ralentiMetrics.ts. */}
+      {exclusionRalenti && (
+        <div className="rounded-xl border border-amber-300/70 dark:border-amber-800/60 bg-amber-50 dark:bg-amber-950/20 p-4 flex gap-3 items-start">
+          <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <div className="space-y-1.5 text-xs text-amber-900 dark:text-amber-200 leading-relaxed">
+            <strong className="block text-sm font-bold">
+              Cobertura incompleta: {Math.round(exclusionRalenti.horasExcluidas).toLocaleString('es-CO')} h de ralentí
+              quedan fuera del cálculo ({exclusionRalenti.pctExcluido.toFixed(0)}% del ralentí registrado)
+            </strong>
+            <p>
+              El <strong>% Ralentí</strong>, las <strong>horas de motor</strong>, la <strong>conducción</strong> y los{' '}
+              <strong>km</strong> solo se calculan sobre los vehículos que reportan horas de motor encendido — de lo
+              contrario el porcentaje sería físicamente imposible. Los vehículos que sí tienen ralentí registrado pero
+              llegaron <strong>sin horas de motor</strong> quedan excluidos de esos indicadores, aunque sus{' '}
+              <strong>galones, CO₂ y eventos sí se cuentan</strong>. Eso desbalancea la comparación entre plataformas.
+            </p>
+            <p>
+              Causa habitual: se cargó el detalle de ralentí de una plataforma sin su consolidado de horas de motor
+              (<strong>Fagor</strong>: falta <span className="font-mono">Km_Vehículos</span>; <strong>Coltrack</strong>:
+              falta el <span className="font-mono">Ralentí consolidado por vehículo</span>). Recárguelos en el
+              «Procesador Satelital» con el rango de la quincena para que esas horas entren al informe.
+            </p>
+            <p className="text-[11px] text-amber-700 dark:text-amber-300/80">
+              Períodos afectados: {exclusionRalenti.periodos.map(p => p.labelCorto).join(', ')} · Mayor impacto en{' '}
+              <strong>{exclusionRalenti.peor.label}</strong> con{' '}
+              {Math.round(exclusionRalenti.peor.ralentiHuerfano).toLocaleString('es-CO')} h excluidas frente a{' '}
+              {Math.round(exclusionRalenti.peor.totalHorasRalenti).toLocaleString('es-CO')} h contabilizadas.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* ── Independent Filter Bar ── */}
       <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 shadow-sm">
@@ -1004,6 +1064,14 @@ export const RalentiAnalisisGeneral: React.FC<{
                         {p.pctRalenti.toFixed(2)}%
                       </span>
                       <span className="block text-[9px] text-slate-400 dark:text-slate-500 mt-0.5">{p.totalHorasRalenti.toFixed(0)} h</span>
+                      {p.ralentiHuerfano > 0 && (
+                        <span
+                          className="block text-[9px] text-amber-600 dark:text-amber-400 font-semibold"
+                          title={`${p.ralentiHuerfano.toFixed(0)} h de ralentí pertenecen a vehículos sin horas de motor encendido, por lo que NO entran en el % Ralentí, ni en H. Motor, ni en Km. Sus galones y eventos sí se cuentan. Cargue el consolidado de horas de motor de esa plataforma para incorporarlas.`}
+                        >
+                          +{p.ralentiHuerfano.toFixed(0)} h excluidas
+                        </span>
+                      )}
                     </td>
                     <td className="py-3 px-3 text-slate-700 dark:text-slate-300">{p.velocidadMedia.toFixed(1)}</td>
                     <td className="py-3 px-3 font-semibold text-slate-700 dark:text-slate-300">{p.kmPorHoraRalenti.toFixed(1)}</td>

@@ -50,8 +50,39 @@ Evaluar cambiarlo a "mayor **consumo** continuo de combustible en ralentí".
 Definir si también deben excluir conductores no identificados.
 
 ### 6. Operativo de recarga
-- Coltrack: `Documento Ralenti 1 … Coltrack.csv` (agregado) + `Excesos_Ralentí_Semanal_*.xlsx` (eventos).
-- Fagor: `Documento Ralenti 1 … Fagor.xlsx` (agregado) + `Documento Ralenti 2 … Fagor.xlsx` (eventos).
-- Un solo agregado por plataforma por periodo. Rango = la quincena exacta.
+La detección es **por columnas, nunca por nombre de archivo**. Lo que cada insumo aporta:
+
+**Coltrack**
+- `Documento Ralenti 1 … Coltrack.csv` / `Ralenti_Coltrack.csv` — cabeceras `Unidad` + `Ralentis excesivos`.
+  Único archivo que aporta `horas_motor_encendido` (denominador del % Ralentí). **Obligatorio.**
+- `Excesos_Ralentí_Semanal_*.xlsx` — cabeceras `Placa` + `Inicio Exceso` + `Duracion`.
+  Eventos con duración y galones reales. **Se pueden subir varios**: una quincena la cubren 2–3 semanales
+  y desde jul-2026 el ingestor los procesa todos (antes solo tomaba el último y su agregado sobrescribía
+  los totales del período). Los eventos fuera del rango del período se descartan y se reportan como advertencia.
+- `Documento Ralenti 2 … Coltrack.csv` — `Nombre` + `Metros` + `Hora Reporte`. Solo si NO hay semanales;
+  la duración es estimada por reparto uniforme y no trae galones.
+
+**Fagor**
+- `Documento Ralenti 2 … Fagor.xlsx` / `Ralenti 1|2|3.xlsx` — cabeceras `Matrícula` + `T. Ralentí`.
+  Eventos con duración real y `Gal. Consumidos`. **Obligatorio.**
+- `Km_Vehículos_Fagor*.xlsx` — cabeceras `Matrícula` + `Km. Recorridos`. Aporta `Horas Motor` →
+  `horas_motor_encendido`. **Obligatorio** para que el % Ralentí sea válido; expórtelo con el rango
+  exacto de la quincena (el export mensual sobredimensiona el denominador).
+- ⚠️ `Documento Ralenti 1 … Fagor.xlsx` **no** es el agregado de ralentí: sus cabeceras son
+  `Conductor` + `Km. Recorridos`, por lo que el ingestor lo clasifica como *Km por conductor* y solo
+  alimenta `reportes_conductores`. Cargarlo sin `Km_Vehículos` deja `horas_motor_encendido = 0`
+  y dispara la advertencia de cobertura de motor.
+
+**Geotab** — no alimenta el informe de ralentí (decisión jun-2026): escribe solo en `reportes_*`.
+
+**Reglas comunes**
+- Un solo agregado por plataforma por periodo. Rango = **la quincena exacta** (1→15 o 16→fin de mes);
+  el Análisis General y el comparativo histórico descartan cualquier período que no sea quincena.
 - `ralentis_periodos` es **compartida** con el informe mensual: NO borrarla; el re-import la sobrescribe.
 - `ralentis_eventos` es exclusiva del módulo de ralentí: segura de limpiar por periodo.
+
+### 7. Propuesta abierta: horas de motor de Fagor a nivel vehículo
+`Documento Ralenti 1 … Fagor.xlsx` ya trae `Horas Motor` y `Ralentí Tiempo Total` por día y conductor,
+con la `Matrícula` en cada fila. Se podría derivar el agregado por vehículo sumando por matrícula y
+alimentar `ralentis_periodos` sin exigir `Km_Vehículos`. Requiere decisión: hoy ese archivo se consume
+únicamente como *Km por conductor* y cambiarlo altera el denominador de períodos ya cargados.
