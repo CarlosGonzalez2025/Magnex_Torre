@@ -13,6 +13,14 @@ export interface BatchAlert {
   location?: string;
   latitude?: number;
   longitude?: number;
+  /**
+   * Valor EXACTO de la celda de fecha/hora tal como venía en el archivo de la
+   * plataforma, sin interpretar (serial de Excel en GEOTAB/COLTRACK, texto en
+   * FAGOR). Viaja hasta `alertas_diarias_gps.raw_data` y es la única forma de
+   * auditar un evento contra la plataforma sin conservar el archivo original:
+   * `timestamp` ya es una interpretación nuestra, este campo no.
+   */
+  source_time_raw?: string | number | null;
 }
 
 export interface ProcessingResult {
@@ -98,6 +106,19 @@ function fechaLocalNaive(d: Date): string {
 }
 
 /**
+ * Deja el valor de la celda de origen listo para guardarse en JSONB sin perder
+ * información: los seriales de Excel se conservan como número (su precisión
+ * completa es lo que permite recomputar el segundo exacto) y el resto como
+ * texto. NO interpreta ni normaliza: ese es justamente el punto.
+ */
+function normalizarValorCrudo(valor: unknown): string | number | null {
+  if (valor === null || valor === undefined || valor === '') return null;
+  if (typeof valor === 'number') return Number.isFinite(valor) ? valor : null;
+  if (valor instanceof Date) return isNaN(valor.getTime()) ? null : valor.toISOString();
+  return String(valor);
+}
+
+/**
  * Convierte cualquier timestamp de plataforma a ISO con offset de la operación
  * (UTC-5). Clave para que `fecha_dia = timestamp.slice(0,10)` refleje el día
  * CALENDARIO local correcto y que el instante en TIMESTAMPTZ sea el real: nunca se
@@ -114,10 +135,26 @@ function parseTimestampToISO(timestamp: unknown): string {
     return fechaLocalNaive(timestamp);
   }
 
-  // Serial de Excel: SSF entrega el reloj de pared del archivo → naive directo.
+  // Serial de Excel: es el reloj de pared del archivo → naive directo.
+  // Se convierte a ms REDONDEANDO al segundo y se leen los componentes en UTC:
+  // así el reloj de pared queda intacto (sin intervención de la zona de la
+  // máquina) y se recupera el segundo exacto. `SSF.parse_date_code` truncaba
+  // (`Math.floor`) el error de coma flotante del serial y restaba un segundo a
+  // ~38% de los eventos (p.ej. 6:11:53 quedaba 6:11:52).
   if (typeof timestamp === 'number' && Number.isFinite(timestamp)) {
+    // Serial 25569 = 1970-01-01. Por debajo de 61 aplica el bug del año bisiesto
+    // 1900 de Excel: ahí se delega en SSF, que sí lo contempla.
+    if (timestamp >= 61) {
+      const d = new Date(Math.round((timestamp - 25569) * 86400) * 1000);
+      if (!isNaN(d.getTime())) {
+        return isoLocal(
+          d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate(),
+          d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()
+        );
+      }
+    }
     const d = XLSX.SSF.parse_date_code(timestamp);
-    if (d) return isoLocal(d.y, d.m, d.d, d.H ?? 0, d.M ?? 0, Math.floor(d.S ?? 0));
+    if (d) return isoLocal(d.y, d.m, d.d, d.H ?? 0, d.M ?? 0, Math.round(d.S ?? 0));
   }
 
   const s = timestamp.toString().trim();
@@ -355,7 +392,8 @@ function processFagorFile(workbook: XLSX.WorkBook): ProcessingResult {
         driver,
         severity: isGrave ? 'critical' : speed && speed > 100 ? 'high' : 'medium',
         is_grave: isGrave,
-        location
+        location,
+        source_time_raw: normalizarValorCrudo(timestampRaw)
       });
     }
 
@@ -477,7 +515,8 @@ function processColtrackFile(workbook: XLSX.WorkBook): ProcessingResult {
         is_grave: isGrave,
         location,
         latitude,
-        longitude
+        longitude,
+        source_time_raw: normalizarValorCrudo(timestampRaw)
       });
     }
 
@@ -658,7 +697,8 @@ function processGeotabFile(workbook: XLSX.WorkBook): ProcessingResult {
         is_grave: isGrave,
         location,
         latitude,
-        longitude
+        longitude,
+        source_time_raw: normalizarValorCrudo(timestampRaw)
       });
     }
 
