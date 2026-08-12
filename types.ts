@@ -76,6 +76,12 @@ export interface GeotabExceptionEvent {
   activeFrom?: string;
   activeTo?: string;
   speed?: number; // velocidad máx (km/h) en la ventana, solo para exceso de velocidad
+  driverName?: string; // conductor asignado en Geotab, si el evento lo identifica
+  // Posición del LogRecord de la ventana del evento. Solo se resuelve para los
+  // eventos de exceso de velocidad, que ya consultan LogRecord para la velocidad;
+  // el resto llega sin coordenadas.
+  latitude?: number;
+  longitude?: number;
 }
 
 export interface Vehicle {

@@ -1,5 +1,6 @@
 import { Vehicle, ApiSource, VehicleStatus, GeotabExceptionEvent } from '../types';
 import { generateMockVehicles } from './mockData';
+import { normalizePlate } from './vehicleContractService';
 
 const BACKEND_API_URL = 'http://localhost:8000/api';
 
@@ -191,8 +192,19 @@ const enrichVehiclesWithContracts = (
   vehicles: Vehicle[],
   contractMap: Record<string, any>
 ): Vehicle[] => {
+  // Índice auxiliar por placa normalizada (mayúsculas, solo alfanuméricos). El
+  // cruce directo sigue mandando; este solo rescata las placas que el proveedor
+  // formatea distinto al maestro ("NGK-627", "ngk 627"), que antes se perdían
+  // en silencio y dejaban el vehículo sin contrato.
+  const porPlacaNormalizada = new Map<string, any>();
+  for (const [placa, datos] of Object.entries(contractMap)) {
+    const clave = normalizePlate(placa);
+    if (clave && !porPlacaNormalizada.has(clave)) porPlacaNormalizada.set(clave, datos);
+  }
+
   return vehicles.map(vehicle => {
-    const contractData = contractMap[vehicle.plate];
+    const contractData =
+      contractMap[vehicle.plate] ?? porPlacaNormalizada.get(normalizePlate(vehicle.plate));
 
     if (contractData) {
       // Enriquecer vehículo con datos de Google Sheets

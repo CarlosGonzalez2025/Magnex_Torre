@@ -347,18 +347,26 @@ async function fetchGeotabAlerts(): Promise<Alert[]> {
         ? `Regla Geotab: ${ev.ruleName} — ${speed} km/h`
         : `Regla Geotab: ${ev.ruleName}`;
 
+      // Solo los eventos de exceso de velocidad traen posición (ver api/geotab.ts).
+      const lat = Number(ev.latitude) || 0;
+      const lon = Number(ev.longitude) || 0;
+
       alerts.push({
         // ev.id es único por evento -> idempotencia natural
         alert_id: `geotab-${ev.id}`,
         vehicle_id: `GEO-${ev.deviceId || ev.plate}`,
         plate: ev.plate || 'DESCONOCIDO',
-        driver: 'Sin asignar',
+        driver: String(ev.driverName || '').trim() || 'Sin asignar',
         type: mapped.type,
         severity: mapped.severity,
         timestamp,
-        location: 'Ver en Geotab',
+        location: lat !== 0 || lon !== 0
+          ? `${lat.toFixed(5)}, ${lon.toFixed(5)}`
+          : 'Ver en Geotab',
         speed,
         details,
+        // El contrato se resuelve contra el maestro de vehículos en el handler:
+        // el ExceptionEvent solo identifica el dispositivo.
         contract: null,
         source: 'GEOTAB',
         status: 'pending',
@@ -372,6 +380,46 @@ async function fetchGeotabAlerts(): Promise<Alert[]> {
     console.error('[Geotab] Error:', error);
     return [];
   }
+}
+
+/**
+ * Clave de comparación de placas: mayúsculas y solo alfanuméricos.
+ * Debe coincidir con normalizePlate() de services/vehicleContractService.ts.
+ */
+function normalizePlate(placa: unknown): string {
+  return String(placa ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+/**
+ * Mapa placa normalizada → nombre de contrato, desde el maestro de vehículos.
+ * Es la misma fuente que usa el pipeline de cargas masivas. Nunca lanza: sin
+ * mapa, las alertas de Geotab quedan sin contrato (comportamiento anterior).
+ */
+async function buildContractMap(supabase: any): Promise<Record<string, string>> {
+  const mapa: Record<string, string> = {};
+  try {
+    // PostgREST corta en 1.000 filas sin avisar; el maestro las supera.
+    const PAGE = 1000;
+    for (let desde = 0; desde < 20000; desde += PAGE) {
+      const { data, error } = await supabase
+        .from('vehiculos')
+        .select('placa, contratos(nombre)')
+        .range(desde, desde + PAGE - 1);
+      if (error) throw new Error(error.message);
+      const filas = data ?? [];
+      for (const fila of filas) {
+        const clave = normalizePlate(fila.placa);
+        const rel = Array.isArray(fila.contratos) ? fila.contratos[0] : fila.contratos;
+        const nombre = String(rel?.nombre ?? '').trim();
+        if (clave && nombre) mapa[clave] = nombre;
+      }
+      if (filas.length < PAGE) break;
+    }
+    console.log(`[Contratos] Maestro placa→contrato cargado (${Object.keys(mapa).length} vehículos)`);
+  } catch (error) {
+    console.error('[Contratos] No se pudo cargar el maestro placa→contrato:', error);
+  }
+  return mapa;
 }
 
 // ==================== ALERT DETECTION ====================
@@ -687,11 +735,23 @@ serve(async (req) => {
 
     // Fetch data from APIs
     console.log('📡 Fetching fleet data...');
-    const [coltrackVehicles, fagorVehicles, geotabAlerts] = await Promise.all([
+    const [coltrackVehicles, fagorVehicles, geotabAlerts, contractMap] = await Promise.all([
       fetchColtrackData(),
       fetchFagorData(),
-      fetchGeotabAlerts()
+      fetchGeotabAlerts(),
+      buildContractMap(supabase)
     ]);
+
+    // Geotab no entrega el contrato en el evento (solo el dispositivo): se
+    // resuelve contra el maestro. Coltrack y Fagor ya lo traen en el registro.
+    let geotabSinContrato = 0;
+    for (const alerta of geotabAlerts) {
+      alerta.contract = contractMap[normalizePlate(alerta.plate)] ?? null;
+      if (!alerta.contract) geotabSinContrato++;
+    }
+    if (geotabAlerts.length > 0) {
+      console.log(`[Contratos] Geotab: ${geotabAlerts.length - geotabSinContrato}/${geotabAlerts.length} alertas con contrato resuelto`);
+    }
 
     const allVehicles = [...coltrackVehicles, ...fagorVehicles];
     console.log(`📊 Total vehicles: ${allVehicles.length} (Coltrack: ${coltrackVehicles.length}, Fagor: ${fagorVehicles.length})`);

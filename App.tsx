@@ -54,6 +54,7 @@ const GeotabPanel = lazy(() => import('./components/GeotabPanel').then(m => ({ d
 import { fetchFleetData, FleetResponse, fetchGeotabAlertsViaAPI } from './services/fleetService';
 import { detectAlerts, buildGeotabAlerts, esAlertaVisibleCentroAlertas, saveAlertsToStorage, getAlertsFromStorage, getUnsavedAlerts, markAlertAsSent, markAlertAsSaved, cleanOldAlerts, processVehiclesForIdleDetection } from './services/alertService';
 import { saveAlertToDatabase, autoSaveAlert } from './services/databaseService';
+import { getVehicleContractMap } from './services/vehicleContractService';
 import { supabase } from './services/supabaseClient';
 import { useAutoCleanup } from './hooks/useAutoCleanup';
 import audioEngine from './services/alertSoundService';
@@ -163,9 +164,17 @@ export default function App() {
 
     // - Geotab: los eventos NO se pueden deducir del snapshot; se traen los
     //   ExceptionEvent ya calculados por sus reglas (última hora) vía /api/geotab.
+    //   El contrato no viaja en el evento (solo identifica el dispositivo), así
+    //   que se resuelve contra el maestro de vehículos, que está cacheado.
     let geotabAlerts: Alert[] = [];
     try {
-      geotabAlerts = buildGeotabAlerts(await fetchGeotabAlertsViaAPI());
+      const [geotabEvents, contractMap] = await Promise.all([
+        fetchGeotabAlertsViaAPI(),
+        // El contrato es un enriquecimiento: si el maestro falla, la alerta
+        // sigue mostrándose (sin contrato) en vez de perderse.
+        getVehicleContractMap().catch(() => null),
+      ]);
+      geotabAlerts = buildGeotabAlerts(geotabEvents, contractMap);
     } catch (error) {
       console.warn('No se pudieron obtener las alertas de Geotab:', error);
     }
