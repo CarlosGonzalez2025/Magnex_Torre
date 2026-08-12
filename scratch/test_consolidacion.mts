@@ -3,7 +3,7 @@
  * (14 alertas idénticas cada ~5 min, tomadas de saved_alerts) y contra los
  * casos límite que importan: corte de racha, eventos distintos, idempotencia.
  */
-import { consolidarAlertasVivas, VENTANA_CONSOLIDACION_MS } from '../services/alertService.ts';
+import { consolidarAlertasVivas, VENTANA_CONSOLIDACION_MS, ordenarAlertasPorRecencia, horaEfectivaAlerta } from '../services/alertService.ts';
 import { AlertType, AlertSeverity, ApiSource } from '../types.ts';
 
 const mk = (plate: string, ts: string, speed = 90, type = AlertType.SPEED_VIOLATION, idx = 0): any => ({
@@ -99,6 +99,33 @@ check('reprocesar no altera la velocidad', rerun[0].speed === 110);
 console.log('\n=== 6. Ventana ===');
 check('la ventana es 30 min y supera el refresco de 5 min',
   VENTANA_CONSOLIDACION_MS === 30 * 60 * 1000 && VENTANA_CONSOLIDACION_MS > 5 * 60 * 1000);
+
+// ── 7. Orden del Centro de Alertas: más reciente primero ───────────────────
+console.log('\n=== 7. Orden por recencia ===');
+// Orden revuelto tal como se veía en el panel: 09:25, 08:48, 08:55, 08:57...
+const revueltas = [
+  mk('PWQ878', '2026-08-12T14:25:00.000Z'),
+  mk('NPY496', '2026-08-12T13:48:00.000Z'),
+  mk('NPY496', '2026-08-12T13:55:00.000Z'),
+  mk('NPY496', '2026-08-12T13:57:00.000Z'),
+  mk('NPY496', '2026-08-12T13:59:00.000Z'),
+];
+const ordenadas = ordenarAlertasPorRecencia(revueltas);
+const horas = ordenadas.map(a => new Date(horaEfectivaAlerta(a)).toISOString().slice(11, 16));
+console.log('  orden resultante:', horas.join(' > '));
+check('descendente estricto', horas.every((h, i) => i === 0 || horas[i - 1] >= h));
+check('la más reciente encabeza', horas[0] === '14:25');
+check('no muta el arreglo de entrada',
+  new Date(revueltas[0].timestamp).toISOString() === '2026-08-12T14:25:00.000Z' && revueltas.length === 5);
+
+// Una racha activa desde temprano debe quedar ARRIBA de un evento puntual
+// anterior a su último reporte: es justo lo que fallaría al ordenar por
+// `timestamp` en vez de por la última actividad.
+const racha = { ...mk('AAA111', '2026-08-12T13:11:00.000Z'), occurrences: 14, lastSeenAt: '2026-08-12T14:15:00.000Z' };
+const puntual = mk('BBB222', '2026-08-12T14:00:00.000Z');
+const r7 = ordenarAlertasPorRecencia([puntual, racha]);
+check('una racha aún activa encabeza sobre un evento puntual más antiguo',
+  r7[0].plate === 'AAA111', `primero=${r7[0].plate}`);
 
 console.log(fallos === 0 ? '\nTODAS LAS COMPROBACIONES PASARON\n' : `\n${fallos} COMPROBACIONES FALLARON\n`);
 process.exit(fallos === 0 ? 0 : 1);

@@ -424,6 +424,29 @@ export function consolidarAlertasVivas(
 }
 
 /**
+ * Momento por el que se ordena y que se muestra como hora de la alerta: su
+ * último reporte. Para un evento puntual es su propia hora; para una condición
+ * consolidada, la del reporte más reciente de la racha.
+ */
+export function horaEfectivaAlerta(alerta: Alert): number {
+  return new Date(alerta.lastSeenAt ?? alerta.timestamp).getTime();
+}
+
+/**
+ * Ordena de la más reciente a la más antigua, para que la torre atienda de
+ * arriba hacia abajo.
+ *
+ * El criterio es la ÚLTIMA actividad, no `timestamp`: en una alerta consolidada
+ * `timestamp` es el PRIMER reporte de la racha, así que ordenar por él hundiría
+ * al fondo justo las condiciones que siguen activas.
+ *
+ * Devuelve un arreglo nuevo; no muta la entrada.
+ */
+export function ordenarAlertasPorRecencia(alertas: Alert[]): Alert[] {
+  return [...alertas].sort((a, b) => horaEfectivaAlerta(b) - horaEfectivaAlerta(a));
+}
+
+/**
  * Crea un objeto de alerta
  * IMPORTANTE: Usa vehicle.lastUpdate como timestamp para mantener la hora real del evento
  * y evitar que las alertas cambien de hora con cada actualización del sistema
