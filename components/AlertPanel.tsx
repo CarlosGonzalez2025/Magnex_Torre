@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Alert, AlertSeverity, AlertType } from '../types';
-import { AlertTriangle, AlertCircle, Bell, BellRing, Copy, CheckCircle, Clock, MapPin, User, Gauge, Save, FileDown, Search, MessageCircle } from 'lucide-react';
+import { AlertTriangle, AlertCircle, Bell, BellRing, Copy, CheckCircle, Clock, MapPin, User, Gauge, Save, FileDown, Search, MessageCircle, Repeat } from 'lucide-react';
 import { esAlertaVisibleCentroAlertas } from '../services/alertService';
 import { usePagination } from '../hooks/usePagination';
 import { PaginationControls } from './PaginationControls';
@@ -114,6 +114,10 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
         { header: 'Velocidad', key: 'speed', width: 12 },
         { header: 'Ubicación', key: 'location', width: 40 },
         { header: 'Fecha', key: 'timestamp', width: 20 },
+        // Una condición sostenida se consolida en una sola fila: sin estas dos
+        // columnas el export no distinguiría un exceso puntual de uno de 90 min.
+        { header: 'Reportes', key: 'occurrences', width: 10 },
+        { header: 'Último reporte', key: 'lastSeenAt', width: 20 },
       ],
       `Alertas_${new Date().toLocaleDateString('es-CO').replace(/\//g, '-')}`
     );
@@ -294,6 +298,19 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
                   {/* Detalles */}
                   <td className="px-4 py-3">
                     <span className="text-sm text-slate-700">{alert.details}</span>
+                    {(alert.occurrences ?? 1) > 1 && (
+                      <div className="mt-1 flex items-center gap-1 text-xs font-medium text-amber-700">
+                        <Repeat className="w-3 h-3 flex-shrink-0" />
+                        <span>
+                          Persiste desde{' '}
+                          {new Date(alert.timestamp).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}
+                          {' · '}{alert.occurrences} reportes
+                          {alert.lastSeenAt && (
+                            <> · último {new Date(alert.lastSeenAt).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}</>
+                          )}
+                        </span>
+                      </div>
+                    )}
                   </td>
 
                   {/* Conductor */}

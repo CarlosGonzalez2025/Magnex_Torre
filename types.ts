@@ -57,6 +57,12 @@ export interface Alert {
   sentAt?: string; // Cuándo fue enviada
   sentBy?: string; // Quién la envió
   saved?: boolean; // Si ya fue guardada en historial
+  // Consolidación de una condición que persiste: mientras el vehículo siga
+  // reportando lo mismo dentro de la ventana, se acumula en ESTA alerta en vez
+  // de crear una nueva. `timestamp` queda anclado al primer reporte, así que la
+  // identidad de la alerta (y su alert_id en base) no cambia con la racha.
+  occurrences?: number; // reportes acumulados (1 = evento puntual)
+  lastSeenAt?: string; // reporte más reciente de la racha
   is_valid?: boolean; // Si fue validada como real por el bot
   validation_reason?: string; // Motivo de descarte o confirmación
   screenshot_url?: string; // Enlace al mapa de ubicación capturado
