@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Alert, AlertSeverity, AlertType } from '../types';
-import { AlertTriangle, AlertCircle, Bell, BellRing, Copy, CheckCircle, Clock, MapPin, User, Gauge, Save, FileDown, Search, MessageCircle } from 'lucide-react';
-import { esAlertaVisibleCentroAlertas } from '../services/alertService';
+import { AlertTriangle, AlertCircle, Bell, BellRing, Copy, CheckCircle, Clock, MapPin, User, Gauge, Save, FileDown, Search, MessageCircle, Repeat } from 'lucide-react';
+import { esAlertaVisibleCentroAlertas, ordenarAlertasPorRecencia, horaEfectivaAlerta } from '../services/alertService';
 import { usePagination } from '../hooks/usePagination';
 import { PaginationControls } from './PaginationControls';
 import { useExportToExcel } from '../hooks/useExportToExcel';
@@ -68,7 +68,7 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
   // velocidad, únicamente los >= 80 km/h. El resto queda en el historial.
   const visibleAlerts = alerts.filter(esAlertaVisibleCentroAlertas);
 
-  const filteredAlerts = visibleAlerts.filter(alert => {
+  const filteredAlerts = ordenarAlertasPorRecencia(visibleAlerts.filter(alert => {
     if (selectedSeverity !== 'ALL' && alert.severity !== selectedSeverity) return false;
     if (selectedType !== 'ALL' && alert.type !== selectedType) return false;
     if (selectedSource !== 'ALL' && alert.source !== selectedSource) return false;
@@ -88,7 +88,7 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
     }
 
     return true;
-  });
+  }));
 
   const alertTypes = Array.from(new Set(visibleAlerts.map(a => a.type)));
   const alertSources = Array.from(new Set(visibleAlerts.map(a => a.source))).filter(Boolean);
@@ -114,6 +114,10 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
         { header: 'Velocidad', key: 'speed', width: 12 },
         { header: 'Ubicación', key: 'location', width: 40 },
         { header: 'Fecha', key: 'timestamp', width: 20 },
+        // Una condición sostenida se consolida en una sola fila: sin estas dos
+        // columnas el export no distinguiría un exceso puntual de uno de 90 min.
+        { header: 'Reportes', key: 'occurrences', width: 10 },
+        { header: 'Último reporte', key: 'lastSeenAt', width: 20 },
       ],
       `Alertas_${new Date().toLocaleDateString('es-CO').replace(/\//g, '-')}`
     );
@@ -294,6 +298,17 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
                   {/* Detalles */}
                   <td className="px-4 py-3">
                     <span className="text-sm text-slate-700">{alert.details}</span>
+                    {(alert.occurrences ?? 1) > 1 && (
+                      <div className="mt-1 flex items-center gap-1 text-xs font-medium text-amber-700">
+                        <Repeat className="w-3 h-3 flex-shrink-0" />
+                        {/* La hora del último reporte ya la da la columna HORA. */}
+                        <span>
+                          Persiste desde{' '}
+                          {new Date(alert.timestamp).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}
+                          {' · '}{alert.occurrences} reportes
+                        </span>
+                      </div>
+                    )}
                   </td>
 
                   {/* Conductor */}
@@ -321,14 +336,14 @@ export const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, onCopyAlert, onS
                     </div>
                   </td>
 
-                  {/* Hora */}
+                  {/* Hora — último reporte, que es también el criterio de orden */}
                   <td className="px-4 py-3 text-center whitespace-nowrap">
                     <div className="flex items-center justify-center gap-1 text-sm text-slate-700">
                       <Clock className="w-3 h-3" />
-                      <span>{new Date(alert.timestamp).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}</span>
+                      <span>{new Date(horaEfectivaAlerta(alert)).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}</span>
                     </div>
                     <div className="text-xs text-slate-500">
-                      {new Date(alert.timestamp).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' })}
+                      {new Date(horaEfectivaAlerta(alert)).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' })}
                     </div>
                   </td>
                 </tr>

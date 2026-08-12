@@ -267,7 +267,11 @@ const fetchColtrackViaAPI = async (): Promise<Vehicle[]> => {
       );
 
       return {
-        id: `COL-${plate}-${index}`,
+        // La posición en la respuesta NO forma parte del id: Coltrack reordena
+        // sus filas entre consultas, y con el índice dentro el mismo vehículo
+        // cambiaba de id (COL-PWQ878-39 → COL-PWQ878-35), lo que rompía en
+        // silencio cualquier deduplicación por vehículo.
+        id: `COL-${plate}`,
         plate: plate,
         source: ApiSource.COLTRACK,
         latitude: parseFloat(record.LATITUD || record.Latitud || '0'),

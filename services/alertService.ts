@@ -347,6 +347,106 @@ export function buildGeotabAlerts(
 }
 
 /**
+ * Ventana de consolidación: dentro de este lapso, un nuevo reporte del mismo
+ * (placa, tipo) se considera continuación de la alerta viva, no un evento nuevo.
+ *
+ * Tiene que ser MAYOR que REFRESH_INTERVAL. Cuando ambos valían 5 min, cada
+ * ciclo caía justo en el borde de la ventana y un vehículo con una condición
+ * sostenida generaba una alerta nueva por refresco: PWQ878 llegó a 14 alertas
+ * idénticas por hora, y la mitad del volumen total de alertas era repetición.
+ */
+export const VENTANA_CONSOLIDACION_MS = 30 * 60 * 1000;
+
+/**
+ * Agrupa por (placa, tipo) las alertas de una condición que persiste.
+ *
+ * En vez de descartar las repeticiones —que ocultaría que un camión lleva 90
+ * minutos a 90 km/h— se conserva UNA alerta por racha, anclada al primer
+ * reporte, con el conteo y la hora del último. Una racha se corta cuando pasa
+ * más de `ventanaMs` sin reportes: a partir de ahí es un evento nuevo.
+ *
+ * La operación es idempotente: reprocesar alertas ya consolidadas devuelve el
+ * mismo resultado, porque `occurrences`/`lastSeenAt` se arrastran.
+ */
+export function consolidarAlertasVivas(
+  alertas: Alert[],
+  ventanaMs: number = VENTANA_CONSOLIDACION_MS
+): Alert[] {
+  // Se agrupa por placa+tipo, no por vehicleId: el id de Coltrack ha sido
+  // inestable entre refrescos y eso ya rompió una vez la deduplicación.
+  const porClave = new Map<string, Alert[]>();
+  for (const alerta of alertas) {
+    const clave = `${alerta.plate}|${alerta.type}`;
+    if (!porClave.has(clave)) porClave.set(clave, []);
+    porClave.get(clave)!.push(alerta);
+  }
+
+  const consolidadas: Alert[] = [];
+
+  for (const grupo of porClave.values()) {
+    grupo.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+    let racha: Alert | null = null;
+
+    for (const alerta of grupo) {
+      const momento = new Date(alerta.timestamp).getTime();
+      const finRacha = racha
+        ? new Date(racha.lastSeenAt ?? racha.timestamp).getTime()
+        : -Infinity;
+
+      if (racha && momento - finRacha <= ventanaMs) {
+        // Continuación: se acumula sobre la alerta ancla (misma referencia que
+        // ya está en `consolidadas`).
+        racha.occurrences = (racha.occurrences ?? 1) + (alerta.occurrences ?? 1);
+        racha.lastSeenAt = alerta.lastSeenAt ?? alerta.timestamp;
+        // Se conserva la peor lectura de la racha: si el vehículo llegó a 110
+        // km/h en algún reporte, esa es la magnitud que debe ver la torre.
+        racha.speed = Math.max(Number(racha.speed) || 0, Number(alerta.speed) || 0);
+        racha.sent = racha.sent || alerta.sent;
+        racha.sentAt = racha.sentAt || alerta.sentAt;
+        racha.sentBy = racha.sentBy || alerta.sentBy;
+        racha.saved = racha.saved || alerta.saved;
+        (racha as any).savedToDatabase =
+          (racha as any).savedToDatabase || (alerta as any).savedToDatabase;
+        continue;
+      }
+
+      racha = {
+        ...alerta,
+        occurrences: alerta.occurrences ?? 1,
+        lastSeenAt: alerta.lastSeenAt ?? alerta.timestamp,
+      };
+      consolidadas.push(racha);
+    }
+  }
+
+  return consolidadas;
+}
+
+/**
+ * Momento por el que se ordena y que se muestra como hora de la alerta: su
+ * último reporte. Para un evento puntual es su propia hora; para una condición
+ * consolidada, la del reporte más reciente de la racha.
+ */
+export function horaEfectivaAlerta(alerta: Alert): number {
+  return new Date(alerta.lastSeenAt ?? alerta.timestamp).getTime();
+}
+
+/**
+ * Ordena de la más reciente a la más antigua, para que la torre atienda de
+ * arriba hacia abajo.
+ *
+ * El criterio es la ÚLTIMA actividad, no `timestamp`: en una alerta consolidada
+ * `timestamp` es el PRIMER reporte de la racha, así que ordenar por él hundiría
+ * al fondo justo las condiciones que siguen activas.
+ *
+ * Devuelve un arreglo nuevo; no muta la entrada.
+ */
+export function ordenarAlertasPorRecencia(alertas: Alert[]): Alert[] {
+  return [...alertas].sort((a, b) => horaEfectivaAlerta(b) - horaEfectivaAlerta(a));
+}
+
+/**
  * Crea un objeto de alerta
  * IMPORTANTE: Usa vehicle.lastUpdate como timestamp para mantener la hora real del evento
  * y evitar que las alertas cambien de hora con cada actualización del sistema

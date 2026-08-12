@@ -52,7 +52,7 @@ const TelemetryProcessor = lazy(() => import('./components/reports/TelemetryProc
 const RalentiReports = lazy(() => import('./components/reports/RalentiReports').then(m => ({ default: m.RalentiReports })));
 const GeotabPanel = lazy(() => import('./components/GeotabPanel').then(m => ({ default: m.GeotabPanel })));
 import { fetchFleetData, FleetResponse, fetchGeotabAlertsViaAPI } from './services/fleetService';
-import { detectAlerts, buildGeotabAlerts, esAlertaVisibleCentroAlertas, saveAlertsToStorage, getAlertsFromStorage, getUnsavedAlerts, markAlertAsSent, markAlertAsSaved, cleanOldAlerts, processVehiclesForIdleDetection } from './services/alertService';
+import { detectAlerts, buildGeotabAlerts, consolidarAlertasVivas, esAlertaVisibleCentroAlertas, saveAlertsToStorage, getAlertsFromStorage, getUnsavedAlerts, markAlertAsSent, markAlertAsSaved, cleanOldAlerts, processVehiclesForIdleDetection } from './services/alertService';
 import { saveAlertToDatabase, autoSaveAlert } from './services/databaseService';
 import { getVehicleContractMap } from './services/vehicleContractService';
 import { supabase } from './services/supabaseClient';
@@ -186,16 +186,15 @@ export default function App() {
     const existingLiveAlerts = existingAlerts.filter(a => !a.id.startsWith('geotab-'));
     const existingGeotabAlerts = existingAlerts.filter(a => a.id.startsWith('geotab-'));
 
-    // Coltrack/Fagor + velocidad Geotab: dedup por (vehículo, tipo) en ventana de 5 min
-    const allLiveAlerts = [...newAlerts, ...existingLiveAlerts];
-    const uniqueLiveAlerts = allLiveAlerts.filter((alert, index, self) => {
-      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-      return index === self.findIndex(a =>
-        a.vehicleId === alert.vehicleId &&
-        a.type === alert.type &&
-        new Date(a.timestamp) >= fiveMinutesAgo
-      );
-    });
+    // Coltrack/Fagor: una condición que persiste (un vehículo sostenido en
+    // exceso de velocidad, o en ralentí) se consolida en UNA alerta por racha
+    // con su contador, en vez de generar una nueva en cada refresco.
+    const idsPrevios = new Set(existingLiveAlerts.map(a => a.id));
+    const uniqueLiveAlerts = consolidarAlertasVivas([...existingLiveAlerts, ...newAlerts]);
+
+    // Solo las rachas que empiezan aquí son evento nuevo: son las que suenan y
+    // se persisten. Las continuaciones ya viven en su alerta ancla.
+    const nuevasRachasVivas = uniqueLiveAlerts.filter(a => !idsPrevios.has(a.id));
 
     // Geotab (excepciones): dedup por id estable, reteniendo la última hora
     // (misma ventana que consulta el proxy) para que se mantengan visibles.
@@ -218,9 +217,11 @@ export default function App() {
     cleanOldAlerts(12); // Mantener alertas por 12 horas (turno operativo)
     setAlerts(getUnsavedAlerts());
 
-    // 🆕 GUARDADO AUTOMÁTICO: Guardar TODAS las alertas nuevas en saved_alerts
-    // Esto se hace en segundo plano sin bloquear la UI
-    const newAlertsToPersist = [...newAlerts, ...newGeotabAlerts];
+    // 🆕 GUARDADO AUTOMÁTICO: Guardar las alertas nuevas en saved_alerts
+    // Esto se hace en segundo plano sin bloquear la UI.
+    // Se persisten las rachas que arrancan, no cada reporte repetido: antes un
+    // solo vehículo "pegado" insertaba una fila por refresco.
+    const newAlertsToPersist = [...nuevasRachasVivas, ...newGeotabAlerts];
     if (newAlertsToPersist.length > 0) {
       // 🔍 LOG DE DIAGNÓSTICO: Contar alertas críticas detectadas
       const criticalAlerts = newAlertsToPersist.filter(a => a.severity === 'critical');
