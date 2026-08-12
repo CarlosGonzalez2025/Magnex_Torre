@@ -137,16 +137,39 @@ function isSpeedingRule(ruleName: string): boolean {
   return (n.includes('exceso') && n.includes('velocidad')) || n.includes('speeding');
 }
 
+/** Construye mapa User.id -> nombre legible del conductor. */
+async function buildDriverMap(): Promise<Record<string, string>> {
+  const map: Record<string, string> = {};
+  try {
+    const users: any[] = await call('Get', { typeName: 'User', search: { isDriver: true } });
+    for (const u of users) {
+      const nombre = [u.firstName, u.lastName].filter(Boolean).join(' ').trim();
+      map[u.id] = nombre || u.name || '';
+    }
+  } catch (err) {
+    // El conductor es un extra: si falla, los eventos salen sin él.
+    console.error('buildDriverMap failed:', err);
+  }
+  return map;
+}
+
+interface LogRecordSummary {
+  speed: number;
+  latitude: number;
+  longitude: number;
+}
+
 /**
- * El ExceptionEvent no trae la velocidad. Para los eventos de exceso de
- * velocidad consultamos LogRecord (GPS) en la ventana del evento y tomamos la
- * velocidad máxima. Se resuelve en UNA sola petición con ExecuteMultiCall.
- * Devuelve un mapa { eventId -> maxSpeedKmh }.
+ * El ExceptionEvent no trae velocidad ni posición. Para los eventos de exceso de
+ * velocidad consultamos LogRecord (GPS) en la ventana del evento y tomamos el
+ * registro de velocidad máxima, del que salen las tres cosas. Se resuelve en UNA
+ * sola petición con ExecuteMultiCall.
+ * Devuelve un mapa { eventId -> { speed, latitude, longitude } }.
  */
-async function speedByEventForSpeeding(
+async function logDataByEventForSpeeding(
   events: any[],
   ruleMap: Record<string, string>
-): Promise<Record<string, number>> {
+): Promise<Record<string, LogRecordSummary>> {
   const targets = events.filter((e) => isSpeedingRule(ruleMap[e.rule?.id]) && e.device?.id);
   // Tope para acotar el tamaño del multicall.
   const capped = targets.slice(0, 300);
@@ -165,17 +188,26 @@ async function speedByEventForSpeeding(
     },
   }));
 
-  const speedMap: Record<string, number> = {};
+  const logMap: Record<string, LogRecordSummary> = {};
   try {
     const results: any[] = await call('ExecuteMultiCall', { calls });
     results.forEach((logs: any[], idx: number) => {
-      const speeds = (logs || []).map((r) => Number(r.speed) || 0);
-      if (speeds.length) speedMap[capped[idx].id] = Math.max(...speeds);
+      let mejor: any = null;
+      for (const r of logs || []) {
+        if (!mejor || (Number(r.speed) || 0) > (Number(mejor.speed) || 0)) mejor = r;
+      }
+      if (mejor) {
+        logMap[capped[idx].id] = {
+          speed: Number(mejor.speed) || 0,
+          latitude: Number(mejor.latitude) || 0,
+          longitude: Number(mejor.longitude) || 0,
+        };
+      }
     });
   } catch (err) {
-    console.error('speedByEventForSpeeding multicall failed:', err);
+    console.error('logDataByEventForSpeeding multicall failed:', err);
   }
-  return speedMap;
+  return logMap;
 }
 
 /** DeviceStatusInfo -> filas tipo "vehículo en vivo". */
@@ -231,7 +263,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'alerts': {
         const now = new Date();
         const fromDate = new Date(now.getTime() - 60 * 60 * 1000).toISOString(); // última hora
-        const [statuses, deviceMap, rules, events] = await Promise.all([
+        const [statuses, deviceMap, rules, events, driverMap] = await Promise.all([
           call('Get', { typeName: 'DeviceStatusInfo' }),
           buildDeviceMap(),
           call('Get', { typeName: 'Rule' }),
@@ -240,16 +272,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             search: { fromDate, toDate: now.toISOString() },
             resultsLimit: 5000,
           }),
+          buildDriverMap(),
         ]);
 
         const ruleMap: Record<string, string> = {};
         for (const r of rules) ruleMap[r.id] = r.name;
 
-        // Velocidad real (máx en la ventana) para los eventos de exceso de velocidad.
-        const speedMap = await speedByEventForSpeeding(events, ruleMap);
+        // Velocidad y posición reales (del LogRecord de velocidad máx en la
+        // ventana) para los eventos de exceso de velocidad.
+        const logMap = await logDataByEventForSpeeding(events, ruleMap);
 
         const mappedEvents = events.map((e: any) => {
           const dev = deviceMap[e.device?.id] || {};
+          const log = logMap[e.id];
+          const driverId = e.driver?.id;
           return {
             id: e.id,
             plate: dev.plate || e.device?.id || 'UNKNOWN',
@@ -258,7 +294,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             ruleName: ruleMap[e.rule?.id] || e.rule?.id || 'Regla desconocida',
             activeFrom: e.activeFrom,
             activeTo: e.activeTo,
-            speed: speedMap[e.id] ?? 0,
+            speed: log?.speed ?? 0,
+            // Geotab marca los eventos sin conductor identificado con el id
+            // centinela 'UnknownDriverId'; ahí no hay nombre que devolver.
+            driverName:
+              driverId && driverId !== 'UnknownDriverId' ? driverMap[driverId] || '' : '',
+            latitude: log?.latitude ?? 0,
+            longitude: log?.longitude ?? 0,
           };
         });
 

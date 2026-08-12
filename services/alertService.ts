@@ -2,6 +2,7 @@ import { Vehicle, Alert, AlertType, AlertSeverity, ApiSource, GeotabExceptionEve
 import { saveIdleTimeRecord, saveIgnitionEvent } from './towerControlService';
 import { getAlertSeverityMap } from './alertSeverityConfigService';
 import { normalizeAlertTimestamp } from './dateNormalization';
+import { resolveContract } from './vehicleContractService';
 
 // Configuración de umbrales
 const ALERT_THRESHOLDS = {
@@ -273,8 +274,17 @@ function mapGeotabRuleToType(ruleName: string): { type: AlertType; severity: Ale
  * en alertas de la app. El id es estable (`geotab-<eventId>`) para deduplicar de
  * forma natural entre refrescos y para alinear con el alert_id que usa el worker
  * de backend (alert-monitor), evitando duplicados en saved_alerts.
+ *
+ * `contractMap` (placa normalizada → contrato) es opcional a propósito: el
+ * ExceptionEvent solo identifica el dispositivo, así que sin él el contrato
+ * queda en 'No asignado' —el comportamiento que tenía esta función antes—.
+ * Coltrack y Fagor no lo necesitan: llegan por createAlert() con el contrato ya
+ * resuelto en el vehículo.
  */
-export function buildGeotabAlerts(events: GeotabExceptionEvent[]): Alert[] {
+export function buildGeotabAlerts(
+  events: GeotabExceptionEvent[],
+  contractMap?: Map<string, string> | null
+): Alert[] {
   if (!Array.isArray(events)) return [];
 
   return events.flatMap(ev => {
@@ -305,6 +315,15 @@ export function buildGeotabAlerts(events: GeotabExceptionEvent[]): Alert[] {
       ? `Regla Geotab: ${ruleName} — ${speed} km/h`
       : `Regla Geotab: ${ruleName}`;
 
+    // El contrato vive en el maestro de vehículos, no en el evento.
+    const contract = resolveContract(ev.plate, contractMap) || 'No asignado';
+
+    // Coordenadas: solo los eventos de exceso de velocidad las traen (ver
+    // api/geotab.ts). Sin ellas se conserva el enlace a Geotab como ubicación.
+    const latitude = Number(ev.latitude) || 0;
+    const longitude = Number(ev.longitude) || 0;
+    const tienePosicion = latitude !== 0 || longitude !== 0;
+
     return [normalizeAlertTimestamp({
       id: `geotab-${ev.id}`,
       vehicleId: `GEO-${ev.deviceId || ev.plate || 'UNKNOWN'}`,
@@ -312,13 +331,15 @@ export function buildGeotabAlerts(events: GeotabExceptionEvent[]): Alert[] {
       type: mapped.type,
       severity,
       timestamp: ev.activeFrom || new Date().toISOString(),
-      location: 'Ver en Geotab',
-      latitude: 0,
-      longitude: 0,
+      location: tienePosicion
+        ? `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`
+        : 'Ver en Geotab',
+      latitude,
+      longitude,
       speed,
-      driver: 'Sin asignar',
+      driver: (ev.driverName || '').trim() || 'Sin asignar',
       source: ApiSource.GEOTAB,
-      contract: 'No asignado',
+      contract,
       details,
       sent: false
     })];
