@@ -63,6 +63,58 @@ function buildBogotaIso(
   return parsed.toISOString();
 }
 
+// ==================== PRESENTACIÓN EN HORA DE LA OPERACIÓN ====================
+// Las alertas se guardan en TIMESTAMPTZ (instante absoluto). Postgres las devuelve
+// en UTC, así que CUALQUIER visualización debe convertirse a America/Bogota antes
+// de mostrarse. Cortar el ISO en crudo (`slice`, `replace('T',' ')`) muestra UTC
+// disfrazado de hora local: un desfase de +5 h sobre la hora real del evento.
+// Estas funciones son la única forma autorizada de mostrar una fecha de alerta.
+
+const pad2 = (v: number) => String(v).padStart(2, '0');
+
+/** Partes de un instante en hora Colombia, o null si el valor no es una fecha válida. */
+function partesBogota(value: unknown) {
+  if (value === null || value === undefined || value === '') return null;
+  const date = value instanceof Date ? value : new Date(String(value));
+  if (Number.isNaN(date.getTime())) return null;
+  return getBogotaParts(date);
+}
+
+/** Instante → 'DD/MM/YYYY' en hora Colombia. */
+export function fechaBogota(value: unknown): string {
+  const p = partesBogota(value);
+  if (!p) return value === null || value === undefined ? '' : String(value);
+  return `${pad2(p.day)}/${pad2(p.month)}/${p.year}`;
+}
+
+/** Instante → 'HH:MM:SS' en hora Colombia. */
+export function horaBogota(value: unknown, conSegundos = true): string {
+  const p = partesBogota(value);
+  if (!p) return '';
+  const hm = `${pad2(p.hour)}:${pad2(p.minute)}`;
+  return conSegundos ? `${hm}:${pad2(p.second)}` : hm;
+}
+
+/** Instante → 'DD/MM/YYYY HH:MM' en hora Colombia (formato de tabla). */
+export function fechaHoraBogota(value: unknown, conSegundos = false): string {
+  const p = partesBogota(value);
+  if (!p) return value === null || value === undefined ? '' : String(value);
+  return `${fechaBogota(value)} ${horaBogota(value, conSegundos)}`;
+}
+
+/** Instante → 'YYYY-MM-DD' del día CALENDARIO en Colombia (para agrupar). */
+export function diaBogota(value: unknown): string {
+  const p = partesBogota(value);
+  if (!p) return '';
+  return `${p.year}-${pad2(p.month)}-${pad2(p.day)}`;
+}
+
+/** ¿Es un string ISO-8601 con zona explícita (Z u offset)? */
+export function esIsoConZona(value: unknown): boolean {
+  return typeof value === 'string'
+    && /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})$/.test(value.trim());
+}
+
 export function normalizeFagorTimestamp(timestamp: string, source?: string): string {
   if (source !== 'FAGOR') return timestamp;
 

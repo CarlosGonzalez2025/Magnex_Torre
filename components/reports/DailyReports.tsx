@@ -17,6 +17,7 @@ import type { ContratoOption } from '../../services/reportService';
 import { generarCorreoAlertasDiarias, type CorreoAlertas } from '../../services/dailyEmailTemplates';
 import { descargarExcelAlertasDiarias } from '../../services/dailyAlertsExcel';
 import { CorreoAlertasModal } from './CorreoAlertasModal';
+import { diaBogota, fechaHoraBogota } from '../../services/dateNormalization';
 
 type Vista = 'historial' | 'analisis' | 'subir';
 
@@ -275,7 +276,10 @@ export const DailyReports: React.FC = () => {
     }>();
 
     historial.forEach((row) => {
-      const fecha = fechaCorta(row.fecha_dia || row.fecha);
+      // `fecha_dia` ya es el día calendario en Colombia; el respaldo `fecha` es un
+      // instante UTC y hay que convertirlo, o los eventos nocturnos se agrupan
+      // en el día siguiente.
+      const fecha = row.fecha_dia ? fechaCorta(row.fecha_dia) : diaBogota(row.fecha);
       const contrato = String(row.contrato_nombre || 'Sin contrato').trim() || 'Sin contrato';
       const key = `${fecha}|${contrato}`;
       const current = grupos.get(key) ?? { fecha, contrato, excesos80: 0, excesos50a80: 0, excesosVarios: 0, frenadas: 0 };
@@ -292,7 +296,7 @@ export const DailyReports: React.FC = () => {
   }, [historial]);
 
   const colsAlertas = [
-    { key: 'fecha', header: 'Fecha', render: (v: unknown) => String(v ?? '').replace('T', ' ').slice(0, 16) },
+    { key: 'fecha', header: 'Fecha', render: (v: unknown) => fechaHoraBogota(v) },
     { key: 'placa', header: 'Placa' },
     { key: 'conductor', header: 'Conductor', render: (v: unknown) => String(v || 'NO REGISTRA').toUpperCase() },
     { key: 'contrato_nombre', header: 'Contrato' },
@@ -305,7 +309,7 @@ export const DailyReports: React.FC = () => {
   ];
 
   const colsPendientes = [
-    { key: 'fecha', header: 'Fecha', render: (v: unknown) => String(v ?? '').replace('T', ' ').slice(0, 16) },
+    { key: 'fecha', header: 'Fecha', render: (v: unknown) => fechaHoraBogota(v) },
     { key: 'placa', header: 'Placa' },
     { key: 'conductor', header: 'Conductor', render: (v: unknown) => String(v || 'NO REGISTRA').toUpperCase() },
     { key: 'contrato_nombre', header: 'Contrato' },
@@ -316,7 +320,7 @@ export const DailyReports: React.FC = () => {
     { key: 'excesos_varios_parametros', header: '10-40' },
     { key: 'frenadas_bruscas', header: 'Frenadas' },
     { key: 'gps', header: 'GPS' },
-    { key: 'created_at', header: 'Registrada', render: (v: unknown) => String(v ?? '').replace('T', ' ').slice(0, 16) },
+    { key: 'created_at', header: 'Registrada', render: (v: unknown) => fechaHoraBogota(v) },
   ];
 
   return (

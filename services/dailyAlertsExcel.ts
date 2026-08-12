@@ -2,6 +2,7 @@ import type ExcelJSType from 'exceljs';
 import type { ReporteAlertasDiariasData, AlertaDiariaGps } from './reportService';
 import { esConductorIdentificado } from './reportService';
 import { descargarBuffer, MIME_XLSX } from '../utils/descargarArchivo';
+import { fechaBogota, horaBogota } from './dateNormalization';
 
 // ── Paleta y helpers de estilo ────────────────────────────────────────────────
 const COLORS = {
@@ -27,14 +28,11 @@ function num(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-function fechaCorta(iso: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso ?? ''));
-  return m ? `${m[3]}/${m[2]}/${m[1]}` : String(iso ?? '');
-}
-function horaCorta(iso: string): string {
-  const m = /[T\s](\d{2}:\d{2}(?::\d{2})?)/.exec(String(iso ?? ''));
-  return m ? m[1] : '';
-}
+// `fecha` viene de TIMESTAMPTZ: Postgres la entrega en UTC. Se convierte a hora
+// Colombia antes de imprimirla; leer el ISO en crudo mostraba el evento 5 h tarde
+// y, después de las 19:00 locales, además con el día siguiente.
+const fechaCorta = (iso: string): string => fechaBogota(iso);
+const horaCorta = (iso: string): string => horaBogota(iso);
 function periodoLargo(inicio: string, fin: string): string {
   const larga = (iso: string) => {
     const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);

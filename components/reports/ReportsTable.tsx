@@ -3,6 +3,7 @@ import { FileDown, FileText, AlertTriangle, ChevronUp, ChevronDown } from 'lucid
 import type ExcelJS from 'exceljs';
 import { ValidationError } from '../../services/importService';
 import { descargarBuffer, MIME_XLSX } from '../../utils/descargarArchivo';
+import { esIsoConZona, fechaHoraBogota } from '../../services/dateNormalization';
 
 export const ErroresTable: React.FC<{ errores: ValidationError[] }> = ({ errores }) => {
   if (errores.length === 0) return null;
@@ -116,6 +117,9 @@ export const ReportsTable: React.FC<ReportsTableProps> = ({
   const formatExportValue = (value: unknown) => {
     if (value instanceof Date) return value.toLocaleString('es-CO');
     if (value === null || value === undefined || value === '') return '';
+    // Instantes de BD (TIMESTAMPTZ, entregados en UTC) → hora de la operación.
+    // Sin esto el Excel exportaba el evento 5 h adelantado respecto al GPS.
+    if (esIsoConZona(value)) return fechaHoraBogota(value, true);
     if (typeof value === 'object') {
       const obj = value as Record<string, unknown>;
       if ('nombres' in obj || 'cedula' in obj) {
