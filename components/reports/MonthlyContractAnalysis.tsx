@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  BarChart3, RefreshCw, Mail, Download, Search, ArrowUpDown, Users, Truck, AlertTriangle, Route,
+  BarChart3, RefreshCw, Mail, Download, Search, ArrowUpDown, Users, Truck, AlertTriangle, Route, Send,
 } from 'lucide-react';
 import { listarReportesConductores, listarReportesVehiculos } from '../../services/reportService';
 import type { ConductorOption, ContratoOption, VehiculoOption } from '../../services/reportService';
@@ -8,6 +8,9 @@ import { SemaforoBadge } from './ReportsTable';
 import { CorreoModal } from './CorreoModal';
 import { generarCorreoInformeMensual, etiquetaMesPeriodo, type CorreoMensual } from '../../services/monthlyEmailTemplates';
 import { descargarInformesMensualesContrato, type TipoInformeMensual } from '../../services/monthlyContractReports';
+import { listarEnviosMensuales, marcarEnvioMensual, mesPeriodo, type EnvioMensual } from '../../services/monthlyDeliveryService';
+import { fechaHoraBogota } from '../../services/dateNormalization';
+import { useAuth } from '../../contexts/AuthContext';
 
 type Row = Record<string, unknown>;
 
@@ -134,6 +137,7 @@ interface MonthlyContractAnalysisProps {
 export const MonthlyContractAnalysis: React.FC<MonthlyContractAnalysisProps> = ({
   contratos, conductores, vehiculos, fechaInicio, fechaFin, onPeriodoChange,
 }) => {
+  const { user } = useAuth();
   const [condRows, setCondRows] = useState<Row[]>([]);
   const [vehRows, setVehRows] = useState<Row[]>([]);
   const [cargando, setCargando] = useState(false);
@@ -147,9 +151,17 @@ export const MonthlyContractAnalysis: React.FC<MonthlyContractAnalysisProps> = (
   const [generandoPDF, setGenerandoPDF] = useState('');
   const [correo, setCorreo] = useState<{ contrato: string; mes: string; correo: CorreoMensual } | null>(null);
 
+  // Marcas de "informe enviado" del mes del período, indexadas por contrato_id.
+  const [envios, setEnvios] = useState<Map<string, EnvioMensual>>(new Map());
+  const [guardandoEnvio, setGuardandoEnvio] = useState<Set<string>>(new Set());
+  const [errorEnvio, setErrorEnvio] = useState<string | null>(null);
+
+  const mes = useMemo(() => mesPeriodo(fechaFin), [fechaFin]);
+
   const cargar = useCallback(async () => {
     setCargando(true);
     setError(null);
+    setErrorEnvio(null);
     try {
       const [rCond, rVeh] = await Promise.all([
         listarReportesConductores({ fechaInicio, fechaFin }),
@@ -163,7 +175,17 @@ export const MonthlyContractAnalysis: React.FC<MonthlyContractAnalysisProps> = (
     } finally {
       setCargando(false);
     }
-  }, [fechaInicio, fechaFin]);
+
+    // El control de envío se lee aparte: si la tabla todavía no existe en el
+    // entorno, el resto del análisis tiene que seguir mostrándose igual.
+    try {
+      setEnvios(await listarEnviosMensuales(mes));
+    } catch (err) {
+      console.error('Error cargando el control de envío mensual:', err);
+      setEnvios(new Map());
+      setErrorEnvio(err instanceof Error ? err.message : String(err));
+    }
+  }, [fechaInicio, fechaFin, mes]);
 
   useEffect(() => { cargar(); }, [cargar]);
 
@@ -278,6 +300,16 @@ export const MonthlyContractAnalysis: React.FC<MonthlyContractAnalysisProps> = (
     exc80: 0, excTotales: 0, aceleraciones: 0, frenadas: 0, ralenti: 0,
   }), [filasVisibles]);
 
+  // Avance del envío sobre lo que se está viendo. Solo cuentan los contratos
+  // identificados: los que no lo están no se pueden marcar.
+  const avanceEnvio = useMemo(() => {
+    const marcables = filasVisibles.filter(f => f.contratoId);
+    return {
+      total: marcables.length,
+      enviados: marcables.filter(f => envios.get(f.contratoId)?.enviado).length,
+    };
+  }, [filasVisibles, envios]);
+
   // Misma columna → invierte el sentido; columna nueva → orden natural (texto asc, cifras desc).
   const ordenarPor = (field: SortField) => {
     if (field === sortField) {
@@ -298,6 +330,65 @@ export const MonthlyContractAnalysis: React.FC<MonthlyContractAnalysisProps> = (
         periodoFin: fechaFin,
       }),
     });
+  };
+
+  /**
+   * Marca/desmarca el informe del contrato como enviado.
+   *
+   * Optimista: el check responde al instante y se revierte si la base rechaza
+   * el cambio, porque el usuario marca varias filas seguidas y esperar una ida
+   * y vuelta por cada una hace el repaso incómodo.
+   */
+  const handleEnviado = async (fila: FilaContrato, enviado: boolean) => {
+    if (!fila.contratoId) return;
+
+    // Solo se guarda —y solo se revierte— la entrada de ESTE contrato: marcar
+    // varias filas seguidas no debe pisar lo que otra fila acaba de guardar.
+    const previo = envios.get(fila.contratoId);
+    const aplicar = (valor: EnvioMensual | undefined) => setEnvios(prev => {
+      const siguiente = new Map(prev);
+      if (valor?.enviado) siguiente.set(fila.contratoId, valor);
+      else siguiente.delete(fila.contratoId);
+      return siguiente;
+    });
+    const marcarGuardando = (activo: boolean) => setGuardandoEnvio(prev => {
+      const siguiente = new Set(prev);
+      if (activo) siguiente.add(fila.contratoId);
+      else siguiente.delete(fila.contratoId);
+      return siguiente;
+    });
+
+    aplicar(enviado
+      ? {
+          contratoId: fila.contratoId,
+          mes,
+          enviado: true,
+          enviadoAt: new Date().toISOString(),
+          enviadoPor: user?.name ?? user?.email ?? null,
+        }
+      : undefined);
+    marcarGuardando(true);
+    setErrorEnvio(null);
+
+    try {
+      // Se reemplaza con lo que quedó en la base: la hora y el autor los fija
+      // el guardado, no el optimismo local.
+      aplicar(await marcarEnvioMensual({
+        contratoId: fila.contratoId,
+        periodoInicio: fechaInicio,
+        periodoFin: fechaFin,
+        enviado,
+        usuario: user?.name ?? user?.email ?? null,
+      }));
+    } catch (err) {
+      console.error('Error guardando la marca de envío mensual:', err);
+      aplicar(previo);
+      setErrorEnvio(
+        `No se pudo guardar la marca de "${fila.nombre}": ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      marcarGuardando(false);
+    }
   };
 
   const handlePDF = async (fila: FilaContrato, tipo: TipoInformeMensual) => {
@@ -412,6 +503,13 @@ export const MonthlyContractAnalysis: React.FC<MonthlyContractAnalysisProps> = (
             <BarChart3 className="w-4 h-4 text-purple-600" /> Informes mensuales por contrato
           </h2>
           <div className="flex items-center gap-3">
+            <span
+              className="text-xs font-semibold px-2 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 inline-flex items-center gap-1.5"
+              title={`Informes marcados como enviados en ${etiquetaMesPeriodo(fechaFin)}`}
+            >
+              <Send className="w-3 h-3" />
+              {avanceEnvio.enviados} / {avanceEnvio.total} enviados
+            </span>
             <label className="text-xs text-slate-500 dark:text-slate-400 inline-flex items-center gap-1.5 cursor-pointer">
               <input
                 type="checkbox"
@@ -431,6 +529,12 @@ export const MonthlyContractAnalysis: React.FC<MonthlyContractAnalysisProps> = (
           </div>
         )}
 
+        {errorEnvio && (
+          <div className="rounded-lg p-3 text-sm bg-amber-50 dark:bg-amber-950/20 text-amber-700 dark:text-amber-400">
+            {errorEnvio}
+          </div>
+        )}
+
         {cargando ? (
           <div className="flex justify-center py-10"><div className="w-6 h-6 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" /></div>
         ) : filasVisibles.length === 0 ? (
@@ -442,6 +546,12 @@ export const MonthlyContractAnalysis: React.FC<MonthlyContractAnalysisProps> = (
             <table className="w-full text-xs">
               <thead>
                 <tr className="bg-slate-800 text-white">
+                  <th
+                    className="px-2 py-2.5 font-semibold whitespace-nowrap w-10"
+                    title={`Marca de informe enviado — ${etiquetaMesPeriodo(fechaFin)}`}
+                  >
+                    <Send className="w-3.5 h-3.5 inline-block" />
+                  </th>
                   {th('nombre', 'Contrato', 'left')}
                   <th className="px-2 py-2.5 font-semibold whitespace-nowrap">Conductores</th>
                   <th className="px-2 py-2.5 font-semibold whitespace-nowrap">Vehículos</th>
@@ -457,16 +567,46 @@ export const MonthlyContractAnalysis: React.FC<MonthlyContractAnalysisProps> = (
                 </tr>
               </thead>
               <tbody>
-                {filasVisibles.map((f, i) => (
+                {filasVisibles.map((f, i) => {
+                  const envio = f.contratoId ? envios.get(f.contratoId) : undefined;
+                  const enviado = Boolean(envio?.enviado);
+                  return (
                   <tr
                     key={f.contratoId || f.nombre}
                     className={`border-t border-slate-100 dark:border-slate-800 ${
                       f.exc80 > 0 ? 'bg-red-50/60 dark:bg-red-950/20' : i % 2 ? 'bg-slate-50/50 dark:bg-slate-800/20' : ''
                     }`}
                   >
+                    <td className={`px-2 py-2 text-center border-l-2 ${enviado ? 'border-emerald-500' : 'border-transparent'}`}>
+                      {guardandoEnvio.has(f.contratoId) ? (
+                        <div className="w-3.5 h-3.5 mx-auto border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <input
+                          type="checkbox"
+                          checked={enviado}
+                          disabled={!f.contratoId}
+                          onChange={(e) => handleEnviado(f, e.target.checked)}
+                          aria-label={`Marcar el informe de ${f.nombre} como enviado`}
+                          title={!f.contratoId
+                            ? 'Contrato sin identificar: no se puede marcar'
+                            : enviado
+                              ? `Enviado${envio?.enviadoPor ? ` por ${envio.enviadoPor}` : ''}${envio?.enviadoAt ? ` · ${fechaHoraBogota(envio.enviadoAt)}` : ''} — clic para desmarcar`
+                              : `Marcar el informe de ${etiquetaMesPeriodo(fechaFin)} como enviado`}
+                          className="accent-emerald-600 w-4 h-4 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+                        />
+                      )}
+                    </td>
                     <td className="px-3 py-2 font-medium text-slate-700 dark:text-slate-200">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span>{f.nombre}</span>
+                        {enviado && (
+                          <span
+                            className="inline-block px-1.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 text-[9px] font-bold"
+                            title={`${envio?.enviadoPor ? `Marcado por ${envio.enviadoPor}` : 'Marcado'}${envio?.enviadoAt ? ` · ${fechaHoraBogota(envio.enviadoAt)}` : ''}`}
+                          >
+                            ENVIADO
+                          </span>
+                        )}
                         {f.exc80 > 0 && (
                           <span className="inline-block px-1.5 py-0.5 rounded-full bg-red-100 dark:bg-red-950/40 text-red-700 dark:text-red-400 text-[9px] font-bold">
                             CRÍTICO ≥80
@@ -538,10 +678,17 @@ export const MonthlyContractAnalysis: React.FC<MonthlyContractAnalysisProps> = (
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
               <tfoot>
                 <tr className="border-t-2 border-slate-200 dark:border-slate-700 bg-slate-100/80 dark:bg-slate-900/50 font-bold text-slate-700 dark:text-slate-200">
+                  <td
+                    className="px-2 py-2 text-center text-emerald-600 dark:text-emerald-400 whitespace-nowrap"
+                    title="Contratos marcados como enviados / contratos que se pueden marcar"
+                  >
+                    {avanceEnvio.enviados}/{avanceEnvio.total}
+                  </td>
                   <td className="px-3 py-2">Total ({totales.contratos})</td>
                   <td className="px-2 py-2 text-center">{entero(totales.conductores)}</td>
                   <td className="px-2 py-2 text-center">{entero(totales.vehiculos)}</td>
@@ -562,6 +709,8 @@ export const MonthlyContractAnalysis: React.FC<MonthlyContractAnalysisProps> = (
         <p className="text-[11px] text-slate-400 dark:text-slate-500">
           Los períodos mensuales corren del día 29 al 28; el mes del informe es el del fin de período
           (<span className="font-semibold">{etiquetaMesPeriodo(fechaFin)}</span> para {fechaInicio} → {fechaFin}).
+          La marca de <span className="font-semibold">enviado</span> se guarda por contrato y mes del informe, así que
+          se conserva aunque el rango de fechas se ajuste unos días.
         </p>
       </div>
 
