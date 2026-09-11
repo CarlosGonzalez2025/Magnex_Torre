@@ -4357,15 +4357,15 @@ const AG_COLS: { key: keyof AnalisisGeneralPeriodoPDF | 'periodo'; label: string
   { key: 'periodo', label: 'PERÍODO', flex: 2.5, align: 'left' },
   { key: 'vehiculosActivos', label: 'VEH.', flex: 1, align: 'center' },
   { key: 'totalHorasEncendido', label: 'H. MOTOR', flex: 1.2, align: 'right' },
-  { key: 'horasConduccion', label: 'H. CONDUC.', flex: 1.2, align: 'right' },
-  { key: 'totalHorasRalenti', label: 'RAL. TOTAL', flex: 1.2, align: 'right' },
+  { key: 'horasConduccion', label: 'EN MARCHA', flex: 1.2, align: 'right' },
+  { key: 'totalHorasRalenti', label: 'RALENTÍ', flex: 1.2, align: 'right' },
   { key: 'horasRalentiMenos5Min', label: 'RAL. <5', flex: 1, align: 'right' },
   { key: 'horasRalentiMas5Min', label: 'RAL. >5', flex: 1, align: 'right' },
   { key: 'totalEventos', label: 'EV. >5', flex: 1.1, align: 'right' },
   { key: 'eventosMas30Min', label: 'EV. >30', flex: 1, align: 'right' },
   { key: 'pctRalenti', label: '% RAL.', flex: 1, align: 'right' },
-  { key: 'pctVsBaselineEventos', label: 'Δ EV.', flex: 1, align: 'right' },
-  { key: 'pctVsBaselineGalones', label: 'Δ GAL.', flex: 1, align: 'right' },
+  { key: 'pctVsBaselineEventos', label: 'EV. VS BASE', flex: 1, align: 'right' },
+  { key: 'pctVsBaselineGalones', label: 'GAL. VS BASE', flex: 1, align: 'right' },
 ];
 
 function AgComparativeTable({ periodos }: { periodos: AnalisisGeneralPeriodoPDF[] }) {
@@ -4421,7 +4421,7 @@ function AgSequentialTable({ periodos }: { periodos: AnalisisGeneralPeriodoPDF[]
     const tendColor = dEv < -2 ? COLORS.verde : dEv > 2 ? COLORS.rojo : COLORS.gris;
     return { label: `${prev.labelCorto} → ${p.labelCorto}`, dEv, dGal, dCo2, tend, tendColor };
   });
-  const head = ['COMPARACIÓN', 'Δ EVENTOS', 'Δ GALONES', 'Δ CO₂', 'TENDENCIA'];
+  const head = ['COMPARACIÓN', 'EVENTOS', 'GALONES', 'CO₂', 'RESULTADO'];
   const flex = [2.2, 1, 1, 1, 1.2];
   return (
     <View style={{ borderWidth: 0.5, borderColor: COLORS.grisBorde, borderStyle: 'solid', borderRadius: 3, overflow: 'hidden' }}>
@@ -4470,11 +4470,11 @@ export function InformeAnalisisGeneralPDF({ data }: { data: AnalisisGeneralPDFDa
         <View style={{ flexDirection: 'row', borderTopWidth: 1.5, borderTopColor: COLORS.azul, paddingTop: 6, marginBottom: 8 }} wrap={false}>
           <View style={{ flex: 1 }}>
             <Text style={{ fontSize: 7.5, fontWeight: 700, color: COLORS.azul }}>Análisis Comparativo Multi-Período</Text>
-            <Text style={{ fontSize: 6.5, color: COLORS.gris, marginTop: 2 }}>Evolución del ralentí, eventos, consumo y emisiones frente a la línea base operativa</Text>
+            <Text style={{ fontSize: 6.5, color: COLORS.gris, marginTop: 2 }}>Evolución del ralentí, los eventos, el consumo y las emisiones frente al período base</Text>
           </View>
           <View style={{ alignItems: 'flex-end' }}>
             <Text style={{ fontSize: 7, fontWeight: 700, color: COLORS.negro }}>{periodos.length} períodos · {baselineLabel} → {latestLabel}</Text>
-            <Text style={{ fontSize: 6, color: COLORS.gris }}>Línea base: {baselineLabel}</Text>
+            <Text style={{ fontSize: 6, color: COLORS.gris }}>Período base: {baselineLabel}</Text>
             <Text style={{ fontSize: 6, color: COLORS.gris }}>Generado: {fmt(fechaReporte.slice(0, 10))}</Text>
           </View>
         </View>
@@ -4486,21 +4486,21 @@ export function InformeAnalisisGeneralPDF({ data }: { data: AnalisisGeneralPDFDa
         </View>
         <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8 }} wrap={false}>
           <AgKpiCard
-            title="Δ Eventos vs Base"
+            title="Eventos vs período base"
             value={fmtPctSigned(latest.pctVsBaselineEventos)}
             sub={`${n(baseline.totalEventos)} → ${n(latest.totalEventos)} eventos`}
             valueColor={latest.pctVsBaselineEventos < 0 ? COLORS.verde : COLORS.rojo}
           />
           <AgKpiCard
-            title="CO₂ Período Actual"
+            title="CO₂ emitido en ralentí"
             value={`${(latest.co2Kg / 1000).toFixed(2)} t`}
-            sub={`${fmtPctSigned(((latest.co2Kg - baseline.co2Kg) / (baseline.co2Kg || 1)) * 100)} vs línea base`}
+            sub={`${fmtPctSigned(((latest.co2Kg - baseline.co2Kg) / (baseline.co2Kg || 1)) * 100)} frente al período base`}
             valueColor={COLORS.verde}
           />
           <AgKpiCard
-            title="Costo Combustible"
+            title="Costo del ralentí"
             value={fmtCOP(latest.costoCOP)}
-            sub={`${n(latest.totalGalones, 1)} gal`}
+            sub={`${n(latest.totalGalones, 1)} galones quemados con el vehículo quieto`}
             valueColor={COLORS.negro}
           />
           <AgKpiCard
@@ -4512,25 +4512,27 @@ export function InformeAnalisisGeneralPDF({ data }: { data: AnalisisGeneralPDFDa
         </View>
 
         <View style={{ backgroundColor: COLORS.azul, padding: '4 8', marginBottom: 4 }} wrap={false}>
-          <Text style={{ fontSize: 7.5, fontWeight: 700, color: COLORS.blanco }}>COMPARATIVO POR PERÍODO VS LÍNEA BASE</Text>
+          <Text style={{ fontSize: 7.5, fontWeight: 700, color: COLORS.blanco }}>CADA QUINCENA COMPARADA CON EL PERÍODO BASE</Text>
         </View>
         <AgComparativeTable periodos={periodos} />
         <Text style={{ fontSize: 5.6, color: COLORS.gris, lineHeight: 1.4, marginBottom: 6 }}>
-          Todas las cifras cubren la flota completa y cuadran entre sí (H. Motor − Ralentí Total = H. Conducción).
-          El indicador "n/total c/motor" señala cuántos vehículos reportan horas de motor encendido; en períodos con
-          cobertura baja, el % Ralentí del período se sobreestima. Δ Eventos y Δ Galones se miden contra la línea base ({baselineLabel}).
+          Cómo leer la tabla: H. MOTOR son las horas con el motor encendido; EN MARCHA, las que el vehículo estuvo
+          moviéndose; RALENTÍ, las que pasó quieto y encendido. Las tres cuadran entre sí (motor − ralentí = en marcha).
+          EV. es la cantidad de veces que un vehículo superó el tiempo permitido detenido con el motor encendido.
+          % RAL. indica, de cada 100 horas de motor, cuántas fueron de ralentí: por debajo de 10% es bueno y por encima
+          de 20% es alto. Las columnas VS BASE comparan cada quincena con el período base ({baselineLabel}); en verde, mejora.
         </Text>
 
         {/* Gráficos combinados (barras + línea de % ralentí) */}
         <View style={{ flexDirection: 'row', gap: 6 }} wrap={false}>
           <AgComboChart
-            title="Horas: Conducción vs Ralentí >5 min · % Ralentí"
+            title="Horas en marcha vs horas de ralentí largo"
             data={periodos.map(p => ({ label: p.labelCorto, bar0: p.horasConduccion, bar1: p.horasRalentiMas5Min, line: p.pctRalenti }))}
-            barLabels={['H. Conducción', 'Ralentí >5 min']}
+            barLabels={['Horas en marcha', 'Ralentí >5 min']}
             barColors={[COLORS.verde, COLORS.naranja]}
           />
           <AgComboChart
-            title="Eventos: >5 min vs >30 min · % Ralentí"
+            title="Eventos de ralentí: largos y muy largos"
             data={periodos.map(p => ({ label: p.labelCorto, bar0: p.totalEventos, bar1: p.eventosMas30Min, line: p.pctRalenti }))}
             barLabels={['Eventos >5 min', 'Eventos >30 min']}
             barColors={[COLORS.azulClaro, COLORS.rojo]}
@@ -4555,7 +4557,7 @@ export function InformeAnalisisGeneralPDF({ data }: { data: AnalisisGeneralPDFDa
             format={v => n(v)}
           />
           <AgBarChart
-            title="Galones Consumidos"
+            title="Galones quemados en ralentí"
             data={periodos.map(p => ({ label: p.labelCorto, value: p.totalGalones, base: p.esBase }))}
             color={COLORS.amarillo}
             format={v => n(v, 0)}
@@ -4563,7 +4565,7 @@ export function InformeAnalisisGeneralPDF({ data }: { data: AnalisisGeneralPDFDa
         </View>
         <View style={{ flexDirection: 'row', gap: 6, marginBottom: 8 }} wrap={false}>
           <AgBarChart
-            title="CO₂ Emitido (kg)"
+            title="CO₂ emitido por el ralentí (kg)"
             data={periodos.map(p => ({ label: p.labelCorto, value: p.co2Kg, base: p.esBase }))}
             color={COLORS.verde}
             format={v => n(v, 0)}
@@ -4577,7 +4579,7 @@ export function InformeAnalisisGeneralPDF({ data }: { data: AnalisisGeneralPDFDa
         </View>
 
         <View style={{ backgroundColor: COLORS.azul, padding: '4 8', marginBottom: 4 }} wrap={false}>
-          <Text style={{ fontSize: 7.5, fontWeight: 700, color: COLORS.blanco }}>TENDENCIA SECUENCIAL (PERÍODO A PERÍODO)</Text>
+          <Text style={{ fontSize: 7.5, fontWeight: 700, color: COLORS.blanco }}>CADA QUINCENA COMPARADA CON LA ANTERIOR</Text>
         </View>
         <View style={{ marginBottom: 8 }}>
           <AgSequentialTable periodos={periodos} />
@@ -4588,12 +4590,12 @@ export function InformeAnalisisGeneralPDF({ data }: { data: AnalisisGeneralPDFDa
         </View>
         <View style={{ flexDirection: 'row', gap: 6, marginBottom: 6 }} wrap={false}>
           <View style={{ flex: 1, backgroundColor: COLORS.verdeBg, borderWidth: 0.5, borderColor: COLORS.verde, borderStyle: 'solid', borderRadius: 4, padding: 7 }}>
-            <Text style={{ fontSize: 6.5, fontWeight: 700, color: COLORS.verde, textTransform: 'uppercase', marginBottom: 2 }}>Mejor Período</Text>
+            <Text style={{ fontSize: 6.5, fontWeight: 700, color: COLORS.verde, textTransform: 'uppercase', marginBottom: 2 }}>Mejor quincena</Text>
             <Text style={{ fontSize: 9, fontWeight: 700, color: COLORS.negro }}>{mejorPeriodoLabel}</Text>
             <Text style={{ fontSize: 6.2, color: COLORS.gris, marginTop: 1 }}>Menor % de ralentí del comparativo</Text>
           </View>
           <View style={{ flex: 1, backgroundColor: COLORS.rojoBg, borderWidth: 0.5, borderColor: COLORS.rojo, borderStyle: 'solid', borderRadius: 4, padding: 7 }}>
-            <Text style={{ fontSize: 6.5, fontWeight: 700, color: COLORS.rojo, textTransform: 'uppercase', marginBottom: 2 }}>Mayor Desviación</Text>
+            <Text style={{ fontSize: 6.5, fontWeight: 700, color: COLORS.rojo, textTransform: 'uppercase', marginBottom: 2 }}>Quincena más crítica</Text>
             <Text style={{ fontSize: 9, fontWeight: 700, color: COLORS.negro }}>{peorPeriodoLabel}</Text>
             <Text style={{ fontSize: 6.2, color: COLORS.gris, marginTop: 1 }}>Mayor % de ralentí del comparativo</Text>
           </View>
@@ -4607,7 +4609,7 @@ export function InformeAnalisisGeneralPDF({ data }: { data: AnalisisGeneralPDFDa
           <Text style={{ fontSize: 6.8, fontWeight: 700, color: COLORS.azul, textTransform: 'uppercase', marginBottom: 3 }}>Recomendación Principal</Text>
           <Text style={{ fontSize: 7, color: COLORS.negro, lineHeight: 1.5, textAlign: 'justify' }}>
             El período actual ({latest.label}) presenta una variación de {fmtPctSigned(latest.pctVsBaselineEventos)} en eventos
-            de ralentí y {fmtPctSigned(latest.pctVsBaselineGalones)} en consumo de combustible frente a la línea base ({baselineLabel}).
+            de ralentí y {fmtPctSigned(latest.pctVsBaselineGalones)} en consumo de combustible frente al período base ({baselineLabel}).
             {' '}{recomendacion}
           </Text>
         </View>
