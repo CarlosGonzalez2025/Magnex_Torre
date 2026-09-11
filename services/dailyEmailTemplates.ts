@@ -45,6 +45,13 @@ function tipoVehiculoLabel(tipo: string): string {
   return esMoto(t) ? 'Motocicleta' : t;
 }
 
+/** Une el cuerpo sin dejar líneas en blanco al final. */
+function cerrarCuerpo(lineas: string[]): string {
+  const L = [...lineas];
+  while (L.length > 0 && L[L.length - 1].trim() === '') L.pop();
+  return L.join('\n');
+}
+
 interface PlacaAgg {
   placa: string;
   tipo_activo: string;
@@ -158,16 +165,9 @@ function cuerpoCritico(data: ReporteAlertasDiariasData, aggs: PlacaAgg[]): strin
   );
   L.push('');
 
-  // 4. Recomendaciones
-  L.push('4. RECOMENDACIONES');
-  if (criticos[0]) {
-    L.push(`• Realizar retroalimentación al conductor asociado al vehículo ${criticos[0].placa} una vez sea identificado y verificar las condiciones que originaron el evento de velocidad superior a 80 km/h.`);
-  }
-  L.push(`• Fortalecer las campañas de conducción defensiva orientadas al control de velocidad y la anticipación del riesgo para disminuir los ${n(resumen.excesos50a80)} excesos de velocidad y las ${n(resumen.frenadas)} frenadas bruscas registradas.`);
-  L.push('• Verificar diariamente el uso correcto de la llave iButton antes del inicio de la jornada para garantizar la identificación de todos los conductores.');
-  L.push('• Mantener seguimiento a los conductores y vehículos con mayor número de frenadas bruscas para implementar acciones preventivas y reducir la reincidencia de estos comportamientos.');
-
-  return L.join('\n');
+  // Sin bloque de recomendaciones: por decisión del cliente (2026-09-11) el
+  // correo automático informa los hallazgos y no propone acciones.
+  return cerrarCuerpo(L);
 }
 
 // ── Plantilla PREVENTIVA (sin excesos ≥ 80 km/h) ──────────────────────────────
@@ -233,14 +233,9 @@ function cuerpoPreventivo(data: ReporteAlertasDiariasData, aggs: PlacaAgg[]): st
   L.push('Se resalta positivamente que durante el periodo evaluado no se registraron excesos de velocidad iguales o superiores a 80 km/h, manteniendo el cumplimiento del indicador crítico de seguridad vial.');
   L.push('');
 
-  L.push('Recomendaciones');
-  const placasClave = topIncidencia.map(t => t.placa).join(', ');
-  L.push(`• Implementar de manera inmediata controles para garantizar el uso obligatorio de la llave iButton antes del inicio de cada recorrido${placasClave ? `, especialmente en los vehículos ${placasClave}` : ''}.`);
-  L.push('• Realizar seguimiento preventivo a los vehículos con mayor número de excesos de velocidad y frenadas bruscas, priorizando la identificación de los conductores responsables.');
-  L.push('• Fortalecer las campañas de sensibilización sobre cumplimiento de límites de velocidad y técnicas de manejo defensivo.');
-  L.push('• Mantener el seguimiento al indicador de velocidad máxima, conservando el resultado positivo obtenido al no registrar excesos superiores a 80 km/h.');
-
-  return L.join('\n');
+  // Sin bloque de recomendaciones: por decisión del cliente (2026-09-11) el
+  // correo automático informa los hallazgos y no propone acciones.
+  return cerrarCuerpo(L);
 }
 
 // ── API pública ────────────────────────────────────────────────────────────────

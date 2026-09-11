@@ -1019,7 +1019,6 @@ export const RalentiReports: React.FC = () => {
     // desglose por combustible). Diluye el costo sobre TODOS los galones, igual que
     // co2FactorEfectivo hace con el CO₂.
     const costFactorEfectivo = totalGalonesConsumidos > 0 ? costTotal / totalGalonesConsumidos : 0;
-    const treesEquivalent = co2Kg / 22; // Trees formula
 
     // "Mayor evento único" se mide solo entre eventos con conductor identificado
     // (se excluyen N/A, No registra, etc.), igual que los Top de conductores.
@@ -1152,7 +1151,6 @@ export const RalentiReports: React.FC = () => {
       costAvgDaily,
       co2Kg,
       co2FactorEfectivo,
-      treesEquivalent,
       galonesClasificados,
       galonesSinTipo,
       vehiculosSinTipo,
@@ -1637,7 +1635,6 @@ export const RalentiReports: React.FC = () => {
               costTotal: stats.costTotal,
               costAvgDaily: stats.costAvgDaily,
               co2Kg: stats.co2Kg,
-              treesEquivalent: stats.treesEquivalent,
               mayorEventoSegundos: stats.mayorEventoSegundos,
               mayorEventoConductor: stats.mayorEventoConductor,
               promedioEventoSegundos: stats.promedioEventoSegundos,
@@ -2029,19 +2026,6 @@ export const RalentiReports: React.FC = () => {
                 </div>
               </div>
 
-              <div className="space-y-3">
-                <p className="text-[11px] text-emerald-100/90 leading-relaxed">
-                  Para mitigar la huella ecológica dejada por el ralentí excesivo de este período, se requiere el equivalente de:
-                </p>
-                <div className="bg-white/10 border border-white/10 rounded-xl p-4 flex items-center gap-3">
-                  <span className="text-2xl font-black">{Math.ceil(stats.treesEquivalent)}</span>
-                  <div className="text-[10px] leading-snug">
-                    <strong className="block text-white">Árboles compensados</strong>
-                    <span className="text-emerald-200">Madurando de forma aislada por 1 año</span>
-                  </div>
-                </div>
-              </div>
-
               {stats.vehiculosSinTipo > 0 && (
                 <div className="bg-amber-400/15 border border-amber-300/40 rounded-xl p-3 flex items-start gap-2">
                   <AlertTriangle className="w-4 h-4 text-amber-200 shrink-0 mt-0.5" />
@@ -2309,7 +2293,7 @@ export const RalentiReports: React.FC = () => {
                       <tr className="hover:bg-slate-50/50 dark:hover:bg-slate-700/30">
                         <td className="py-3 px-3 font-semibold text-slate-700 dark:text-slate-300">Huella de Carbono (CO2)</td>
                         <td className="py-3 px-3 font-bold text-slate-800 dark:text-slate-200">{stats.co2Kg.toFixed(0)} Kg CO2</td>
-                        <td className="py-3 px-3 text-slate-500 dark:text-slate-400">{(stats.co2Kg / 1000).toFixed(2)} Ton (Equivale a {Math.ceil(stats.treesEquivalent)} árboles madurando)</td>
+                        <td className="py-3 px-3 text-slate-500 dark:text-slate-400">{(stats.co2Kg / 1000).toFixed(2)} Ton</td>
                       </tr>
                     </tbody>
                   </table>
@@ -2560,7 +2544,7 @@ export const RalentiReports: React.FC = () => {
                 </p>
                 <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
                   Cada vehículo aplica el factor de su tipo de combustible (columna <span className="font-semibold">"Tipo combustible"</span>),
-                  sin promediar. La equivalencia en árboles es <code className="text-[10px]">CO₂ kg / 22</code> (absorción anual de un árbol maduro).
+                  sin promediar.
                 </p>
               </div>
             </div>
@@ -2836,7 +2820,6 @@ Precio efectivo/gal   = Costo Total ÷ Galones totales (mezcla real de la flota)
                   <code className="block w-full text-[10.5px] font-mono bg-slate-900 text-emerald-300 dark:bg-black/40 rounded-md px-3 py-2 leading-relaxed whitespace-pre-wrap">
 {`CO₂ (kg) = Σ (galones_del_combustible × factor_del_combustible)
 Factor (kg CO₂/gal) = (%C ÷ 100) × (44,0095 ÷ 12,0107) × Densidad[kg/L] × 3,7854118[L/gal]
-Equivalente en árboles = CO₂(kg) ÷ 22      (absorción anual de un árbol maduro)
 Factor efectivo flota  = CO₂(kg) ÷ Galones totales`}
                   </code>
                   <div className="overflow-x-auto">

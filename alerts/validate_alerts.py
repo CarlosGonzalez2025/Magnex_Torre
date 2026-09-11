@@ -58,6 +58,8 @@ from datetime import datetime, timedelta
 from ml.supabase_io import (
     COL_OFFSET, check_env, count, fetch_all, patch,
 )
+# Criterio único de excesos, compartido con el front y con el entrenamiento ML.
+from ml.speeding_classification import es_exceso as _es_exceso, es_exceso_grave
 
 for _s in (sys.stdout, sys.stderr):
     if hasattr(_s, 'reconfigure'):
@@ -72,11 +74,11 @@ for _s in (sys.stdout, sys.stderr):
 # informe lo genera el proveedor después, con su propia marca de tiempo.
 VENTANA_MIN = 15
 
-# Umbrales — misma semántica que api/agent.py y ml/train_driver_risk.py. Si estas
-# constantes divergen, el asistente, el dashboard y el validador dan veredictos
-# distintos sobre el mismo evento.
-UMBRAL_EXCESO = 50.0
-UMBRAL_GRAVE = 80.0
+# Los umbrales (50 / 80 km/h) y la regla de clasificación viven en
+# `ml.speeding_classification`, compartida con el entrenamiento ML y espejo de
+# `services/speedingClassification.ts`. Estaban duplicados aquí y en
+# api/agent.py, y la copia local es justo lo que hacía que el asistente, el
+# dashboard y el validador dieran veredictos distintos del mismo evento.
 
 # Cuántas veces se reintenta antes de rendirse. Con el cron cada 2h, 24 intentos
 # ≈ 2 días de margen para que el proveedor publique su informe.
@@ -112,14 +114,17 @@ def _parse_ts(s: str) -> datetime | None:
 
 
 def es_exceso(ev: dict) -> bool:
-    """Misma definición que el resto del sistema.
+    """Misma definición que el resto del sistema (`ml.speeding_classification`).
+
+    Se clasifica desde `estado` (el nombre de la regla que disparó el GPS), no
+    desde los contadores guardados: esas columnas se escribieron con el criterio
+    viejo —tramo por velocidad medida— y por eso marcan como infracción de >80
+    eventos de reglas de 20/30/40 km/h.
 
     Ojo: `excesos_varios_parametros` NO es velocidad (aparece con 10-28 km/h);
     incluirlo infla el conteo ~2.7x. Por eso ni se consulta.
     """
-    return (float(ev.get('infraccion_80_kmh') or 0) > 0
-            or float(ev.get('excesos_50_80_kmh') or 0) > 0
-            or float(ev.get('velocidad') or 0) >= UMBRAL_EXCESO)
+    return _es_exceso(ev.get('estado'), ev.get('velocidad'), ev.get('gps'))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -287,7 +292,9 @@ def validar(item: dict) -> dict:
 
     mejor = cercanos[0][1]
     vel_max = max(float(e.get('velocidad') or 0) for _, e in cercanos)
-    grave = vel_max >= UMBRAL_GRAVE
+    # Grave = alguno de los eventos cercanos viene de la regla de >= 80 km/h del
+    # GPS (o, si su nombre no declara umbral, se midió a >= 80).
+    grave = any(es_exceso_grave(e.get('estado'), e.get('velocidad'), e.get('gps')) for _, e in cercanos)
 
     # Qué proveedor(es) respaldan realmente el veredicto. La búsqueda de eventos
     # no se limita a `source` a propósito: un exceso corroborado por otra
@@ -322,7 +329,7 @@ def _fila_traza(e: dict) -> dict:
         'lat': e.get('latitud'),
         'lon': e.get('longitud'),
         'lugar': e.get('lugar'),
-        'grave': float(e.get('infraccion_80_kmh') or 0) > 0 or float(e.get('velocidad') or 0) >= UMBRAL_GRAVE,
+        'grave': es_exceso_grave(e.get('estado'), e.get('velocidad'), e.get('gps')),
     }
 
 

@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx';
 import { supabase, fetchPaginado } from './supabaseClient';
 import { processFile, BatchAlert } from './fileProcessingService';
-import { clasificarAlertaDiaria } from './reportService';
+import { clasificarAlertaDiaria, esEventoReportable } from './reportService';
 
 
 // ── Tipos ────────────────────────────────────────────────────────────────────
@@ -4231,10 +4231,11 @@ export async function importarAlertasRaw(
     // 4. Mapear de BatchAlert a los campos esperados por insertAlertasDiarias
     const datosMapeados = parseResult.data.map((alert: BatchAlert, index: number) => {
       // Misma clasificación (fuente única) que usan el Excel/PDF/análisis al leer:
-      // categoría por nombre + velocidad real; eventos que no son exceso ni frenada
-      // (TDR Encendido, etc.) quedan en 0 y no inflan el conteo.
+      // tramo por el umbral que declara el nombre de la regla, con la plataforma
+      // como tercer dato; eventos que no son exceso ni frenada (TDR Encendido,
+      // etc.) quedan en 0 y no inflan el conteo.
       const { infraccion_80_kmh, excesos_50_80_kmh, excesos_varios_parametros, frenadas_bruscas } =
-        clasificarAlertaDiaria(alert.alert_type, alert.speed);
+        clasificarAlertaDiaria(alert.alert_type, alert.speed, source);
 
       return {
         _fila: index + 2,
@@ -4258,12 +4259,15 @@ export async function importarAlertasRaw(
     });
 
     // No guardar eventos que NO son alerta (TDR Encendido/Apagado, GPS Adquirido,
-    // Reconexión, etc.): mantienen la tabla liviana y rápida. Solo se registran los
-    // excesos de velocidad y las frenadas (los únicos que cuentan como alerta).
-    const datosAlerta = datosMapeados.filter(d =>
-      Number(d.infraccion_80_kmh) + Number(d.excesos_50_80_kmh) +
-      Number(d.excesos_varios_parametros) + Number(d.frenadas_bruscas) > 0
-    );
+    // Reconexión, ralentí, cinturón…): mantienen la tabla liviana y rápida. Solo
+    // se registran los excesos de velocidad y las frenadas.
+    //
+    // Se decide por `esEventoReportable`, NO por la suma de los contadores: los
+    // excesos genéricos de Geotab ("Exceso de velocidad", "Exceso de velocidad
+    // (nuevo)") no suman en ningún tramo pero SÍ se guardan, para que sigan
+    // apareciendo en el detalle del informe con su velocidad. Filtrar por la suma
+    // los habría borrado de la carga — 1.254 eventos solo el 10/09/2026.
+    const datosAlerta = datosMapeados.filter(d => esEventoReportable(d.estado));
 
     // 5. Insertar registros usando el método existente insertAlertasDiarias
     const insertResult = await insertAlertasDiarias(datosAlerta, 'daily', cargaId);

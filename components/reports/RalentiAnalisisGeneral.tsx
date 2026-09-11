@@ -16,6 +16,7 @@ import {
   ChevronDown,
   Printer,
   Loader2,
+  HelpCircle,
 } from 'lucide-react';
 import { supabase } from '../../services/supabaseClient';
 import { descargarPDFAnalisisGeneral, AnalisisGeneralPDFData } from '../../services/pdfTemplates';
@@ -455,6 +456,23 @@ const TrendSparkline: React.FC<{ values: number[]; color?: string }> = ({ values
   );
 };
 
+/**
+ * Etiqueta con explicación al pasar el cursor.
+ *
+ * El respaldo estadístico (R², t, z, AUC, silueta…) no se elimina: se mueve aquí, de modo
+ * que la lectura principal quede en lenguaje corriente y quien necesite el detalle técnico
+ * lo tenga a mano sin que estorbe a quien no lo entiende.
+ */
+const InfoTip: React.FC<{ texto: string; children?: React.ReactNode }> = ({ texto, children }) => (
+  <span
+    title={texto}
+    className="inline-flex items-center gap-0.5 cursor-help underline decoration-dotted decoration-slate-300 dark:decoration-slate-600 underline-offset-2"
+  >
+    {children}
+    <HelpCircle className="w-3 h-3 text-slate-400 dark:text-slate-500 shrink-0" />
+  </span>
+);
+
 // ── Main Component ──
 export const RalentiAnalisisGeneral: React.FC<{
   vehicles: VehicleOption[];
@@ -669,30 +687,6 @@ export const RalentiAnalisisGeneral: React.FC<{
   }, [periods]);
 
   /**
-   * Ralentí que el informe DESCARTA por falta de horas de motor encendido.
-   *
-   * `computeMotorMetrics` solo agrega las filas con `horas_motor_encendido > 0`, porque una
-   * fila con ralentí pero sin encendido suma al numerador del % sin aportar al denominador.
-   * El efecto secundario es que una plataforma cargada sin su consolidado de horas de motor
-   * (típicamente Fagor sin `Km_Vehículos`) desaparece por completo de H. Motor, Ralentí Total,
-   * Km y % Ralentí — aunque sus galones y sus eventos sí se cuenten. Eso produce un informe
-   * internamente incoherente y silencioso, así que aquí lo cuantificamos para exponerlo.
-   */
-  const exclusionRalenti = useMemo(() => {
-    const afectados = periods.filter(p => p.ralentiHuerfano > 0);
-    if (afectados.length === 0) return null;
-    const horasExcluidas = afectados.reduce((a, p) => a + p.ralentiHuerfano, 0);
-    const horasContadas = afectados.reduce((a, p) => a + p.totalHorasRalenti, 0);
-    const totalReal = horasExcluidas + horasContadas;
-    return {
-      periodos: afectados,
-      horasExcluidas,
-      pctExcluido: totalReal > 0 ? (horasExcluidas / totalReal) * 100 : 0,
-      peor: [...afectados].sort((a, b) => b.ralentiHuerfano - a.ralentiHuerfano)[0],
-    };
-  }, [periods]);
-
-  /**
    * Modelos estadísticos sobre la serie de quincenas CERRADAS.
    *
    * Se excluye la quincena en curso: sus valores son parciales y arrastrarían la
@@ -804,7 +798,7 @@ export const RalentiAnalisisGeneral: React.FC<{
     const ids = [...porVeh.keys()].filter(v => porVeh.get(v)!.length >= 3);
     if (ids.length < 12) return null;
 
-    const NOMBRES = ['% Ralentí', 'Horas ralentí/quincena', 'Duración media (min)', 'Eventos/quincena', '% eventos >30 min'];
+    const NOMBRES = ['% Ralentí', 'Horas de ralentí por quincena', 'Duración media (min)', 'Eventos por quincena', '% eventos >30 min'];
     const rasgos = (cs: Celda[]): number[] => {
       const n = cs.length;
       const mot = cs.reduce((a, c) => a + c.mot, 0), ral = cs.reduce((a, c) => a + c.ral, 0);
@@ -976,47 +970,13 @@ export const RalentiAnalisisGeneral: React.FC<{
   return (
     <div className="space-y-6">
 
-      {/* ── Aviso de ralentí excluido por falta de horas de motor ──
-          Sin esto la exclusión es invisible: el informe muestra cifras "OK" mientras
-          descarta el ralentí completo de una plataforma. Ver services/ralentiMetrics.ts. */}
-      {exclusionRalenti && (
-        <div className="rounded-xl border border-amber-300/70 dark:border-amber-800/60 bg-amber-50 dark:bg-amber-950/20 p-4 flex gap-3 items-start">
-          <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-          <div className="space-y-1.5 text-xs text-amber-900 dark:text-amber-200 leading-relaxed">
-            <strong className="block text-sm font-bold">
-              Cobertura incompleta: {Math.round(exclusionRalenti.horasExcluidas).toLocaleString('es-CO')} h de ralentí
-              quedan fuera del cálculo ({exclusionRalenti.pctExcluido.toFixed(0)}% del ralentí registrado)
-            </strong>
-            <p>
-              El <strong>% Ralentí</strong>, las <strong>horas de motor</strong>, la <strong>conducción</strong> y los{' '}
-              <strong>km</strong> solo se calculan sobre los vehículos que reportan horas de motor encendido — de lo
-              contrario el porcentaje sería físicamente imposible. Los vehículos que sí tienen ralentí registrado pero
-              llegaron <strong>sin horas de motor</strong> quedan excluidos de esos indicadores, aunque sus{' '}
-              <strong>galones, CO₂ y eventos sí se cuentan</strong>. Eso desbalancea la comparación entre plataformas.
-            </p>
-            <p>
-              Causa habitual: se cargó el detalle de ralentí de una plataforma sin su consolidado de horas de motor
-              (<strong>Fagor</strong>: falta <span className="font-mono">Km_Vehículos</span>; <strong>Coltrack</strong>:
-              falta el <span className="font-mono">Ralentí consolidado por vehículo</span>). Recárguelos en el
-              «Procesador Satelital» con el rango de la quincena para que esas horas entren al informe.
-            </p>
-            <p className="text-[11px] text-amber-700 dark:text-amber-300/80">
-              Períodos afectados: {exclusionRalenti.periodos.map(p => p.labelCorto).join(', ')} · Mayor impacto en{' '}
-              <strong>{exclusionRalenti.peor.label}</strong> con{' '}
-              {Math.round(exclusionRalenti.peor.ralentiHuerfano).toLocaleString('es-CO')} h excluidas frente a{' '}
-              {Math.round(exclusionRalenti.peor.totalHorasRalenti).toLocaleString('es-CO')} h contabilizadas.
-            </p>
-          </div>
-        </div>
-      )}
-
       {/* ── Independent Filter Bar ── */}
       <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 shadow-sm">
         <div className="flex items-center gap-2 text-slate-700 dark:text-slate-300 font-semibold text-sm mb-3">
           <Filter className="w-4 h-4 text-emerald-500" />
           <span>Filtros del Análisis General</span>
           <span className="text-[10px] text-slate-400 dark:text-slate-500 font-normal ml-1">
-            — Cubre todos los períodos disponibles en la base de datos
+            — incluye todas las quincenas cargadas
           </span>
           <div className="ml-auto flex items-center gap-3">
             {hasFilter && (
@@ -1068,11 +1028,40 @@ export const RalentiAnalisisGeneral: React.FC<{
           <span><strong className="text-slate-600 dark:text-slate-300">{latest.vehiculosActivos}</strong> vehículos en período actual</span>
           {hasFilter && (
             <span className="ml-auto text-emerald-600 dark:text-emerald-400 font-semibold">
-              Filtro activo — mostrando subconjunto de flota
+              Filtro activo — viendo solo una parte de la flota
             </span>
           )}
         </div>
       </div>
+
+      {/* ── Glosario de lectura ──
+          El informe lo consultan perfiles operativos y gerenciales sin formación en telemetría.
+          Sin estas definiciones, «ralentí», «evento» o «período base» se interpretan distinto según
+          quién lea, y las conclusiones dejan de ser comparables entre áreas. */}
+      <details open className="bg-sky-50/70 dark:bg-sky-950/20 border border-sky-200 dark:border-sky-900/50 rounded-xl overflow-hidden">
+        <summary className="cursor-pointer select-none px-4 py-3 flex items-center gap-2 text-sm font-bold text-sky-900 dark:text-sky-200">
+          <Info className="w-4 h-4 text-sky-600 dark:text-sky-400 shrink-0" />
+          Cómo leer este informe
+          <span className="text-[11px] font-normal text-sky-700/70 dark:text-sky-300/70">
+            — qué significa cada término
+          </span>
+        </summary>
+        <div className="px-4 pb-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-[11px] leading-relaxed">
+          {[
+            ['Ralentí', 'El vehículo está quieto pero con el motor encendido. Gasta combustible y genera emisiones sin recorrer un solo kilómetro.'],
+            ['Evento de ralentí', 'Cada vez que un vehículo supera el tiempo permitido detenido con el motor encendido. Un mismo vehículo puede generar varios eventos en un día.'],
+            ['% Ralentí', 'De cada 100 horas con el motor encendido, cuántas pasó quieto. Cuanto más bajo, mejor: por debajo de 10% se considera bueno y por encima de 20%, alto.'],
+            ['Período o quincena', 'Los datos se agrupan en quincenas. La quincena que aún no termina se muestra, pero no se usa para comparar porque estaría incompleta.'],
+            ['Período base', 'La primera quincena con datos. Es el punto de partida contra el que se mide si la flota mejoró o empeoró.'],
+            ['Galones y CO₂', 'El combustible que se quema durante el ralentí y las emisiones que produce. Se calculan con el consumo que reporta cada plataforma satelital.'],
+          ].map(([termino, definicion]) => (
+            <div key={termino} className="bg-white/70 dark:bg-slate-800/50 rounded-lg p-3 border border-sky-100 dark:border-sky-900/40">
+              <span className="block font-bold text-sky-900 dark:text-sky-200 mb-0.5">{termino}</span>
+              <span className="text-slate-600 dark:text-slate-300">{definicion}</span>
+            </div>
+          ))}
+        </div>
+      </details>
 
       {/* ── KPI Summary Cards ── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -1086,7 +1075,7 @@ export const RalentiAnalisisGeneral: React.FC<{
           <div className="text-[11px] text-slate-400 dark:text-slate-500">{baseline.labelCorto} → {latest.labelCorto}</div>
           {periodoEnCurso && (
             <div className="text-[10px] text-amber-600 dark:text-amber-400 font-semibold">
-              {periodoEnCurso.labelCorto} en curso — excluida
+              {periodoEnCurso.labelCorto} aún no termina — no se compara
             </div>
           )}
           <TrendSparkline values={periodosCerrados.map(p => p.totalEventos)} color="#003366" />
@@ -1098,13 +1087,16 @@ export const RalentiAnalisisGeneral: React.FC<{
           return (
             <div className={`bg-white dark:bg-slate-800 border rounded-xl p-5 shadow-sm space-y-2 ${improved ? 'border-emerald-200 dark:border-emerald-800/50' : 'border-red-200 dark:border-red-800/50'}`}>
               <div className="flex items-center justify-between">
-                <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 tracking-wider">Δ Eventos vs Base</span>
+                <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 tracking-wider">Eventos vs período base</span>
                 <Activity className={`w-4 h-4 ${improved ? 'text-emerald-400' : 'text-red-400'}`} />
               </div>
               <div className={`text-3xl font-bold ${improved ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
                 {fmtPct(pct)}
               </div>
               <div className="text-[11px] text-slate-400 dark:text-slate-500">
+                <span className={`block font-semibold ${improved ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                  {improved ? 'Bajaron' : 'Subieron'} frente a la primera quincena medida
+                </span>
                 {baseline.totalEventos.toLocaleString('es-CO')} → {latest.totalEventos.toLocaleString('es-CO')} eventos
                 <span className="block text-[10px]">{baseline.labelCorto} → {latest.labelCorto}</span>
               </div>
@@ -1119,21 +1111,24 @@ export const RalentiAnalisisGeneral: React.FC<{
           return (
             <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5 shadow-sm space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 tracking-wider">CO₂ Período Actual</span>
+                <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 tracking-wider">CO₂ emitido en ralentí</span>
                 <Leaf className="w-4 h-4 text-emerald-400" />
               </div>
               {latest.sinCombustible ? (
                 <>
-                  <div className="text-3xl font-bold text-slate-300 dark:text-slate-600">N/D</div>
+                  <div className="text-3xl font-bold text-slate-300 dark:text-slate-600">Sin dato</div>
                   <div className="text-[11px] font-semibold text-amber-600 dark:text-amber-400">
-                    Sin galones cargados en {latest.labelCorto}
+                    Falta cargar el consumo de combustible de {latest.labelCorto}
                   </div>
                 </>
               ) : (
                 <>
                   <div className="text-3xl font-bold text-slate-800 dark:text-slate-100">{(latest.co2Kg / 1000).toFixed(2)} t</div>
                   <div className={`text-[11px] font-semibold ${improved ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500 dark:text-red-400'}`}>
-                    {fmtPct(pct)} vs línea base
+                    {fmtPct(pct)} frente a {baseline.labelCorto}
+                  </div>
+                  <div className="text-[10px] text-slate-400 dark:text-slate-500">
+                    Toneladas emitidas en {latest.labelCorto}
                   </div>
                 </>
               )}
@@ -1144,20 +1139,22 @@ export const RalentiAnalisisGeneral: React.FC<{
 
         <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5 shadow-sm space-y-2">
           <div className="flex items-center justify-between">
-            <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 tracking-wider">Costo Combustible</span>
+            <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 tracking-wider">Costo del ralentí</span>
             <DollarSign className="w-4 h-4 text-amber-400" />
           </div>
           {latest.sinCombustible ? (
             <>
-              <div className="text-2xl font-bold text-slate-300 dark:text-slate-600 leading-tight">N/D</div>
+              <div className="text-2xl font-bold text-slate-300 dark:text-slate-600 leading-tight">Sin dato</div>
               <div className="text-[11px] text-amber-600 dark:text-amber-400">
-                {latest.label} sin galones — cargue Coltrack/Fagor
+                Falta cargar el consumo de {latest.label} en el Procesador Satelital
               </div>
             </>
           ) : (
             <>
               <div className="text-2xl font-bold text-slate-800 dark:text-slate-100 leading-tight">{fmtCOP(latest.costoCOP)}</div>
-              <div className="text-[11px] text-slate-400 dark:text-slate-500">{latest.totalGalones.toFixed(1)} gal — {latest.label}</div>
+              <div className="text-[11px] text-slate-400 dark:text-slate-500">
+                {latest.totalGalones.toFixed(1)} galones quemados con el vehículo quieto en {latest.label}
+              </div>
             </>
           )}
           <TrendSparkline values={periodosCerrados.map(p => p.costoCOP)} color="#f59e0b" />
@@ -1170,25 +1167,28 @@ export const RalentiAnalisisGeneral: React.FC<{
           <div>
             <h3 className="font-bold text-slate-800 dark:text-slate-200 text-sm flex items-center gap-2">
               <BrainCircuit className="w-4 h-4 text-violet-500" />
-              Modelo Estadístico de la Serie
+              ¿La flota está mejorando o empeorando?
               <span className="text-[10px] font-normal text-slate-400 dark:text-slate-500">
-                — regresión por mínimos cuadrados sobre {analitica.cerrados.length} quincenas cerradas
+                — sobre las últimas {analitica.cerrados.length} quincenas terminadas
               </span>
             </h3>
-            <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
-              Una pendiente solo se reporta como tendencia si supera su propio error estándar
-              (contraste t al 95%). Con series cortas lo habitual es que el movimiento sea ruido,
-              y en ese caso aquí se dice explícitamente.
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
+              Que una cifra suba o baje de una quincena a otra es normal. Aquí solo se habla de tendencia
+              cuando el movimiento es lo bastante sostenido como para no ser casualidad; cuando no lo es,
+              se dice con todas las letras en vez de dejar que parezca una mejora o un retroceso.{' '}
+              <InfoTip texto="Se ajusta una recta por mínimos cuadrados sobre la serie de quincenas cerradas y se contrasta la pendiente contra su error estándar (prueba t al 95% de confianza).">
+                <span className="text-slate-400 dark:text-slate-500">Cómo se calcula</span>
+              </InfoTip>
             </p>
           </div>
 
           {/* Tendencias */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {([
-              { r: analitica.regPctRalenti, titulo: '% Ralentí', unidad: 'puntos %', decimales: 2, bajarEsBueno: true },
-              { r: analitica.regIntensidad, titulo: 'Ralentí por vehículo', unidad: 'h/veh', decimales: 2, bajarEsBueno: true },
-              { r: analitica.regEventos, titulo: 'Alertas de ralentí', unidad: 'eventos', decimales: 0, bajarEsBueno: true },
-              { r: analitica.regKmVeh, titulo: 'Km por vehículo', unidad: 'km', decimales: 1, bajarEsBueno: false },
+              { r: analitica.regPctRalenti, titulo: '% Ralentí', unidad: 'puntos porcentuales', decimales: 2, bajarEsBueno: true },
+              { r: analitica.regIntensidad, titulo: 'Horas de ralentí por vehículo', unidad: 'horas', decimales: 2, bajarEsBueno: true },
+              { r: analitica.regEventos, titulo: 'Eventos de ralentí', unidad: 'eventos', decimales: 0, bajarEsBueno: true },
+              { r: analitica.regKmVeh, titulo: 'Kilómetros por vehículo', unidad: 'km', decimales: 1, bajarEsBueno: false },
             ] as { r: Regresion | null; titulo: string; unidad: string; decimales: number; bajarEsBueno: boolean }[])
               .map(({ r, titulo, unidad, decimales, bajarEsBueno }) => {
                 if (!r) return null;
@@ -1203,16 +1203,25 @@ export const RalentiAnalisisGeneral: React.FC<{
                       <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${r.significativa
                         ? 'bg-violet-50 dark:bg-violet-950/30 text-violet-700 dark:text-violet-300'
                         : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'}`}>
-                        {r.significativa ? 'TENDENCIA' : 'SIN TENDENCIA'}
+                        {r.significativa ? 'CAMBIO REAL' : 'SIN CAMBIO CLARO'}
                       </span>
                     </div>
                     <div className={`text-lg font-bold ${color}`}>
                       {r.pendiente > 0 ? '+' : ''}{r.pendiente.toFixed(decimales)} {unidad}
-                      <span className="text-[10px] font-normal text-slate-400 dark:text-slate-500"> / quincena</span>
+                      <span className="text-[10px] font-normal text-slate-400 dark:text-slate-500"> por quincena</span>
                     </div>
-                    <div className="text-[10px] text-slate-400 dark:text-slate-500">
-                      R²={r.r2.toFixed(2)} · t={r.tStat.toFixed(2)} · gl={r.gl}
-                      {!r.significativa && <span className="block text-amber-600 dark:text-amber-400">El dato no distingue esta pendiente del ruido.</span>}
+                    <div className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                      {r.significativa ? (
+                        <>
+                          Quincena tras quincena {r.pendiente > 0 ? 'sube' : 'baja'} esa cantidad de forma sostenida.{' '}
+                          <strong className={color}>{mejora ? 'Va por buen camino.' : 'Va en la dirección equivocada.'}</strong>{' '}
+                        </>
+                      ) : (
+                        <>Sube y baja sin rumbo definido: con los datos que hay no se puede afirmar que esté mejorando ni empeorando.{' '}</>
+                      )}
+                      <InfoTip texto={`R² = ${r.r2.toFixed(2)} (cuánto de la variación explica la recta) · t = ${r.tStat.toFixed(2)} · grados de libertad = ${r.gl}. Se declara tendencia cuando la pendiente supera su error estándar con 95% de confianza.`}>
+                        <span className="text-slate-400 dark:text-slate-500">Respaldo estadístico</span>
+                      </InfoTip>
                     </div>
                   </div>
                 );
@@ -1222,10 +1231,12 @@ export const RalentiAnalisisGeneral: React.FC<{
           {/* Proyección */}
           {analitica.regPctRalenti && analitica.proyeccionPct && analitica.regPctRalenti.significativa && (
             <div className="rounded-lg border border-violet-200 dark:border-violet-800/50 bg-violet-50 dark:bg-violet-950/20 p-3 text-[11px] text-violet-900 dark:text-violet-200">
-              <strong>Proyección para la próxima quincena:</strong> el % Ralentí se ubicaría alrededor de{' '}
-              <strong>{analitica.proyeccionPct.valor.toFixed(2)}%</strong>{' '}
-              (± {analitica.proyeccionPct.banda.toFixed(2)} pp) si la tendencia se mantiene.
-              Es una extrapolación lineal, no un pronóstico: cualquier cambio de flota o de plataforma la invalida.
+              <strong>Si todo sigue igual, la próxima quincena:</strong> el % Ralentí se ubicaría alrededor de{' '}
+              <strong>{analitica.proyeccionPct.valor.toFixed(2)}%</strong>, entre{' '}
+              <strong>{(analitica.proyeccionPct.valor - analitica.proyeccionPct.banda).toFixed(2)}%</strong> y{' '}
+              <strong>{(analitica.proyeccionPct.valor + analitica.proyeccionPct.banda).toFixed(2)}%</strong>.
+              Es la continuación de la línea que traen los datos, no una predicción: si entra o sale flota,
+              o cambia la plataforma satelital, deja de valer.
             </div>
           )}
 
@@ -1273,55 +1284,67 @@ export const RalentiAnalisisGeneral: React.FC<{
           {/* Correlaciones y atípicos */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 space-y-1.5">
-              <span className="text-[11px] font-bold text-slate-700 dark:text-slate-200">Relaciones entre variables</span>
+              <span className="text-[11px] font-bold text-slate-700 dark:text-slate-200">¿Qué se mueve junto con el ralentí?</span>
               {analitica.corrKmRalenti != null && (
                 <p className="text-[10.5px] text-slate-600 dark:text-slate-300">
-                  <strong>Km/vehículo vs % Ralentí:</strong> r = {analitica.corrKmRalenti.toFixed(2)}{' '}
-                  (correlación {fuerzaCorrelacion(analitica.corrKmRalenti)}
-                  {analitica.corrKmRalenti < 0 ? ', inversa' : ''}).{' '}
+                  <strong>¿Trabajar más significa más ralentí?</strong>{' '}
                   {Math.abs(analitica.corrKmRalenti) < 0.3
-                    ? 'El ralentí no acompaña al nivel de operación: reducirlo no exige mover menos la flota.'
+                    ? 'No. Las quincenas de mayor recorrido no traen más ralentí, así que se puede reducir sin mover menos la flota.'
                     : analitica.corrKmRalenti < 0
-                      ? 'Los períodos de mayor recorrido muestran menos ralentí proporcional.'
-                      : 'A mayor recorrido, mayor proporción de ralentí.'}
+                      ? 'Al contrario: las quincenas de mayor recorrido muestran proporcionalmente menos ralentí.'
+                      : 'Sí: cuanto más recorre la flota, mayor es la proporción de ralentí.'}{' '}
+                  <InfoTip texto={`Correlación de Pearson entre km por vehículo y % ralentí: r = ${analitica.corrKmRalenti.toFixed(2)}, relación ${fuerzaCorrelacion(analitica.corrKmRalenti)}${analitica.corrKmRalenti < 0 ? ' e inversa' : ''}.`}>
+                    <span className="text-slate-400 dark:text-slate-500">Ver cálculo</span>
+                  </InfoTip>
                 </p>
               )}
               {analitica.corrEventosGalones != null && (
                 <p className="text-[10.5px] text-slate-600 dark:text-slate-300">
-                  <strong>Alertas vs galones:</strong> r = {analitica.corrEventosGalones.toFixed(2)} (
-                  {fuerzaCorrelacion(analitica.corrEventosGalones)}).
+                  <strong>¿Más eventos significan más combustible gastado?</strong>{' '}
+                  {Math.abs(analitica.corrEventosGalones) < 0.3
+                    ? 'La relación es débil: el número de eventos por sí solo no anticipa el gasto, pesa más cuánto duran.'
+                    : 'Sí, van de la mano: las quincenas con más eventos son también las de mayor consumo.'}{' '}
+                  <InfoTip texto={`Correlación de Pearson entre eventos y galones: r = ${analitica.corrEventosGalones.toFixed(2)}, relación ${fuerzaCorrelacion(analitica.corrEventosGalones)}.`}>
+                    <span className="text-slate-400 dark:text-slate-500">Ver cálculo</span>
+                  </InfoTip>
                 </p>
               )}
               <p className="text-[10px] text-slate-400 dark:text-slate-500 italic">
-                Correlación no implica causalidad; sirve para orientar dónde mirar.
+                Que dos cosas se muevan juntas no prueba que una cause la otra; sirve para saber dónde mirar.
               </p>
             </div>
 
             <div className="rounded-lg border border-slate-200 dark:border-slate-700 p-3 space-y-1.5">
-              <span className="text-[11px] font-bold text-slate-700 dark:text-slate-200">Períodos atípicos</span>
+              <span className="text-[11px] font-bold text-slate-700 dark:text-slate-200">Quincenas fuera de lo esperado</span>
               {analitica.atipicosPct.length === 0 && analitica.atipicosEventos.length === 0 ? (
                 <p className="text-[10.5px] text-slate-500 dark:text-slate-400">
-                  Ningún período se desvía significativamente de la recta ajustada. La serie es homogénea.
+                  Ninguna quincena se sale de lo previsible: el comportamiento de la flota viene parejo.
                 </p>
               ) : (
                 <ul className="space-y-1 text-[10.5px] text-slate-600 dark:text-slate-300">
                   {analitica.atipicosPct.map(a => (
                     <li key={`p${a.indice}`}>
-                      <strong>{analitica.cerrados[a.indice]?.label}</strong> — % Ralentí {a.valor.toFixed(2)}% frente a{' '}
-                      {a.esperado.toFixed(2)}% esperado (z={a.z.toFixed(1)})
+                      <strong>{analitica.cerrados[a.indice]?.label}</strong> — cerró con {a.valor.toFixed(2)}% de ralentí
+                      cuando se esperaba {a.esperado.toFixed(2)}%.{' '}
+                      <InfoTip texto={`Se aparta ${Math.abs(a.z).toFixed(1)} desviaciones estándar de la tendencia (z = ${a.z.toFixed(1)}).`}>
+                        <span className="text-slate-400 dark:text-slate-500">Cuánto se aparta</span>
+                      </InfoTip>
                     </li>
                   ))}
                   {analitica.atipicosEventos.map(a => (
                     <li key={`e${a.indice}`}>
-                      <strong>{analitica.cerrados[a.indice]?.label}</strong> — {Math.round(a.valor).toLocaleString('es-CO')} alertas
-                      frente a {Math.round(a.esperado).toLocaleString('es-CO')} esperadas (z={a.z.toFixed(1)})
+                      <strong>{analitica.cerrados[a.indice]?.label}</strong> — tuvo {Math.round(a.valor).toLocaleString('es-CO')} eventos
+                      cuando se esperaban {Math.round(a.esperado).toLocaleString('es-CO')}.{' '}
+                      <InfoTip texto={`Se aparta ${Math.abs(a.z).toFixed(1)} desviaciones estándar de la tendencia (z = ${a.z.toFixed(1)}).`}>
+                        <span className="text-slate-400 dark:text-slate-500">Cuánto se aparta</span>
+                      </InfoTip>
                     </li>
                   ))}
                 </ul>
               )}
               <p className="text-[10px] text-slate-400 dark:text-slate-500 italic">
-                El residuo se mide contra la tendencia, no contra el promedio, para no marcar como
-                anomalía lo que es simple evolución.
+                La comparación se hace contra la tendencia que trae la flota, no contra el promedio, para no
+                señalar como anomalía lo que es simple evolución.
               </p>
             </div>
           </div>
@@ -1334,14 +1357,15 @@ export const RalentiAnalisisGeneral: React.FC<{
           <div>
             <h3 className="font-bold text-slate-800 dark:text-slate-200 text-sm flex items-center gap-2">
               <BrainCircuit className="w-4 h-4 text-fuchsia-500" />
-              Segmentación de Flota y Predicción
+              Tipos de vehículo según su comportamiento
               <span className="text-[10px] font-normal text-slate-400 dark:text-slate-500">
                 — {ml.ids.length} vehículos · {ml.nQuincenas} quincenas
               </span>
             </h3>
-            <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
-              El modelo trabaja sobre el <strong>vehículo</strong>, no sobre la serie: a nivel de quincena solo
-              hay {ml.nQuincenas} puntos y cualquier modelo sobreajustaría. Se recalcula con los filtros activos.
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
+              En lugar de revisar los vehículos uno por uno, el sistema agrupa los que se parecen entre sí y le
+              pone nombre a cada grupo: dónde hay desperdicio que sí se puede evitar, dónde el motor encendido
+              es parte del trabajo y dónde el dato no cuadra. Cambia según los filtros aplicados arriba.
             </p>
           </div>
 
@@ -1354,18 +1378,18 @@ export const RalentiAnalisisGeneral: React.FC<{
               <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${ml.seg.silueta > 0.25
                 ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400'
                 : 'bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400'}`}>
-                silueta {ml.seg.silueta.toFixed(2)} — {ml.seg.silueta > 0.25 ? 'estructura creíble' : 'estructura débil'}
+                {ml.seg.silueta > 0.25 ? 'GRUPOS BIEN DIFERENCIADOS' : 'GRUPOS POCO DIFERENCIADOS'}
               </span>
-              <span className="text-[10px] text-slate-400 dark:text-slate-500">
-                k elegido automáticamente por silueta, no fijado a ojo
-              </span>
+              <InfoTip texto={`Coeficiente de silueta = ${ml.seg.silueta.toFixed(2)}: mide qué tan separados quedan los grupos entre sí. Por encima de 0,25 se considera que la agrupación tiene estructura real. El número de grupos (k = ${ml.seg.k}) lo elige el propio algoritmo maximizando esa medida, no se fija a mano.`}>
+                <span className="text-[10px] text-slate-400 dark:text-slate-500">Cuántos grupos y por qué</span>
+              </InfoTip>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[700px] text-left border-collapse text-[11px]">
                 <thead>
                   <tr className="bg-slate-100/70 dark:bg-slate-900/60 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-200 dark:border-slate-700">
                     <th className="py-2 px-3">Perfil</th>
-                    <th className="py-2 px-3 text-right">Veh.</th>
+                    <th className="py-2 px-3 text-right">Vehículos</th>
                     {ml.NOMBRES.map(n => <th key={n} className="py-2 px-3 text-right">{n}</th>)}
                   </tr>
                 </thead>
@@ -1404,8 +1428,12 @@ export const RalentiAnalisisGeneral: React.FC<{
             </div>
             {ml.atipicos.length > 0 && (
               <p className="text-[10.5px] text-amber-700 dark:text-amber-400">
-                <strong>{ml.atipicos.length} vehículo(s) no encajan ni en su propio perfil</strong> (distancia al centroide &gt; 3σ):{' '}
-                {ml.atipicos.map(o => placaDe(ml.ids[o.i])).join(', ')}. Suelen ser errores de telemetría antes que conducta extrema.
+                <strong>{ml.atipicos.length} vehículo(s) no se parecen a ningún grupo</strong>:{' '}
+                {ml.atipicos.map(o => placaDe(ml.ids[o.i])).join(', ')}. Antes de sacar conclusiones sobre el conductor
+                conviene revisar el equipo satelital: lo más común es una falla de telemetría, no una conducta extrema.{' '}
+                <InfoTip texto="Su distancia al centro de su propio grupo supera 3 desviaciones estándar.">
+                  <span className="text-slate-400 dark:text-slate-500">Criterio usado</span>
+                </InfoTip>
               </p>
             )}
           </div>
@@ -1414,26 +1442,28 @@ export const RalentiAnalisisGeneral: React.FC<{
           {ml.prediccion ? (
             <div className="rounded-lg border border-fuchsia-200 dark:border-fuchsia-900/50 bg-fuchsia-50/50 dark:bg-fuchsia-950/20 p-3 space-y-2">
               <span className="text-[11px] font-bold text-slate-700 dark:text-slate-200">
-                Predicción de reincidencia — ¿qué vehículos seguirán en el 20% de mayor ralentí?
+                Vehículos que probablemente sigan entre los de mayor ralentí
               </span>
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10.5px] text-slate-600 dark:text-slate-300">
-                <span><strong>AUC {ml.prediccion.metricas.auc.toFixed(3)}</strong></span>
-                <span>exactitud {(ml.prediccion.metricas.exactitud * 100).toFixed(1)}%</span>
-                <span>precisión {(ml.prediccion.metricas.precision * 100).toFixed(1)}%</span>
-                <span>sensibilidad {(ml.prediccion.metricas.sensibilidad * 100).toFixed(1)}%</span>
-                <span className="text-slate-400">tasa base {(ml.prediccion.tasaBase * 100).toFixed(1)}%</span>
-              </div>
-              <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                Regresión logística con <strong>validación temporal</strong>: se entrena con las quincenas antiguas y
-                se mide sobre la última transición, que el modelo nunca vio. No hay fuga de información.
-                {ml.prediccion.metricas.auc > 0.7
-                  ? ' El AUC confirma que la señal es real y no azar.'
-                  : ' El AUC es bajo: tómelo como indicativo, no como criterio de decisión.'}
+              <p className="text-[10.5px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                De cada 100 vehículos que el sistema señala, acierta en{' '}
+                <strong>{(ml.prediccion.metricas.precision * 100).toFixed(0)}</strong>. Para comprobarlo se le
+                enseñaron las quincenas antiguas y se le pidió adivinar la última, que nunca había visto.{' '}
+                <strong className={ml.prediccion.metricas.auc > 0.7 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>
+                  {ml.prediccion.metricas.auc > 0.7
+                    ? 'La señal es real, no casualidad.'
+                    : 'Tómelo como una pista, no como base para una decisión.'}
+                </strong>
                 {ml.prediccion.metricas.sensibilidad < 0.5 &&
-                  ' Con umbral 0,5 el modelo prioriza acertar cuando señala (alta precisión) a costa de dejar pasar reincidentes.'}
+                  ' Es prudente: prefiere señalar pocos y acertar, de modo que se le escapan reincidentes.'}{' '}
+                <InfoTip texto={`Regresión logística con validación temporal, sin fuga de información. AUC ${ml.prediccion.metricas.auc.toFixed(3)} · exactitud ${(ml.prediccion.metricas.exactitud * 100).toFixed(1)}% · precisión ${(ml.prediccion.metricas.precision * 100).toFixed(1)}% · sensibilidad ${(ml.prediccion.metricas.sensibilidad * 100).toFixed(1)}% · tasa base ${(ml.prediccion.tasaBase * 100).toFixed(1)}% · umbral de decisión 0,5.`}>
+                  <span className="text-slate-400 dark:text-slate-500">Métricas del modelo</span>
+                </InfoTip>
               </p>
               {ml.prediccion.riesgo.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 pt-1">
+                <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                  <span className="w-full text-[10px] text-slate-500 dark:text-slate-400">
+                    Probabilidad de repetir entre el 20% de mayor ralentí la próxima quincena:
+                  </span>
                   {ml.prediccion.riesgo.map(r => (
                     <span key={r.vehiculoId}
                       className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200">
@@ -1446,7 +1476,7 @@ export const RalentiAnalisisGeneral: React.FC<{
             </div>
           ) : (
             <p className="text-[10.5px] text-slate-400 dark:text-slate-500 italic">
-              Historial insuficiente para entrenar el modelo de reincidencia con validación temporal honesta.
+              Todavía no hay suficientes quincenas cargadas para anticipar qué vehículos van a repetir.
             </p>
           )}
         </div>
@@ -1456,7 +1486,7 @@ export const RalentiAnalisisGeneral: React.FC<{
       <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-6 shadow-sm">
         <h3 className="font-bold text-slate-800 dark:text-slate-200 text-sm flex items-center gap-2 mb-5">
           <BarChart3 className="w-4 h-4 text-emerald-500" />
-          Comparativo por Período vs Línea Base
+          Cada quincena comparada con el período base
         </h3>
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
@@ -1464,16 +1494,16 @@ export const RalentiAnalisisGeneral: React.FC<{
               <tr className="bg-[#003366] text-white text-[10px] font-bold uppercase tracking-wider">
                 <th className="py-3 px-4 rounded-tl-lg">Período</th>
                 <th className="py-3 px-3">Vehículos</th>
-                <th className="py-3 px-3">H. Motor Enc. (h)</th>
-                <th className="py-3 px-3">H. Conducción</th>
-                <th className="py-3 px-3">Ralentí Total (h)</th>
-                <th className="py-3 px-3">Ralentí &lt;5 min (h)</th>
-                <th className="py-3 px-3">Ralentí &gt;5 min (h)</th>
-                <th className="py-3 px-3">Eventos &gt;5 min</th>
-                <th className="py-3 px-3">Eventos &gt;30 min</th>
-                <th className="py-3 px-3">% Ralentí</th>
-                <th className="py-3 px-3">Δ Eventos</th>
-                <th className="py-3 px-3 rounded-tr-lg">Δ Galones</th>
+                <th className="py-3 px-3" title="Horas totales con el motor encendido, sumando las que el vehículo estuvo en movimiento y las que estuvo quieto.">Horas de motor (h)</th>
+                <th className="py-3 px-3" title="Horas con el motor encendido y el vehículo moviéndose. Es la parte útil: horas de motor menos ralentí.">Horas en marcha (h)</th>
+                <th className="py-3 px-3" title="Horas totales con el motor encendido y el vehículo detenido.">Ralentí total (h)</th>
+                <th className="py-3 px-3" title="Paradas cortas con el motor encendido. Suelen ser inevitables: semáforos, trancones, maniobras.">Ralentí corto &lt;5 min (h)</th>
+                <th className="py-3 px-3" title="Paradas largas con el motor encendido. Aquí está el desperdicio que sí se puede evitar.">Ralentí largo &gt;5 min (h)</th>
+                <th className="py-3 px-3" title="Cuántas veces un vehículo pasó el tiempo permitido detenido con el motor encendido (5 o 10 minutos según la plataforma satelital).">Eventos &gt;5 min</th>
+                <th className="py-3 px-3" title="Cuántas veces un vehículo pasó media hora o más detenido con el motor encendido.">Eventos &gt;30 min</th>
+                <th className="py-3 px-3" title="De cada 100 horas de motor encendido, cuántas fueron de ralentí. Menos de 10% es bueno; más de 20% es alto.">% Ralentí</th>
+                <th className="py-3 px-3" title="Cuánto subieron o bajaron los eventos frente al período base. En verde, mejora.">Eventos vs base</th>
+                <th className="py-3 px-3 rounded-tr-lg" title="Cuánto subió o bajó el combustible quemado en ralentí frente al período base. En verde, mejora.">Galones vs base</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
@@ -1512,9 +1542,9 @@ export const RalentiAnalisisGeneral: React.FC<{
                       {p.vehiculosConMotor < p.vehiculosActivos && (
                         <span
                           className="block text-[9px] text-amber-600 dark:text-amber-400 font-medium"
-                          title="Solo este número de vehículos reporta horas de motor encendido. Cuando la cobertura es baja, las filas con ralentí pero sin encendido sobreestiman el % Ralentí y subestiman la conducción de ese período."
+                          title="Solo estos vehículos reportaron horas de motor encendido. Mientras falten los demás, las horas y el % de ralentí de este período son una foto parcial."
                         >
-                          {p.vehiculosConMotor}/{p.vehiculosActivos} c/motor
+                          {p.vehiculosConMotor} de {p.vehiculosActivos} con dato de motor
                         </span>
                       )}
                     </td>
@@ -1551,12 +1581,12 @@ export const RalentiAnalisisGeneral: React.FC<{
         <p className="mt-3 text-[10px] text-slate-400 dark:text-slate-500 leading-relaxed flex items-start gap-1.5">
           <Info className="w-3 h-3 shrink-0 mt-0.5" />
           <span>
-            H. Motor, Conducción y <strong>% Ralentí</strong> se calculan sobre los vehículos con
-            horas de motor &gt; 0 (<strong>normalizado por vehículos activos</strong>) y cuadran entre sí
-            (<strong>H. Motor Enc − Ralentí Total = H. Conducción</strong>). El indicador
-            <span className="text-amber-600 dark:text-amber-400"> n/total c/motor</span> señala la cobertura del dato de
-            motor: los períodos con cobertura baja quedan marcados como <strong>dato inconsistente</strong> en la
-            tabla de eficiencia inferior.
+            Las tres columnas de horas cuadran entre sí:{' '}
+            <strong>horas de motor − ralentí total = horas en marcha</strong>. Solo entran los vehículos que
+            reportaron horas de motor, porque sin ese dato el porcentaje de ralentí no se puede calcular. Cuando
+            falta en parte de la flota aparece el aviso
+            <span className="text-amber-600 dark:text-amber-400"> «con dato de motor»</span> y el período queda
+            marcado para <strong>Revisar</strong> en la tabla siguiente.
           </span>
         </p>
       </div>
@@ -1565,29 +1595,30 @@ export const RalentiAnalisisGeneral: React.FC<{
       <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-6 shadow-sm">
         <h3 className="font-bold text-slate-800 dark:text-slate-200 text-sm flex items-center gap-2 mb-1">
           <Activity className="w-4 h-4 text-emerald-500" />
-          Eficiencia Operativa por Período
-          <span className="text-[10px] font-normal text-slate-400 dark:text-slate-500">— normalizado por vehículos activos (H. Motor &gt; 0)</span>
+          Eficiencia por quincena
+          <span className="text-[10px] font-normal text-slate-400 dark:text-slate-500">— cifras por vehículo, comparables entre períodos</span>
         </h3>
-        <p className="text-[11px] text-slate-400 dark:text-slate-500 mb-4">
-          Métricas comparables entre períodos independientes de la cobertura de la flota. La bandera
-          <span className="text-red-500 font-semibold"> ⚑ dato inconsistente</span> se activa si la cobertura de
-          horas de motor es &lt; 98% de los vehículos activos o si existen filas con ralentí &gt; encendido.
+        <p className="text-[11px] text-slate-500 dark:text-slate-400 mb-4 leading-relaxed">
+          Aquí las cifras están divididas entre el número de vehículos, para que una quincena con más flota no
+          parezca peor solo por ser más grande. La última columna avisa si los datos de ese período llegaron
+          completos: si dice <strong className="text-red-500">Revisar</strong>, tómelo con reservas antes de
+          compararlo con los demás.
         </p>
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="bg-[#003366] text-white text-[10px] font-bold uppercase tracking-wider">
                 <th className="py-3 px-4 rounded-tl-lg">Período</th>
-                <th className="py-3 px-3">Veh. activos</th>
-                <th className="py-3 px-3">Km recorridos</th>
-                <th className="py-3 px-3">Km / veh. activo</th>
-                <th className="py-3 px-3">H. Motor Enc.</th>
-                <th className="py-3 px-3">H. Conducción (%)</th>
-                <th className="py-3 px-3">Ralentí Total (%)</th>
-                <th className="py-3 px-3">Vel. media (km/h)</th>
-                <th className="py-3 px-3">Km / h ralentí</th>
-                <th className="py-3 px-3">% Gal. ralentí</th>
-                <th className="py-3 px-3 rounded-tr-lg">Validación</th>
+                <th className="py-3 px-3" title="Vehículos que reportaron horas de motor en este período. Debajo, qué parte de la flota representan.">Vehículos</th>
+                <th className="py-3 px-3" title="Kilómetros que recorrió toda la flota durante el período.">Km recorridos</th>
+                <th className="py-3 px-3" title="Kilómetros que recorrió cada vehículo en promedio. Permite comparar quincenas con distinta cantidad de flota.">Km por vehículo</th>
+                <th className="py-3 px-3" title="Horas totales con el motor encendido, en movimiento o detenido.">Horas de motor</th>
+                <th className="py-3 px-3" title="Horas con el vehículo moviéndose y, debajo, qué porcentaje del tiempo de motor representan.">Horas en marcha</th>
+                <th className="py-3 px-3" title="Porcentaje del tiempo de motor que la flota pasó quieta y encendida, y debajo cuántas horas suma.">% Ralentí</th>
+                <th className="py-3 px-3" title="Velocidad promedio mientras los vehículos estuvieron en marcha.">Velocidad media</th>
+                <th className="py-3 px-3" title="Cuántos kilómetros útiles recorre la flota por cada hora de motor desperdiciada. Cuanto más alto, mejor aprovechada está.">Km por hora de ralentí</th>
+                <th className="py-3 px-3" title="Qué parte del combustible total se fue en ralentí.">% del combustible en ralentí</th>
+                <th className="py-3 px-3 rounded-tr-lg" title="Indica si los datos del período llegaron completos y coherentes.">Calidad del dato</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
@@ -1605,7 +1636,7 @@ export const RalentiAnalisisGeneral: React.FC<{
                     </td>
                     <td className="py-3 px-3 text-slate-600 dark:text-slate-400">
                       {p.vehiculosConMotor}
-                      <span className="block text-[9px] text-slate-400 dark:text-slate-500">{p.coberturaMotorPct.toFixed(0)}% cobertura</span>
+                      <span className="block text-[9px] text-slate-400 dark:text-slate-500">{p.coberturaMotorPct.toFixed(0)}% de la flota</span>
                     </td>
                     <td className="py-3 px-3 text-slate-700 dark:text-slate-300">{Math.round(p.totalKm).toLocaleString('es-CO')}</td>
                     <td className="py-3 px-3 text-slate-700 dark:text-slate-300">{p.kmPorVehiculoActivo.toFixed(1)}</td>
@@ -1619,33 +1650,28 @@ export const RalentiAnalisisGeneral: React.FC<{
                         {p.pctRalenti.toFixed(2)}%
                       </span>
                       <span className="block text-[9px] text-slate-400 dark:text-slate-500 mt-0.5">{p.totalHorasRalenti.toFixed(0)} h</span>
-                      {p.ralentiHuerfano > 0 && (
-                        <span
-                          className="block text-[9px] text-amber-600 dark:text-amber-400 font-semibold"
-                          title={`${p.ralentiHuerfano.toFixed(0)} h de ralentí pertenecen a vehículos sin horas de motor encendido, por lo que NO entran en el % Ralentí, ni en H. Motor, ni en Km. Sus galones y eventos sí se cuentan. Cargue el consolidado de horas de motor de esa plataforma para incorporarlas.`}
-                        >
-                          +{p.ralentiHuerfano.toFixed(0)} h excluidas
-                        </span>
-                      )}
                     </td>
                     <td className="py-3 px-3 text-slate-700 dark:text-slate-300">{p.velocidadMedia.toFixed(1)}</td>
                     <td className="py-3 px-3 font-semibold text-slate-700 dark:text-slate-300">{p.kmPorHoraRalenti.toFixed(1)}</td>
                     <td className="py-3 px-3 text-slate-500 dark:text-slate-400">
                       {p.pctGalonesRalenti != null
                         ? `${p.pctGalonesRalenti.toFixed(1)}%`
-                        : <span className="text-slate-300 dark:text-slate-600" title="El total de galones no se persiste en la fuente actual; solo se guarda la porción de ralentí. Requiere el nuevo campo galones_totales en el ETL.">N/D</span>}
+                        : <span className="text-slate-300 dark:text-slate-600" title="Las plataformas satelitales hoy solo entregan los galones quemados en ralentí, no el consumo total del vehículo, así que este porcentaje todavía no se puede calcular.">Sin dato</span>}
                     </td>
                     <td className="py-3 px-3">
                       {p.datoInconsistente ? (
                         <span
                           className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400"
-                          title={`Dato inconsistente: cobertura de motor ${p.coberturaMotorPct.toFixed(0)}% (< 98%)${p.filasRalentiMayorEnc > 0 ? ` · ${p.filasRalentiMayorEnc} fila(s) con ralentí > encendido` : ''}. Compare con precaución.`}
+                          title={`Solo el ${p.coberturaMotorPct.toFixed(0)}% de los vehículos reportó horas de motor${p.filasRalentiMayorEnc > 0 ? `, y ${p.filasRalentiMayorEnc} registro(s) marcan más ralentí que motor encendido, lo cual es imposible` : ''}. Las cifras de este período pueden estar incompletas: compárelas con precaución.`}
                         >
-                          <AlertTriangle className="w-3 h-3" /> Inconsistente
+                          <AlertTriangle className="w-3 h-3" /> Revisar
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400">
-                          <CheckCircle className="w-3 h-3" /> OK
+                        <span
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400"
+                          title="Los datos de este período llegaron completos y coherentes: se puede comparar con tranquilidad."
+                        >
+                          <CheckCircle className="w-3 h-3" /> Confiable
                         </span>
                       )}
                     </td>
@@ -1658,10 +1684,11 @@ export const RalentiAnalisisGeneral: React.FC<{
         <p className="mt-3 text-[10px] text-slate-400 dark:text-slate-500 leading-relaxed flex items-start gap-1.5">
           <Info className="w-3 h-3 shrink-0 mt-0.5" />
           <span>
-            <strong>Vel. media</strong> = Km / H. Conducción (ponderada). <strong>Km / h ralentí</strong> = eficiencia
-            (más alto = menos motor quieto por km útil). <strong>% Gal. ralentí</strong> requiere el total de galones,
-            que hoy no se persiste en la fuente (solo la porción de ralentí) → se muestra <strong>N/D</strong> hasta
-            que el ETL capture <code>galones_totales</code>.
+            <strong>Velocidad media</strong>: kilómetros recorridos divididos entre las horas en marcha.{' '}
+            <strong>Km por hora de ralentí</strong>: cuánto avanza la flota por cada hora de motor desperdiciada —
+            entre más alto, mejor. El <strong>% del combustible en ralentí</strong> aparece como
+            <strong> Sin dato</strong> porque las plataformas satelitales solo entregan los galones del ralentí
+            y no el consumo total de cada vehículo.
           </span>
         </p>
       </div>
@@ -1671,11 +1698,11 @@ export const RalentiAnalisisGeneral: React.FC<{
         {/* Combinado 1: horas (conducción + ralentí >5 min) con % ralentí como línea */}
         <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-6 shadow-sm">
           <h4 className="font-bold text-slate-700 dark:text-slate-300 text-[11px] uppercase tracking-wider mb-4 flex items-center gap-2">
-            <Clock className="w-3.5 h-3.5 text-emerald-500" /> Horas: Conducción vs Ralentí &gt;5 min · % Ralentí
+            <Clock className="w-3.5 h-3.5 text-emerald-500" /> Horas en marcha vs horas de ralentí largo
           </h4>
           <ComboBarLineChart
             data={periods.map(p => ({ label: p.labelCorto, bars: [p.horasConduccion, p.horasRalentiMas5Min], line: p.pctRalenti }))}
-            barLabels={['H. Conducción', 'Ralentí >5 min (h)']}
+            barLabels={['Horas en marcha', 'Ralentí >5 min']}
             barColors={['#10b981', '#f97316']}
             lineLabel="% Ralentí"
             lineColor="#003366"
@@ -1687,7 +1714,7 @@ export const RalentiAnalisisGeneral: React.FC<{
         {/* Combinado 2: eventos (>5 min + >30 min) con % ralentí como línea */}
         <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-6 shadow-sm">
           <h4 className="font-bold text-slate-700 dark:text-slate-300 text-[11px] uppercase tracking-wider mb-4 flex items-center gap-2">
-            <AlertTriangle className="w-3.5 h-3.5 text-rose-500" /> Eventos: &gt;5 min vs &gt;30 min · % Ralentí
+            <AlertTriangle className="w-3.5 h-3.5 text-rose-500" /> Eventos de ralentí: largos y muy largos
           </h4>
           <ComboBarLineChart
             data={periods.map(p => ({ label: p.labelCorto, bars: [p.totalEventos, p.eventosMas30Min], line: p.pctRalenti }))}
@@ -1702,21 +1729,21 @@ export const RalentiAnalisisGeneral: React.FC<{
 
         <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-6 shadow-sm">
           <h4 className="font-bold text-slate-700 dark:text-slate-300 text-[11px] uppercase tracking-wider mb-4 flex items-center gap-2">
-            <Activity className="w-3.5 h-3.5 text-indigo-500" /> Eventos de Ralentí por Período
+            <Activity className="w-3.5 h-3.5 text-indigo-500" /> Eventos de ralentí por quincena
           </h4>
           <VerticalBarChart data={periods.map(p => ({ label: p.labelCorto, value: p.totalEventos }))} colors={barColors} formatValue={v => String(Math.round(v))} />
         </div>
 
         <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-6 shadow-sm">
           <h4 className="font-bold text-slate-700 dark:text-slate-300 text-[11px] uppercase tracking-wider mb-4 flex items-center gap-2">
-            <Fuel className="w-3.5 h-3.5 text-orange-500" /> Galones Consumidos por Período
+            <Fuel className="w-3.5 h-3.5 text-orange-500" /> Galones quemados en ralentí
           </h4>
           <VerticalBarChart data={periods.map(p => ({ label: p.labelCorto, value: p.totalGalones }))} colors={barColors} formatValue={v => v.toFixed(1)} />
         </div>
 
         <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-6 shadow-sm">
           <h4 className="font-bold text-slate-700 dark:text-slate-300 text-[11px] uppercase tracking-wider mb-4 flex items-center gap-2">
-            <TrendingUp className="w-3.5 h-3.5 text-emerald-500" /> % Variación vs Línea Base
+            <TrendingUp className="w-3.5 h-3.5 text-emerald-500" /> Reducción frente al período base (%)
           </h4>
           {periods.length < 2 ? (
             <div className="flex items-center justify-center h-40 text-xs text-slate-400">Se requieren al menos 2 períodos</div>
@@ -1727,7 +1754,7 @@ export const RalentiAnalisisGeneral: React.FC<{
 
         <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-6 shadow-sm">
           <h4 className="font-bold text-slate-700 dark:text-slate-300 text-[11px] uppercase tracking-wider mb-4 flex items-center gap-2">
-            <Leaf className="w-3.5 h-3.5 text-emerald-500" /> CO₂ Emitido por Período (kg)
+            <Leaf className="w-3.5 h-3.5 text-emerald-500" /> CO₂ emitido por el ralentí (kg)
           </h4>
           <VerticalBarChart data={periods.map(p => ({ label: p.labelCorto, value: p.co2Kg }))} colors={barColors} formatValue={v => v.toFixed(0)} />
         </div>
@@ -1737,17 +1764,17 @@ export const RalentiAnalisisGeneral: React.FC<{
       {periods.length >= 2 && (
         <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-6 shadow-sm">
           <h3 className="font-bold text-slate-800 dark:text-slate-200 text-sm flex items-center gap-2 mb-5">
-            <Clock className="w-4 h-4 text-indigo-500" /> Tendencia Secuencial (Período a Período)
+            <Clock className="w-4 h-4 text-indigo-500" /> Cada quincena comparada con la anterior
           </h3>
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
                 <tr className="bg-slate-100 dark:bg-slate-700/60 text-slate-600 dark:text-slate-300 text-[10px] font-bold uppercase tracking-wider">
                   <th className="py-2.5 px-4 rounded-tl-lg">Comparación</th>
-                  <th className="py-2.5 px-3">Δ Eventos</th>
-                  <th className="py-2.5 px-3">Δ Galones</th>
-                  <th className="py-2.5 px-3">Δ CO₂ (kg)</th>
-                  <th className="py-2.5 px-3 rounded-tr-lg">Tendencia</th>
+                  <th className="py-2.5 px-3" title="Cuánto subieron o bajaron los eventos frente a la quincena anterior.">Eventos</th>
+                  <th className="py-2.5 px-3" title="Cuánto subió o bajó el combustible quemado en ralentí frente a la quincena anterior.">Galones</th>
+                  <th className="py-2.5 px-3" title="Cuánto subieron o bajaron las emisiones frente a la quincena anterior.">CO₂</th>
+                  <th className="py-2.5 px-3 rounded-tr-lg">Resultado</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-700/50">
@@ -1793,14 +1820,14 @@ export const RalentiAnalisisGeneral: React.FC<{
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <div className="p-4 bg-emerald-50 dark:bg-emerald-950/20 rounded-xl border border-emerald-200 dark:border-emerald-800/40">
-              <div className="text-[10px] uppercase font-bold text-emerald-700 dark:text-emerald-400 mb-1.5">Mejor Período</div>
+              <div className="text-[10px] uppercase font-bold text-emerald-700 dark:text-emerald-400 mb-1.5">Mejor quincena</div>
               <div className="text-sm font-bold text-slate-800 dark:text-slate-200">{insights.bestPeriodo.label}</div>
               <div className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
                 {insights.bestPeriodo.pctRalenti.toFixed(2)}% ralentí · {insights.bestPeriodo.totalEventos} eventos · {insights.bestPeriodo.totalGalones.toFixed(1)} gal
               </div>
             </div>
             <div className="p-4 bg-red-50 dark:bg-red-950/20 rounded-xl border border-red-200 dark:border-red-800/40">
-              <div className="text-[10px] uppercase font-bold text-red-600 dark:text-red-400 mb-1.5">Mayor Desviación</div>
+              <div className="text-[10px] uppercase font-bold text-red-600 dark:text-red-400 mb-1.5">Quincena más crítica</div>
               <div className="text-sm font-bold text-slate-800 dark:text-slate-200">{insights.worstPeriodo.label}</div>
               <div className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
                 {insights.worstPeriodo.pctRalenti.toFixed(2)}% ralentí · {insights.worstPeriodo.totalEventos} eventos · {insights.worstPeriodo.totalGalones.toFixed(1)} gal
@@ -1812,7 +1839,7 @@ export const RalentiAnalisisGeneral: React.FC<{
               <div className="flex items-start gap-3 p-3.5 bg-emerald-50 dark:bg-emerald-950/20 rounded-xl border border-emerald-200 dark:border-emerald-800/40">
                 <CheckCircle className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
                 <div className="text-xs text-emerald-800 dark:text-emerald-300 leading-relaxed">
-                  <strong className="font-bold block mb-0.5">1. Mejora significativa vs línea base ({insights.baseline.label})</strong>
+                  <strong className="font-bold block mb-0.5">1. Mejora significativa vs período base ({insights.baseline.label})</strong>
                   El período actual ({insights.latest.label}) logró una reducción del <strong>{Math.abs(insights.latest.pctVsBaselineEventos).toFixed(1)}%</strong> en eventos excesivos y{' '}
                   <strong>{Math.abs(insights.latest.pctVsBaselineGalones).toFixed(1)}%</strong> en consumo de galones. Las medidas implementadas han reducido significativamente el ralentí.
                 </div>
@@ -1821,15 +1848,15 @@ export const RalentiAnalisisGeneral: React.FC<{
               <div className="flex items-start gap-3 p-3.5 bg-red-50 dark:bg-red-950/20 rounded-xl border border-red-200 dark:border-red-800/40">
                 <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
                 <div className="text-xs text-red-800 dark:text-red-300 leading-relaxed">
-                  <strong className="font-bold block mb-0.5">1. Empeoramiento vs línea base ({insights.baseline.label})</strong>
-                  El período actual presenta un <strong>aumento del {insights.latest.pctVsBaselineEventos.toFixed(1)}%</strong> en eventos respecto a la línea base. Revisar prácticas operativas urgentemente.
+                  <strong className="font-bold block mb-0.5">1. Empeoramiento vs período base ({insights.baseline.label})</strong>
+                  El período actual presenta un <strong>aumento del {insights.latest.pctVsBaselineEventos.toFixed(1)}%</strong> en eventos respecto al período base. Revisar prácticas operativas urgentemente.
                 </div>
               </div>
             ) : (
               <div className="flex items-start gap-3 p-3.5 bg-amber-50 dark:bg-amber-950/20 rounded-xl border border-amber-200 dark:border-amber-800/40">
                 <Info className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
                 <div className="text-xs text-amber-800 dark:text-amber-300 leading-relaxed">
-                  <strong className="font-bold block mb-0.5">1. Variación moderada vs línea base</strong>
+                  <strong className="font-bold block mb-0.5">1. Variación moderada vs período base</strong>
                   El período actual presenta una variación de <strong>{fmtPct(insights.latest.pctVsBaselineEventos)}</strong> en eventos respecto a {insights.baseline.label}.
                 </div>
               </div>

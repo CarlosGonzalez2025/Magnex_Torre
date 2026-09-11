@@ -1,4 +1,5 @@
 import { supabase } from './supabaseClient';
+import { clasificarAlertaDiaria } from './speedingClassification';
 
 const PAGE_SIZE = 1000;
 
@@ -403,41 +404,17 @@ export function esConductorIdentificado(value: unknown): boolean {
   return Boolean(txt) && !CONDUCTORES_SIN_IDENTIFICAR.includes(txt);
 }
 
-export interface ClasificacionAlerta {
-  infraccion_80_kmh: number;
-  excesos_50_80_kmh: number;
-  excesos_varios_parametros: number;
-  frenadas_bruscas: number;
-}
-
-/**
- * Clasifica una alerta diaria a partir del NOMBRE del evento (estado) y la VELOCIDAD real.
- * Fuente única de verdad para el módulo de Informes Diarios (Excel, PDF y análisis):
- * se calcula al leer, por lo que también corrige datos ya cargados sin re-importar.
- *
- * Regla:
- *  - Frenada si el nombre lo indica (frenada/brake/desaceleración).
- *  - Exceso de velocidad SOLO si el nombre lo indica (exceso/velocidad/infracción/límite/speed):
- *      >= 80 km/h → Infracción ≥80 ; 50–80 → Exceso 50-80 ; < 50 → Exceso 10-40.
- *  - Cualquier otro evento (TDR, reconexión, GPS adquirido, etc.) → no cuenta (todos en 0).
- */
-export function clasificarAlertaDiaria(estado: unknown, velocidad: unknown): ClasificacionAlerta {
-  const nombre = String(estado ?? '').toLowerCase();
-  const v = Number(velocidad) || 0;
-  const c: ClasificacionAlerta = {
-    infraccion_80_kmh: 0, excesos_50_80_kmh: 0, excesos_varios_parametros: 0, frenadas_bruscas: 0,
-  };
-  const esFrenada = nombre.includes('frenad') || nombre.includes('brake') || nombre.includes('desaceleracion') || nombre.includes('desaceleración');
-  const esExceso = nombre.includes('exceso') || nombre.includes('velocidad') || nombre.includes('infraccion') || nombre.includes('infracción') || nombre.includes('limite') || nombre.includes('límite') || nombre.includes('speed');
-  if (esFrenada) {
-    c.frenadas_bruscas = 1;
-  } else if (esExceso) {
-    if (v >= 80) c.infraccion_80_kmh = 1;
-    else if (v >= 50) c.excesos_50_80_kmh = 1;
-    else c.excesos_varios_parametros = 1;
-  }
-  return c;
-}
+// El criterio de clasificación de excesos vive en `speedingClassification`, sin
+// dependencias, para que lo compartan el parser de archivos y la lectura de
+// informes. Se re-exporta aquí porque es el punto de entrada histórico del módulo.
+export type { ClasificacionAlerta } from './speedingClassification';
+export {
+  clasificarAlertaDiaria,
+  esEventoReportable,
+  esExcesoGrave,
+  esExcesoModerado,
+  umbralConfigurado,
+} from './speedingClassification';
 
 
 function esMoto(tipo: unknown): boolean {
@@ -1117,7 +1094,7 @@ export async function getReporteAlertasDiarias(filtro: Pick<FiltroReporte, 'fech
       const conductorNombre = String(r.conductor ?? '');
       // Categoría recalculada al leer desde nombre + velocidad (fuente única de verdad),
       // así se corrige también la data ya cargada sin re-importar.
-      const clas = clasificarAlertaDiaria(r.estado, r.velocidad);
+      const clas = clasificarAlertaDiaria(r.estado, r.velocidad, r.gps);
       return {
         id: String(r.id),
         placa: String(r.placa ?? veh.placa ?? ''),
@@ -1321,8 +1298,8 @@ export async function listarAlertasDiarias(filtro: Pick<FiltroReporte, 'fechaIni
     return q;
   });
   rows.reverse();
-  // Recalcula la categoría (contadores) desde nombre + velocidad al leer.
-  return rows.map(r => ({ ...r, ...clasificarAlertaDiaria(r.estado, r.velocidad) }));
+  // Recalcula la categoría (contadores) desde nombre + velocidad + plataforma al leer.
+  return rows.map(r => ({ ...r, ...clasificarAlertaDiaria(r.estado, r.velocidad, r.gps) }));
 }
 
 /**
@@ -1341,7 +1318,7 @@ export async function listarAlertasDiariasResumen(filtro: Pick<FiltroReporte, 'f
   const rows = await fetchAllRowsPorFecha<Record<string, unknown> & { id: unknown; fecha: unknown }>(desde => {
     let q = supabase
       .from('alertas_diarias_gps')
-      .select('id, contrato_id, contrato_nombre, placa, conductor, estado, velocidad, fecha, fecha_dia')
+      .select('id, contrato_id, contrato_nombre, placa, conductor, estado, velocidad, gps, fecha, fecha_dia')
       .gte('fecha_dia', filtro.fechaInicio)
       .lte('fecha_dia', filtro.fechaFin)
       .not('vehiculo_id', 'is', null)
@@ -1352,8 +1329,8 @@ export async function listarAlertasDiariasResumen(filtro: Pick<FiltroReporte, 'f
     if (desde) q = q.gte('fecha', desde);
     return q;
   });
-  // Contadores recalculados desde nombre + velocidad (categoría al leer).
-  return rows.map(r => ({ ...r, ...clasificarAlertaDiaria(r.estado, r.velocidad) }));
+  // Contadores recalculados desde nombre + velocidad + plataforma (categoría al leer).
+  return rows.map(r => ({ ...r, ...clasificarAlertaDiaria(r.estado, r.velocidad, r.gps) }));
 }
 
 export async function listarAlertasDiariasPendientes(filtro: Pick<FiltroReporte, 'fechaInicio' | 'fechaFin' | 'contratoId'>) {

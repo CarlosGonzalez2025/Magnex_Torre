@@ -42,6 +42,7 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import IsolationForest
 
+from ml.speeding_classification import es_exceso, es_exceso_grave
 from ml.supabase_io import (
     check_env, dias_atras_col, fetch_all, hoy_col, insert, upsert,
 )
@@ -143,7 +144,7 @@ def cargar_eventos(ventana_dias: int) -> pd.DataFrame:
     print(f'[1/6] Cargando alertas_diarias_gps de {desde} a {hasta}…')
     rows = fetch_all(
         'alertas_diarias_gps',
-        'placa,conductor,fecha_dia,velocidad,infraccion_80_kmh,excesos_50_80_kmh,'
+        'placa,conductor,fecha_dia,velocidad,estado,infraccion_80_kmh,excesos_50_80_kmh,'
         'frenadas_bruscas,contrato_nombre,cliente,gps,tipo_activo',
         filters=[f'fecha_dia=gte.{desde}', f'fecha_dia=lte.{hasta}'],
     )
@@ -153,7 +154,10 @@ def cargar_eventos(ventana_dias: int) -> pd.DataFrame:
 
 
 def preparar(df: pd.DataFrame) -> pd.DataFrame:
-    """Aplica la MISMA semántica de exceso que api/agent.py:tool_excesos_velocidad.
+    """Aplica el criterio único de excesos (`ml.speeding_classification`).
+
+    El mismo que usan el asistente IA, el worker de validación y los Informes
+    Diarios, para que ninguno reporte un número distinto del mismo día.
 
     Ojo con `excesos_varios_parametros`: NO es exceso de velocidad (aparece con
     velocidades de 10-28 km/h). Incluirlo infla el conteo ~2.7x. Por eso ni
@@ -181,10 +185,13 @@ def preparar(df: pd.DataFrame) -> pd.DataFrame:
 
     df['conductor_key'] = df['conductor'].map(conductor_key)
 
-    df['es_exceso'] = (
-        (df['infraccion_80_kmh'] > 0) | (df['excesos_50_80_kmh'] > 0) | (df['velocidad'] >= 50)
-    )
-    df['es_grave'] = (df['infraccion_80_kmh'] > 0) | (df['velocidad'] >= 80)
+    # El tramo del exceso sale del nombre de la regla que disparó el GPS
+    # (`estado`), no de los contadores guardados ni de la velocidad medida: ver
+    # `ml.speeding_classification`. Entrenar sobre las columnas de BD marcaba
+    # como grave eventos de reglas de 20/30/40 km/h medidos por encima de 80,
+    # es decir, faltas graves que la configuración del GPS nunca emitió.
+    df['es_exceso'] = [es_exceso(e, v, g) for e, v, g in zip(df['estado'], df['velocidad'], df['gps'])]
+    df['es_grave'] = [es_exceso_grave(e, v, g) for e, v, g in zip(df['estado'], df['velocidad'], df['gps'])]
 
     print(f'[2/6] {len(df):,} eventos con conductor identificado · '
           f'{int(df["es_exceso"].sum()):,} excesos · {int(df["es_grave"].sum()):,} graves.')

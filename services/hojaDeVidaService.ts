@@ -22,6 +22,7 @@
  */
 
 import { supabase, fetchPaginado } from './supabaseClient';
+import { clasificarAlertaDiaria, esExcesoGrave } from './speedingClassification';
 import {
   getVerificacionByCedula, getCapacitacionesByCedula,
   type VerificacionDoc, type CapacitacionesResumen,
@@ -440,7 +441,7 @@ export async function getHojaDeVida(
       telemetriaId
         ? fetchPaginado<any>(() => supabase
             .from('alertas_diarias_gps')
-            .select('fecha, velocidad, infraccion_80_kmh, excesos_50_80_kmh, frenadas_bruscas, lugar')
+            .select('fecha, velocidad, estado, gps, infraccion_80_kmh, excesos_50_80_kmh, frenadas_bruscas, lugar')
             .eq('conductor_id', telemetriaId)
             .gte('fecha', desde)
             .order('fecha', { ascending: true })
@@ -526,15 +527,20 @@ export async function getHojaDeVida(
       proyecto: r.proyecto,
     }));
 
-    // ── Resumen de alertas (misma semántica de exceso del asistente IA) ────────
+    // ── Resumen de alertas ────────────────────────────────────────────────────
+    // El tramo se recalcula al leer con el criterio único (umbral configurado en
+    // el nombre del evento; velocidad medida solo si el nombre no declara uno),
+    // igual que Informes Diarios. Los contadores guardados en BD no se usan
+    // porque fueron escritos con el criterio viejo, por velocidad medida.
     const alertas = ((alertasRes as any).data ?? []) as any[];
     let excGraves = 0, excModerados = 0, frenadas = 0, velMax = 0;
     for (const a of alertas) {
-      const grave = (a.infraccion_80_kmh ?? 0) > 0 || (a.velocidad ?? 0) >= 80;
-      const moderado = !grave && ((a.excesos_50_80_kmh ?? 0) > 0 || (a.velocidad ?? 0) >= 50);
+      const clas = clasificarAlertaDiaria(a.estado, a.velocidad, a.gps);
+      const grave = clas.infraccion_80_kmh > 0;
+      const moderado = clas.excesos_50_80_kmh > 0;
       if (grave) excGraves++;
       else if (moderado) excModerados++;
-      if ((a.frenadas_bruscas ?? 0) > 0) frenadas++;
+      if (clas.frenadas_bruscas > 0) frenadas++;
       if ((a.velocidad ?? 0) > velMax) velMax = a.velocidad ?? 0;
     }
     const resumenAlertas: ResumenAlertas = {
@@ -583,7 +589,7 @@ export async function getHojaDeVida(
     // ── Timeline unificado (recientes primero) ─────────────────────────────────
     const timeline: EventoTimeline[] = [];
     for (const a of alertas.slice(0, 30)) {
-      const grave = (a.infraccion_80_kmh ?? 0) > 0 || (a.velocidad ?? 0) >= 80;
+      const grave = esExcesoGrave(a.estado, a.velocidad, a.gps);
       timeline.push({
         fecha: a.fecha,
         origen: 'alerta',

@@ -160,6 +160,84 @@ def es_cond_placeholder(nombre) -> bool:
     return normtxt(nombre).strip() in PLACEHOLDER_COND
 
 
+# ── Criterio único de excesos de velocidad ───────────────────────────────────
+# Espejo de `services/speedingClassification.ts` y `ml/speeding_classification.py`.
+# Va inline porque este archivo es una función serverless de Vercel de un solo
+# módulo (stdlib pura, sin imports locales); si cambia el criterio, cambian los
+# tres.
+#
+# El tramo de un exceso lo decide el UMBRAL CONFIGURADO en la plataforma GPS, que
+# viaja en el nombre del evento ("Exceso de Velocidad >80 km/h Magnex",
+# "Infraccion 80 Km/h").
+#
+# Las reglas por umbral se solapan: un vehículo a 85 km/h dispara la de >80 y, si
+# existe en esa zona, también la de >40. Clasificar por la velocidad medida
+# contaba el evento de la regla de >40 como infracción de >80 — una falta grave
+# que la configuración del GPS nunca emitió.
+#
+# Sin umbral en el nombre, depende de la PLATAFORMA:
+#   GEOTAB → no cuenta en ningún tramo. Sus reglas genéricas contra el límite de
+#     la vía ("Exceso de velocidad", "Exceso de velocidad (nuevo)") duplican el
+#     mismo recorrido que la regla de umbral de Magnex.
+#   COLTRACK / FAGOR (y fuente desconocida) → velocidad medida. Fagor solo tiene
+#     "Alm. Exceso de velocidad en la via": exigirle umbral borraría sus excesos.
+UMBRAL_EXCESO = 50.0
+UMBRAL_GRAVE = 80.0
+
+_RE_UMBRAL_CON_UNIDAD = re.compile(r'(\d{1,3})\s*(?:km\s*/?\s*h|kmh|kph|k/h)\b')
+_RE_UMBRAL_SIN_UNIDAD = re.compile(r'(?:velocidad|infraccion|speeding|speed|limite)[^\d]{0,12}(\d{1,3})\b')
+
+
+def umbral_configurado(estado):
+    """Umbral (km/h) declarado en el nombre del evento, o None si no declara ninguno."""
+    nombre = normtxt(estado)
+    if not nombre:
+        return None
+    for patron in (_RE_UMBRAL_CON_UNIDAD, _RE_UMBRAL_SIN_UNIDAD):
+        m = patron.search(nombre)
+        if m:
+            valor = int(m.group(1))
+            if 5 <= valor <= 200:
+                return float(valor)
+    return None
+
+
+def es_exceso_de_velocidad(estado) -> bool:
+    """¿El evento es de VELOCIDAD? Que diga "exceso" no basta: "Exceso de RPM" no lo es."""
+    nombre = normtxt(estado)
+    if not nombre or 'rpm' in nombre:
+        return False
+    if 'frenad' in nombre or 'brake' in nombre or 'desaceleracion' in nombre:
+        return False
+    return ('velocidad' in nombre or 'infraccion' in nombre
+            or 'speed' in nombre or 'limite de vel' in nombre)
+
+
+def exige_umbral_declarado(fuente) -> bool:
+    """Plataformas donde un exceso solo cuenta si el nombre declara el umbral."""
+    return normtxt(fuente) == 'geotab'
+
+
+def velocidad_de_referencia(estado, velocidad, fuente):
+    """Umbral del nombre; si no lo declara, velocidad medida — o None en Geotab."""
+    umbral = umbral_configurado(estado)
+    if umbral is not None:
+        return umbral
+    if exige_umbral_declarado(fuente):
+        return None
+    try:
+        return float(velocidad or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _tramo_exceso(r):
+    """Tramo (km/h) del evento, o None si no es exceso o no se puede ubicar."""
+    if not es_exceso_de_velocidad(r.get('estado')):
+        return None
+    return velocidad_de_referencia(r.get('estado'), r.get('velocidad'), r.get('gps'))
+
+
 _veh_cache = None
 
 
@@ -276,16 +354,21 @@ def tool_excesos_velocidad(args):
         filters.append(_q('contrato_nombre', 'ilike', f"*{args['contrato']}*"))
     if args.get('cliente'):
         filters.append(_q('cliente', 'ilike', f"*{args['cliente']}*"))
+    # Se clasifica desde `estado` (el nombre de la regla que disparó el GPS), no
+    # desde los contadores guardados: esas columnas se escribieron con el
+    # criterio viejo —tramo por velocidad medida— y marcan como infracción de
+    # >80 eventos de reglas de 20/30/40 km/h.
     rows = pg_fetch_all('alertas_diarias_gps',
-                        'placa,conductor,velocidad,infraccion_80_kmh,excesos_50_80_kmh,contrato_nombre,cliente,fecha_dia',
+                        'placa,conductor,velocidad,estado,gps,contrato_nombre,cliente,fecha_dia',
                         filters)
 
     def es_exceso(r):
-        return (float(r.get('infraccion_80_kmh') or 0) > 0 or float(r.get('excesos_50_80_kmh') or 0) > 0
-                or float(r.get('velocidad') or 0) >= 50)
+        ref = _tramo_exceso(r)
+        return ref is not None and ref >= UMBRAL_EXCESO
 
     def es_grave(r):
-        return float(r.get('infraccion_80_kmh') or 0) > 0 or float(r.get('velocidad') or 0) >= 80
+        ref = _tramo_exceso(r)
+        return ref is not None and ref >= UMBRAL_GRAVE
 
     eventos = [r for r in rows if es_exceso(r)]
     if args.get('solo_graves'):

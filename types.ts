@@ -53,6 +53,15 @@ export interface Alert {
   source: ApiSource;
   contract?: string;
   details: string;
+  /**
+   * Nombre de la regla que disparó el evento en la plataforma GPS, cuando la
+   * fuente lo entrega (Geotab: `ExceptionEvent.rule`). Es lo que decide el tramo
+   * de un exceso de velocidad — ver `services/speedingClassification.ts` —, así
+   * que no se puede reemplazar por `details`. Las fuentes que solo mandan la
+   * posición en vivo (Coltrack/Fagor) no traen regla: ahí el exceso lo detecta
+   * el propio sistema por velocidad.
+   */
+  rule?: string;
   sent?: boolean; // Si fue enviada por WhatsApp
   sentAt?: string; // Cuándo fue enviada
   sentBy?: string; // Quién la envió
