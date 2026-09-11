@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import { esExcesoGrave } from './speedingClassification';
 
 // ==================== TYPES ====================
 
@@ -367,18 +368,17 @@ function processFagorFile(workbook: XLSX.WorkBook): ProcessingResult {
         });
       }
 
-      // Detectar Falta Grave: "Alrm. de excesos de velocidad"
-      // Asegurar que alertType sea string antes de usar métodos
-      const alertTypeLower = normalizeText(alertType);
-      const excessSpeedRaw = excessSpeedIndex >= 0 ? row[excessSpeedIndex] : null;
-      const excessSpeedValue = parseNumeric(excessSpeedRaw);
-      const esExcesoVelocidad = (
-        alertTypeLower.includes('alrm') &&
-        alertTypeLower.includes('exceso') &&
-        alertTypeLower.includes('velocidad')
-      ) || (excessSpeedValue !== null && excessSpeedValue > 0);
-      // Falta grave = exceso de velocidad REAL >= 80 km/h, no solo por el tipo/columna.
-      const isGrave = esExcesoVelocidad && speed !== null && speed >= 80;
+      // Falta grave = exceso de >= 80 km/h según la configuración del GPS: manda
+      // el umbral que declare el nombre del evento y, solo si no declara ninguno
+      // —el caso de Fagor, que reporta contra el límite variable de la vía—, la
+      // velocidad medida. Criterio compartido en `speedingClassification`.
+      //
+      // La columna "ExcesoVelocidad" ya no cuenta como señal de alerta: es
+      // telemetría del vehículo en ese instante, no la declaración de que la
+      // regla de velocidad disparó. Venía marcando como falta grave frenadas
+      // bruscas tomadas por encima de 80 km/h (2 de 325 en el export del
+      // 01/06/2026), que son eventos de frenado, no excesos.
+      const isGrave = esExcesoGrave(alertType, speed, 'FAGOR');
 
       if (isGrave) {
         gravesCount++;
@@ -495,11 +495,11 @@ function processColtrackFile(workbook: XLSX.WorkBook): ProcessingResult {
         continue; // Saltar filas sin placa
       }
 
-      // Falta grave = exceso de velocidad REAL >= 80 km/h (columna "Max kph"),
-      // no por el nombre del evento (p.ej. "Infraccion 30 Km/h" a 44 km/h NO es grave).
-      const alertTypeLower = alertType ? alertType.toLowerCase() : '';
-      const esInfraccionVelocidad = alertTypeLower.includes('infraccion') || alertTypeLower.includes('infracción');
-      const isGrave = esInfraccionVelocidad && speed !== null && speed >= 80;
+      // Falta grave = la regla de >= 80 km/h que disparó Coltrack ("Infraccion 80
+      // Km/h"). Antes se decidía por la columna "Max kph", así que una
+      // "Infraccion 30 Km/h" medida a 85 km/h se reportaba como falta grave que
+      // la configuración del GPS nunca emitió.
+      const isGrave = esExcesoGrave(alertType, speed, 'COLTRACK');
 
       if (isGrave) {
         gravesCount++;
@@ -671,17 +671,12 @@ function processGeotabFile(workbook: XLSX.WorkBook): ProcessingResult {
         speed = parseInt(speedMatch[1], 10);
       }
 
-      // Detectar falta grave:
-      // - Si el tipo contiene "exceso" y "velocidad", y la velocidad es >= 80
-      // - O si el tipo contiene "80" o los detalles contienen "exceso velocidad 80"
-      const alertTypeLower = alertType.toLowerCase();
-      const detailsLower = details ? details.toLowerCase() : '';
-      const isSpeedingAlert = alertTypeLower.includes('exceso') && (alertTypeLower.includes('velocidad') || alertTypeLower.includes('limite'));
-      
-      const isGrave = (isSpeedingAlert && speed !== null && speed >= 80) ||
-                      alertTypeLower.includes('exceso velocidad 80') ||
-                      detailsLower.includes('exceso velocidad 80') ||
-                      (isSpeedingAlert && alertTypeLower.includes('80'));
+      // Falta grave = la regla de >= 80 km/h que disparó Geotab ("Exceso de
+      // Velocidad >80 km/h Magnex"). El nombre de la regla manda sobre la
+      // "Velocidad máxima" del extraInfo: esa es la máxima de la ventana del
+      // evento y puede superar el umbral de una regla de 10/20/30/40 km/h sin
+      // que la regla de >80 haya disparado.
+      const isGrave = esExcesoGrave(alertType, speed, 'GEOTAB');
 
       if (isGrave) {
         gravesCount++;

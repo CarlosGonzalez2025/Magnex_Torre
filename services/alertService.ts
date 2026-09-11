@@ -3,6 +3,7 @@ import { saveIdleTimeRecord, saveIgnitionEvent } from './towerControlService';
 import { getAlertSeverityMap } from './alertSeverityConfigService';
 import { normalizeAlertTimestamp } from './dateNormalization';
 import { resolveContract } from './vehicleContractService';
+import { esExcesoGrave } from './speedingClassification';
 
 // Configuración de umbrales
 const ALERT_THRESHOLDS = {
@@ -30,8 +31,15 @@ export const CENTRO_ALERTAS_TYPES: AlertType[] = [
  */
 export function esAlertaVisibleCentroAlertas(alert: Alert): boolean {
   if (!CENTRO_ALERTAS_TYPES.includes(alert.type)) return false;
-  if (alert.type === AlertType.SPEED_VIOLATION && Number(alert.speed ?? 0) < ALERT_THRESHOLDS.SPEED_LIMIT) return false;
-  return true;
+  if (alert.type !== AlertType.SPEED_VIOLATION) return true;
+  // Con regla de la plataforma (Geotab), el tramo lo decide el umbral que esa
+  // regla declara, no la velocidad que alcanzamos a enriquecer: un evento de la
+  // regla de >80 es grave aunque el LogRecord no resuelva la velocidad, y uno de
+  // la regla de >40 no lo es aunque se midiera a 85.
+  if (alert.rule) return esExcesoGrave(alert.rule, alert.speed, alert.source);
+  // Sin regla (Coltrack/Fagor en vivo): el exceso lo detecta este sistema sobre
+  // la posición, así que manda la velocidad reportada.
+  return Number(alert.speed ?? 0) >= ALERT_THRESHOLDS.SPEED_LIMIT;
 }
 
 // 📋 Mapa de configuración de severidad (se carga desde Supabase)
@@ -303,11 +311,15 @@ export function buildGeotabAlerts(
 
     const speed = Math.round(Number(ev.speed) || 0);
 
-    // Centro de Alertas: para excesos de velocidad de Geotab solo se muestran
-    // los eventos con velocidad real >= 80 km/h. La velocidad la enriquece la API
-    // (máx. del LogRecord en la ventana del evento); los de menor magnitud —o sin
-    // velocidad resuelta— se omiten aquí, pero siguen en el historial del backend.
-    if (mapped.type === AlertType.SPEED_VIOLATION && speed < ALERT_THRESHOLDS.SPEED_LIMIT) {
+    // Centro de Alertas: para excesos de velocidad de Geotab solo se muestran los
+    // de >= 80 km/h, y quien lo decide es el UMBRAL QUE DECLARA LA REGLA que
+    // disparó ("Exceso de Velocidad >80 km/h Magnex"), no la velocidad medida.
+    // Esa velocidad la enriquece la API con el máximo del LogRecord en la ventana
+    // del evento, y puede superar 80 en un evento de la regla de 10/20/30/40 km/h
+    // sin que la regla de >80 haya disparado: filtrar por ella mostraba en la
+    // torre excesos graves que la configuración del GPS nunca emitió. Los que no
+    // pasan siguen en el historial del backend.
+    if (mapped.type === AlertType.SPEED_VIOLATION && !esExcesoGrave(ruleName, speed, ApiSource.GEOTAB)) {
       return [];
     }
 
@@ -341,6 +353,7 @@ export function buildGeotabAlerts(
       source: ApiSource.GEOTAB,
       contract,
       details,
+      rule: ruleName,
       sent: false
     })];
   });
