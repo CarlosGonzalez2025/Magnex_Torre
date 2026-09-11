@@ -3006,7 +3006,6 @@ export interface RalentiPDFData {
   costTotal: number;
   costAvgDaily: number;
   co2Kg: number;
-  treesEquivalent: number;
   mayorEventoSegundos: number;
   mayorEventoConductor?: string;
   promedioEventoSegundos: number;
