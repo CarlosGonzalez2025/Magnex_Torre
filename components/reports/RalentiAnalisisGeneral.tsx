@@ -60,19 +60,18 @@ const getPrecioGalon = (tipo?: string | null): number | null => {
   return PRECIOS_GALON.find(f => f.test(t))?.precio ?? null;
 };
 
-// Umbral de "ralentí excesivo" (alerta) por proveedor satelital, en segundos — idéntico
-// al Informe por Período: Coltrack ≥10 min, Fagor ≥5 min (default 5 min). Las cifras de
-// excesos (conteo de alertas, tiempo >5 min, eventos >30 min) se calculan SOLO sobre los
-// eventos que superan el umbral nativo de su proveedor, no sobre el agregado de la tabla
-// ralentis_periodos (que incluye todos los ralentís, también los cortos).
-// GEOTAB en 0: la regla "Idling" de MyGeotab ya aplica su umbral en la plataforma,
-// así que todo evento recibido es un exceso por definición.
-const UMBRAL_RALENTI_SEG: Record<string, number> = { COLTRACK: 600, FAGOR: 300, GEOTAB: 0 };
-const umbralRalentiSeg = (proveedor?: string | null): number =>
-  UMBRAL_RALENTI_SEG[(proveedor ?? '').toUpperCase().trim()] ?? 300;
-// Registros con conductor "Taller" = vehículos en mantenimiento; se excluyen por completo.
-const esConductorTaller = (nombre?: string | null): boolean =>
-  (nombre ?? '').toUpperCase().includes('TALLER');
+// El umbral de "ralentí excesivo" por proveedor —Coltrack ≥10 min, Fagor ≥5 min, GEOTAB en
+// 0 porque su regla "Idling" ya lo aplicó en la plataforma— y la exclusión de conductores
+// "Taller" (vehículos en mantenimiento) YA NO se evalúan aquí: los aplica la vista
+// `ralentis_eventos_por_vehiculo_periodo` del lado del servidor.
+//
+// Esta pantalla descargaba las 347.075 filas de `ralentis_eventos` al navegador para
+// calcular tres números por quincena; la vista los entrega ya agregados en ~6.449 filas.
+// El Informe por Período sigue con las constantes propias, porque necesita los eventos
+// crudos para los rankings y el detalle.
+//
+// Si cambia un umbral hay que cambiarlo en AMBOS sitios en el mismo commit:
+// migrations/ralentis_eventos_agregado_v1.sql y UMBRAL_RALENTI_SEG de RalentiReports.tsx.
 
 // ── Types ──
 interface VehicleOption {
@@ -609,11 +608,20 @@ export const RalentiAnalisisGeneral: React.FC<{
         };
 
         const PERIODO_FIELDS = 'vehiculo_id, periodo_inicio, periodo_fin, horas_motor_encendido, horas_motor_ralenti, consumo_combustible, ralentis_excesivos, kms_recorridos';
-        const EVENTO_FIELDS = 'vehiculo_id, periodo_inicio, periodo_fin, duracion_segundos, proveedor, conductor_nombre';
+        // Agregado por (vehículo, quincena) en vez de los eventos crudos. Esta pantalla
+        // descargaba las 347.075 filas de `ralentis_eventos` —unos 50 MB— cada vez que
+        // alguien la abría, para calcular tres números por quincena. La vista los reduce a
+        // ~6.449 filas (0,7 MB) aplicando en el servidor el mismo umbral por proveedor y la
+        // misma exclusión de conductores "Taller" que se aplicaban aquí.
+        //
+        // Se conserva el detalle por VEHÍCULO porque los filtros de cliente/contrato/tipo y
+        // el panel constante operan a ese nivel; las tres métricas son aditivas, así que
+        // sumarlas por período da exactamente el mismo resultado que antes.
+        const AGREGADO_FIELDS = 'vehiculo_id, periodo_inicio, periodo_fin, alertas, segundos, eventos_mas_30min';
 
         const [periodosData, eventosData] = await Promise.all([
           fetchAll('ralentis_periodos', PERIODO_FIELDS),
-          fetchAll('ralentis_eventos', EVENTO_FIELDS),
+          fetchAll('ralentis_eventos_por_vehiculo_periodo', AGREGADO_FIELDS),
         ]);
         setAllRows(periodosData);
         setAllEvents(eventosData);
@@ -646,21 +654,22 @@ export const RalentiAnalisisGeneral: React.FC<{
       periodMap.get(key)!.push(r);
     });
 
-    // Agregado de eventos por período: SOLO alertas (duración ≥ umbral del proveedor,
-    // excluyendo conductores "Taller"), igual que el Informe por Período. De aquí salen
-    // el conteo de alertas, el tiempo en ralentí >5 min y los eventos >30 min.
+    // Agregado de eventos por período. El umbral de alerta por proveedor y la exclusión de
+    // conductores "Taller" ya vienen aplicados por la vista
+    // `ralentis_eventos_por_vehiculo_periodo`; aquí solo se suman los vehículos que pasan
+    // los filtros de pantalla. Las tres métricas son aditivas, así que el resultado es
+    // idéntico al que daba recorrer los eventos crudos uno por uno.
     const eventAgg = new Map<string, { alertas: number; segMas5Min: number; eventosMas30Min: number }>();
+    const vehiculosVisibles = soloPanelConstante && panelConstante.size > 0 ? panelConstante : null;
     allEvents.forEach(e => {
       if (!isQuincenaPeriodo(e.periodo_inicio, e.periodo_fin)) return;
       if (hasFilter && !filteredVehIds.has(String(e.vehiculo_id))) return;
-      if (esConductorTaller(e.conductor_nombre)) return;
-      const dur = Number(e.duracion_segundos) || 0;
-      if (dur < umbralRalentiSeg(e.proveedor)) return;
+      if (vehiculosVisibles && !vehiculosVisibles.has(String(e.vehiculo_id))) return;
       const key = `${e.periodo_inicio}_${e.periodo_fin}`;
       const acc = eventAgg.get(key) ?? { alertas: 0, segMas5Min: 0, eventosMas30Min: 0 };
-      acc.alertas += 1;
-      acc.segMas5Min += dur;
-      if (dur > 1800) acc.eventosMas30Min += 1;
+      acc.alertas += Number(e.alertas) || 0;
+      acc.segMas5Min += Number(e.segundos) || 0;
+      acc.eventosMas30Min += Number(e.eventos_mas_30min) || 0;
       eventAgg.set(key, acc);
     });
 
@@ -856,15 +865,18 @@ export const RalentiAnalisisGeneral: React.FC<{
       c.mot += Number(r.horas_motor_encendido) || 0;
       c.ral += Number(r.horas_motor_ralenti) || 0;
     }
+    // `allEvents` viene YA agregado por (vehículo, quincena) desde la vista, con el umbral
+    // del proveedor y la exclusión de "Taller" aplicados en el servidor. Los rasgos del
+    // modelo son los mismos de antes —número de eventos, segundos y eventos largos—, solo
+    // que ahora llegan sumados en vez de contarse uno a uno.
     for (const e of allEvents) {
       const q = `${e.periodo_inicio}_${e.periodo_fin}`;
       if (!cerradas.has(q)) continue;
       if (hasFilter && !filteredVehIds.has(String(e.vehiculo_id))) continue;
-      if (esConductorTaller(e.conductor_nombre)) continue;
-      const d = Number(e.duracion_segundos) || 0;
-      if (d < umbralRalentiSeg(e.proveedor)) continue;
       const c = tomar(clave(String(e.vehiculo_id), q));
-      c.nEv++; c.segEv += d; if (d > 1800) c.largos++;
+      c.nEv += Number(e.alertas) || 0;
+      c.segEv += Number(e.segundos) || 0;
+      c.largos += Number(e.eventos_mas_30min) || 0;
     }
 
     // Perfil agregado por vehículo (mínimo 3 quincenas para que el promedio signifique algo)
