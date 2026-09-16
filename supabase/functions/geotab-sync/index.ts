@@ -20,7 +20,13 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const VERCEL_APP_URL = 'https://magnex-torre.vercel.app';
 const GEOTAB_API_URL = `${VERCEL_APP_URL}/api/geotab`;
-const SYNC_DAYS = 3; // re-procesa últimos 3 días
+const SYNC_DAYS = 3; // re-procesa los últimos 3 días calendario (hora local de Colombia)
+const COLOMBIA_OFFSET = '-05:00';
+
+/** Fecha local de Colombia (UTC-5 fijo, sin horario de verano) de un instante dado. */
+function fechaColombia(ms: number): string {
+  return new Date(ms - 5 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
 
 serve(async () => {
   try {
@@ -32,8 +38,15 @@ serve(async () => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    const toDate = new Date().toISOString();
-    const fromDate = new Date(Date.now() - SYNC_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    // El límite inferior se ancla a las 00:00 de Colombia del primer día pedido. Con un
+    // instante a mitad de día, el feed de Trip devuelve solo la cola de ese día y el
+    // agregado —que se guarda contra el día local entero— pisa la fila buena de una
+    // corrida anterior. Mismo anclaje que /api/geotab-sync: si las dos rutas no lo
+    // hacen igual, la que quede sin corregir vuelve a truncar lo ya reparado.
+    const desde = fechaColombia(Date.now() - SYNC_DAYS * 24 * 60 * 60 * 1000);
+    const hasta = fechaColombia(Date.now());
+    const fromDate = `${desde}T00:00:00.000${COLOMBIA_OFFSET}`;
+    const toDate = `${hasta}T23:59:59.999${COLOMBIA_OFFSET}`;
 
     console.log(`📡 Fetching daily metrics ${fromDate} -> ${toDate}`);
     const response = await fetch(GEOTAB_API_URL, {
