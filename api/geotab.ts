@@ -461,10 +461,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       //   2. ¿Cuántos vehículos publican datos de esos diagnósticos?
       //   3. Sobre episodios de ralentí reales, ¿la resta da un número creíble?
       case 'fuelDiagnostics': {
-        const dias = Math.min(Math.max(Number(req.body?.dias) || 2, 1), 14);
+        // `dias` cuenta hacia atrás desde hoy; `inicio`/`fin` permiten una ventana
+        // concreta del pasado. Esto último hace falta para saber hasta cuándo atrás guarda
+        // Geotab las lecturas de la ECU: de esa retención depende si los galones de
+        // ralentí se pueden reconstruir desde abril o solo de las últimas semanas, y no se
+        // puede averiguar mirando únicamente los días recientes.
+        const dias = Math.min(Math.max(Number(req.body?.dias) || 2, 1), 400);
         const maxEpisodios = Math.min(Math.max(Number(req.body?.episodios) || 5, 1), 20);
-        const toDate = new Date().toISOString();
-        const fromDate = new Date(Date.now() - dias * 24 * 60 * 60 * 1000).toISOString();
+        const inicioReq = String(req.body?.inicio || '').trim();
+        const finReq = String(req.body?.fin || '').trim();
+        const esFecha = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+        const usaRango = esFecha(inicioReq) && esFecha(finReq) && inicioReq <= finReq;
+        const toDate = usaRango
+          ? `${finReq}T23:59:59.999${COLOMBIA_TZ_OFFSET}`
+          : new Date().toISOString();
+        const fromDate = usaRango
+          ? `${inicioReq}T00:00:00.000${COLOMBIA_TZ_OFFSET}`
+          : new Date(Date.now() - dias * 24 * 60 * 60 * 1000).toISOString();
         const LITRO_A_GALON = 0.264172;
 
         const [diags, devices] = await Promise.all([
