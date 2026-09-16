@@ -107,7 +107,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const response = await fetch(GEOTAB_API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'dailyMetrics', fromDate, toDate }),
+      // `incluirCombustible` añade los galones de ralentí medidos con el contador
+      // acumulativo de la ECU. Lo pide solo el cron: el panel en vivo consume esta misma
+      // acción como respaldo y no necesita cargar con esa consulta.
+      body: JSON.stringify({ action: 'dailyMetrics', fromDate, toDate, incluirCombustible: true }),
     });
 
     if (!response.ok) {
@@ -128,23 +131,52 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       horas_conduccion: Number((Number(m.drivingHours) || 0).toFixed(2)),
       horas_ralenti: Number((Number(m.idlingHours) || 0).toFixed(2)),
       viajes: Number(m.trips) || 0,
+      // NULL ≠ 0: sin lecturas del contador de la ECU no hay medición, y escribir un
+      // cero haría que el informe leyera "no consumió nada".
+      galones_ralenti:
+        m.idleFuelGallons === undefined || m.idleFuelGallons === null
+          ? null
+          : Number(Number(m.idleFuelGallons).toFixed(4)),
       updated_at: new Date().toISOString(),
     }));
 
     const supabase = createClient(supabaseUrl, serviceKey);
 
     let upserted = 0;
+    // Red de seguridad para el orden de despliegue: si el código sube antes de que se
+    // corra migrations/geotab_daily_galones_ralenti_v1.sql, la columna no existe y el
+    // upsert entero falla. Sin esto, el cron dejaría de escribir km y horas EN SILENCIO
+    // —el error solo se veía en consola— hasta que alguien notara el hueco. Al detectar
+    // que la columna falta se reintenta sin ese campo y se avisa en la respuesta.
+    let faltaColumnaCombustible = false;
+    const sinCombustible = (fila: any) => {
+      const { galones_ralenti, ...resto } = fila;
+      return resto;
+    };
+    const esColumnaInexistente = (msg: string) =>
+      /galones_ralenti/i.test(msg) && /(column|schema cache|42703|PGRST204)/i.test(msg);
+
     const BATCH = 500;
     for (let i = 0; i < rows.length; i += BATCH) {
       const chunk = rows.slice(i, i + BATCH);
+      const payload = faltaColumnaCombustible ? chunk.map(sinCombustible) : chunk;
       const { error } = await supabase
         .from('geotab_daily_metrics')
-        .upsert(chunk, { onConflict: 'fecha,device_id' });
-      if (error) {
-        console.error('[geotab-sync] upsert error:', error.message);
-      } else {
+        .upsert(payload, { onConflict: 'fecha,device_id' });
+      if (!error) {
         upserted += chunk.length;
+        continue;
       }
+      if (!faltaColumnaCombustible && esColumnaInexistente(error.message)) {
+        faltaColumnaCombustible = true;
+        const { error: error2 } = await supabase
+          .from('geotab_daily_metrics')
+          .upsert(chunk.map(sinCombustible), { onConflict: 'fecha,device_id' });
+        if (!error2) { upserted += chunk.length; continue; }
+        console.error('[geotab-sync] upsert error (reintento sin combustible):', error2.message);
+        continue;
+      }
+      console.error('[geotab-sync] upsert error:', error.message);
     }
 
     return res.status(200).json({
@@ -154,6 +186,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Días locales efectivamente cubiertos y cuántos traían datos: deja ver de un
       // vistazo si un tramo del backfill quedó corto.
       rango: { desde, hasta, diasConDatos: new Set(rows.map(r => r.fecha)).size },
+      combustible: {
+        // Falta correr migrations/geotab_daily_galones_ralenti_v1.sql en Supabase.
+        migracionPendiente: faltaColumnaCombustible || undefined,
+        filasConMedicion: faltaColumnaCombustible ? 0 : rows.filter(r => r.galones_ralenti !== null).length,
+        galones: Number(rows.reduce((s, r) => s + (Number(r.galones_ralenti) || 0), 0).toFixed(2)),
+        // Geotab no pagina `Get`: pasado el tope, las lecturas que faltan no llegan y el
+        // combustible del tramo queda corto. Rangos largos hay que pedirlos por tramos.
+        truncado: result.data?.combustibleTruncado === true || undefined,
+      },
       rows: rows.length,
       upserted,
     });

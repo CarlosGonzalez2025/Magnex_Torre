@@ -29,8 +29,18 @@ import { createClient } from '@supabase/supabase-js';
  *    muestreo grueso. El tiempo de motor encendido se deriva como
  *    conducción + ralentí, que sí cuadra.
  *
- * 2. SIN COMBUSTIBLE NI CO₂. El viaje trae combustible TOTAL, no el consumido
- *    en ralentí, y el informe no admite estimaciones: `consumo_combustible` = 0.
+ * 2. COMBUSTIBLE DE RALENTÍ, MEDIDO (sep-2026). Durante un tiempo esta columna fue 0:
+ *    el viaje trae el combustible TOTAL, no el de ralentí, y el informe no admite
+ *    estimaciones. La sonda (`action:'fuelDiagnostics'`) mostró que las ECU de esta
+ *    flota publican `DiagnosticDeviceTotalIdleFuelId` — un contador ACUMULATIVO de
+ *    combustible en ralentí—, así que el consumo del período sale de restar lecturas.
+ *    Validado sobre 3 días y 369 vehículos: 311 con dato (84%), 0,28 gal/h; Fagor,
+ *    midiendo la misma flota, daba 0,27. Dos plataformas independientes coinciden.
+ *
+ *    La resta se hace por día en `geotab_daily_metrics.galones_ralenti` (una quincena
+ *    entera excede el tope de 50.000 lecturas de la API) y aquí solo se suma.
+ *    `consumo_combustible` queda en NULL —no en 0— para el vehículo que no tuvo ni un
+ *    día con lectura: un equipo sin sensor no es un equipo que no consumió nada.
  *
  * 3. PRECEDENCIA. `ralentis_periodos` tiene UNA fila por vehículo y período
  *    (sumar horas de motor de dos plataformas sería físicamente imposible), así
@@ -199,7 +209,7 @@ async function sincronizarQuincena(
   // ── 2. Agregado de la quincena desde geotab_daily_metrics ───────────────
   const diarias = await fetchAll((from, to) =>
     supabase.from('geotab_daily_metrics')
-      .select('fecha, placa, km, horas_conduccion, horas_ralenti, viajes')
+      .select('fecha, placa, km, horas_conduccion, horas_ralenti, viajes, galones_ralenti')
       .gte('fecha', inicio).lte('fecha', fin).range(from, to));
 
   if (diarias.length === 0) {
@@ -213,17 +223,27 @@ async function sincronizarQuincena(
     };
   }
 
-  type Agg = { km: number; conduccion: number; ralenti: number; viajes: number; dias: Set<string> };
+  type Agg = {
+    km: number; conduccion: number; ralenti: number; viajes: number; dias: Set<string>;
+    galones: number; diasConCombustible: number;
+  };
   const porPlaca = new Map<string, Agg>();
   for (const d of diarias) {
     const k = normPlate(d.placa);
     if (!k) continue;
-    const a = porPlaca.get(k) ?? { km: 0, conduccion: 0, ralenti: 0, viajes: 0, dias: new Set<string>() };
+    const a = porPlaca.get(k)
+      ?? { km: 0, conduccion: 0, ralenti: 0, viajes: 0, dias: new Set<string>(), galones: 0, diasConCombustible: 0 };
     a.km += Number(d.km) || 0;
     a.conduccion += Number(d.horas_conduccion) || 0;
     a.ralenti += Number(d.horas_ralenti) || 0;
     a.viajes += Number(d.viajes) || 0;
     a.dias.add(String(d.fecha));
+    // NULL ≠ 0: solo cuentan los días en que la ECU publicó lecturas. Si un vehículo no
+    // tuvo ninguno, su combustible queda en NULL (sin medición) y no en cero.
+    if (d.galones_ralenti !== null && d.galones_ralenti !== undefined) {
+      a.galones += Number(d.galones_ralenti) || 0;
+      a.diasConCombustible++;
+    }
     porPlaca.set(k, a);
   }
 
@@ -315,7 +335,9 @@ async function sincronizarQuincena(
       horas_motor_encendido: Number(motor.toFixed(4)),
       horas_motor_ralenti: Number(a.ralenti.toFixed(4)),
       kms_recorridos: Number(a.km.toFixed(2)),
-      consumo_combustible: 0, // ver decisión 2
+      // Galones REALES de ralentí, sumados de los días que la ECU midió. NULL —no 0—
+      // cuando no hubo ni un día con lectura: ver decisión 2 en el encabezado.
+      consumo_combustible: a.diasConCombustible > 0 ? Number(a.galones.toFixed(4)) : null,
       encendidos_apagados: 0,
       fuente: 'GEOTAB',
     });
@@ -343,6 +365,11 @@ async function sincronizarQuincena(
     periodo: { inicio, fin },
     diasConDatos: new Set(diarias.map(d => String(d.fecha))).size,
     vehiculos: { conMetricas: porPlaca.size, escritos: periodosEscritos, omitidosPorPrecedencia, sinVehiculo },
+    combustible: {
+      vehiculosConMedicion: filasPeriodo.filter(f => f.consumo_combustible !== null).length,
+      vehiculosSinMedicion: filasPeriodo.filter(f => f.consumo_combustible === null).length,
+      galones: Number(filasPeriodo.reduce((s, f) => s + (Number(f.consumo_combustible) || 0), 0).toFixed(2)),
+    },
     eventos: { recibidos: eventosGeotab.length, escritos: eventosEscritos },
     avisos: avisos.length ? avisos : undefined,
   };

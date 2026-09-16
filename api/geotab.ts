@@ -369,10 +369,65 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           agg[key].trips += 1;
         }
 
+        // ── Galones quemados en ralentí, por día y vehículo ────────────────────────
+        //
+        // Opcional a propósito (`incluirCombustible`): esta misma acción la consume el
+        // panel en vivo del frontend como respaldo, y añadirle una consulta pesada de
+        // StatusData lo volvería lento sin necesidad. Solo el cron lo pide.
+        //
+        // `DiagnosticDeviceTotalIdleFuelId` es un contador ACUMULATIVO de por vida, así
+        // que el consumo sale de restar lecturas consecutivas. Cada diferencia se imputa
+        // al día local de la lectura ANTERIOR, que es cuando se quemó ese combustible.
+        // Una diferencia negativa significa contador reiniciado (cambio de equipo, por
+        // ejemplo) y se descarta en vez de restar.
+        //
+        // El resultado es NULL —no 0— para los vehículos-día sin lecturas: un equipo sin
+        // lectura de ECU no es un equipo que no consumió nada.
+        let combustibleTruncado = false;
+        if (req.body?.incluirCombustible) {
+          const LITRO_A_GALON = 0.264172;
+          const LIMITE = 50000;
+          const lecturas: any[] = await call('Get', {
+            typeName: 'StatusData',
+            search: { diagnosticSearch: { id: 'DiagnosticDeviceTotalIdleFuelId' }, fromDate, toDate },
+            resultsLimit: LIMITE,
+          });
+          // Geotab no pagina `Get`. Una quincena entera ronda las 143.000 lecturas, así
+          // que rangos largos hay que pedirlos por tramos (ver /api/geotab-sync).
+          combustibleTruncado = lecturas.length >= LIMITE;
+
+          const porDispositivo = new Map<string, { t: number; fecha: string; v: number }[]>();
+          for (const l of lecturas) {
+            const id = l.device?.id;
+            if (!id || l.data === null || l.data === undefined || !l.dateTime) continue;
+            const lista = porDispositivo.get(id) ?? [];
+            lista.push({ t: new Date(l.dateTime).getTime(), fecha: colombiaDate(l.dateTime), v: Number(l.data) });
+            porDispositivo.set(id, lista);
+          }
+
+          for (const [deviceId, lista] of porDispositivo) {
+            lista.sort((a, b) => a.t - b.t);
+            for (let i = 0; i + 1 < lista.length; i++) {
+              const litros = lista[i + 1].v - lista[i].v;
+              if (!(litros > 0)) continue; // 0 no aporta; negativo = contador reiniciado
+              const fecha = lista[i].fecha;
+              if (fecha < desde || fecha > hasta) continue;
+              const key = `${fecha}::${deviceId}`;
+              if (!agg[key]) {
+                // Hubo consumo en ralentí pero ningún viaje cerrado ese día: la fila
+                // igual debe existir, o el galón se perdería.
+                const dev = deviceMap[deviceId] || {};
+                agg[key] = { date: fecha, deviceId, plate: dev.plate || deviceId, km: 0, drivingHours: 0, idlingHours: 0, trips: 0 };
+              }
+              agg[key].idleFuelGallons = (agg[key].idleFuelGallons ?? 0) + litros * LITRO_A_GALON;
+            }
+          }
+        }
+
         return res.status(200).json({
           success: true,
           source: 'geotab',
-          data: { fromDate, toDate, metrics: Object.values(agg) },
+          data: { fromDate, toDate, combustibleTruncado, metrics: Object.values(agg) },
         });
       }
 
