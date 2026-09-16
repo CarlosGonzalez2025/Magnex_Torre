@@ -14,6 +14,8 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
  *                                                 -> { metrics: [{date, deviceId, plate, km, drivingHours, idlingHours, trips}] }
  *   POST /api/geotab  { action: 'idlingEvents', fromDate, toDate }
  *                                                 -> { rule, events: [{plate, deviceId, from, to, durationSeconds}] }
+ *   POST /api/geotab  { action: 'fuelDiagnostics', dias?, episodios? }
+ *                                                 -> { diagnosticos, cobertura, episodios }  (solo lectura)
  *
  * Credenciales: SOLO por variables de entorno (Vercel). Nunca hardcodear.
  */
@@ -439,6 +441,148 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             count: events.length,
             truncado,
             events,
+          },
+        });
+      }
+
+      // ---- Diagnóstico: ¿puede Geotab aportar GALONES DE RALENTÍ reales? ----
+      //
+      // El informe necesita el combustible quemado MIENTRAS el vehículo está en ralentí.
+      // Coltrack y Fagor lo entregan por evento; Geotab no lo expone en ningún export
+      // (verificado contra "Cumplimiento y Utilización" y "Scorecard": no traen ninguna
+      // columna de combustible) y el viaje solo trae el consumo TOTAL.
+      //
+      // La única vía posible es la ECU: si el vehículo publica un diagnóstico ACUMULATIVO
+      // de combustible, la resta entre la lectura al cierre y al inicio de cada episodio
+      // de ralentí da los galones reales de ese episodio — medición, no estimación.
+      //
+      // Esta acción NO escribe nada. Responde tres preguntas, en orden:
+      //   1. ¿Existen diagnósticos de combustible en la base?
+      //   2. ¿Cuántos vehículos publican datos de esos diagnósticos?
+      //   3. Sobre episodios de ralentí reales, ¿la resta da un número creíble?
+      case 'fuelDiagnostics': {
+        const dias = Math.min(Math.max(Number(req.body?.dias) || 2, 1), 14);
+        const maxEpisodios = Math.min(Math.max(Number(req.body?.episodios) || 5, 1), 20);
+        const toDate = new Date().toISOString();
+        const fromDate = new Date(Date.now() - dias * 24 * 60 * 60 * 1000).toISOString();
+        const LITRO_A_GALON = 0.264172;
+
+        const [diags, devices] = await Promise.all([
+          call('Get', { typeName: 'Diagnostic' }),
+          call('Get', { typeName: 'Device' }),
+        ]);
+
+        const fuel = (diags as any[])
+          .filter((d) => /fuel|combustib/i.test(d.name || ''))
+          .map((d) => ({
+            id: d.id,
+            name: d.name,
+            unidad: d.unitOfMeasure?.id ?? d.unitOfMeasure ?? null,
+            // Solo los acumulativos sirven para restar entre dos instantes.
+            acumulativo: /total|used|usado|consumid/i.test(d.name || ''),
+          }));
+
+        if (fuel.length === 0) {
+          return res.status(200).json({
+            success: true,
+            source: 'geotab',
+            data: {
+              ventana: { fromDate, toDate },
+              dispositivos: (devices as any[]).length,
+              diagnosticos: [],
+              veredicto: 'La base no declara ningún diagnóstico de combustible: ninguna ECU de la flota lo publica. No hay galones de ralentí que obtener, ni por código ni por archivo.',
+            },
+          });
+        }
+
+        // Cobertura: cuántos dispositivos publican realmente cada diagnóstico.
+        const candidatos = (fuel.some((f) => f.acumulativo) ? fuel.filter((f) => f.acumulativo) : fuel).slice(0, 3);
+        const cobertura: any[] = [];
+        for (const d of candidatos) {
+          try {
+            const filas: any[] = await call('Get', {
+              typeName: 'StatusData',
+              search: { diagnosticSearch: { id: d.id }, fromDate, toDate },
+              resultsLimit: 50000,
+            });
+            const conDato = new Set(filas.map((f) => f.device?.id).filter(Boolean));
+            cobertura.push({
+              diagnostico: d.name,
+              id: d.id,
+              lecturas: filas.length,
+              vehiculosConDato: conDato.size,
+              vehiculosTotales: (devices as any[]).length,
+            });
+          } catch (err: any) {
+            cobertura.push({ diagnostico: d.name, id: d.id, error: err.message });
+          }
+        }
+
+        // Prueba sobre episodios de ralentí reales.
+        const episodios: any[] = [];
+        const acumulativo = candidatos[0];
+        const rules: any[] = await call('Get', { typeName: 'Rule' });
+        const idlingRule =
+          rules.find((r) => /^idling$/i.test(r.name || '')) ?? rules.find((r) => /ralent|idl/i.test(r.name || ''));
+
+        if (idlingRule && acumulativo) {
+          const deviceMap = await buildDeviceMap(); // una vez, no por episodio
+          const eventos: any[] = await call('Get', {
+            typeName: 'ExceptionEvent',
+            search: { fromDate, toDate, ruleSearch: { id: idlingRule.id } },
+            resultsLimit: 500,
+          });
+          for (const ev of eventos) {
+            if (episodios.length >= maxEpisodios) break;
+            if (!ev.device?.id || !ev.activeFrom || !ev.activeTo) continue;
+            const filas: any[] = await call('Get', {
+              typeName: 'StatusData',
+              search: {
+                diagnosticSearch: { id: acumulativo.id },
+                deviceSearch: { id: ev.device.id },
+                fromDate: ev.activeFrom,
+                toDate: ev.activeTo,
+              },
+              resultsLimit: 5000,
+            });
+            if (filas.length < 2) continue;
+            const ord = filas
+              .slice()
+              .sort((a, b) => new Date(a.dateTime).getTime() - new Date(b.dateTime).getTime());
+            const litros = Number(ord[ord.length - 1].data) - Number(ord[0].data);
+            const minutos = (new Date(ev.activeTo).getTime() - new Date(ev.activeFrom).getTime()) / 60000;
+            const galones = litros * LITRO_A_GALON;
+            episodios.push({
+              deviceId: ev.device.id,
+              plate: deviceMap[ev.device.id]?.plate ?? ev.device.id,
+              minutos: Number(minutos.toFixed(1)),
+              lecturas: filas.length,
+              litros: Number(litros.toFixed(3)),
+              galones: Number(galones.toFixed(4)),
+              galonesPorHora: minutos > 0 ? Number((galones / (minutos / 60)).toFixed(2)) : null,
+            });
+          }
+        }
+
+        const conDato = cobertura.reduce((m, c) => Math.max(m, c.vehiculosConDato ?? 0), 0);
+        const veredicto =
+          conDato === 0
+            ? 'El diagnóstico existe en la base pero ningún vehículo publica datos: las ECU no lo reportan. No hay galones de ralentí que obtener.'
+            : episodios.length === 0
+              ? `${conDato} vehículos publican el dato, pero ningún episodio de ralentí tuvo dos lecturas: la ECU no muestrea con la frecuencia suficiente para restar inicio y fin.`
+              : `Viable para ${conDato} de ${(devices as any[]).length} vehículos: hay lecturas dentro de los episodios de ralentí y la resta da cifras medibles.`;
+
+        return res.status(200).json({
+          success: true,
+          source: 'geotab',
+          data: {
+            ventana: { fromDate, toDate },
+            dispositivos: (devices as any[]).length,
+            reglaRalenti: idlingRule ? { id: idlingRule.id, name: idlingRule.name } : null,
+            diagnosticos: fuel,
+            cobertura,
+            episodios,
+            veredicto,
           },
         });
       }
