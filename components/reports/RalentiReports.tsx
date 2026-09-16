@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '../../services/supabaseClient';
 import { descargarPDFRalenti } from '../../services/pdfTemplates';
+import { obtenerMetasRalenti, METAS_RESPALDO, type MetasRalenti } from '../../services/metasRalentiService';
 import { RalentiAnalisisGeneral } from './RalentiAnalisisGeneral';
 
 interface ContractOption {
@@ -399,6 +400,13 @@ interface IdlingEvent {
 export const RalentiReports: React.FC = () => {
   // View mode: period report or general analysis across all periods
   const [activeView, setActiveView] = useState<'periodo' | 'general'>('periodo');
+
+  // Metas del informe. Se leen de `config_metas_ralenti` y están normalizadas por vehículo
+  // y día para que escalen con la flota: las anteriores estaban escritas a mano y eran
+  // valores de UN vehículo aplicados al TOTAL (el PDF llegaba a decir "3.228 gal sobre
+  // meta"). El respaldo evita que la pantalla quede sin metas si falta la migración.
+  const [metas, setMetas] = useState<MetasRalenti>(METAS_RESPALDO);
+  useEffect(() => { obtenerMetasRalenti().then(setMetas).catch(() => setMetas(METAS_RESPALDO)); }, []);
 
   // Filter States
   const [year, setYear] = useState<number>(2026);
@@ -1039,46 +1047,62 @@ export const RalentiReports: React.FC = () => {
 
     const eventosMas30Min = alertEvents.filter(e => e.duracion_segundos > 1800).length;
 
-    // Operational Risk estimation based on pctRalenti
+    // Semáforos ANCLADOS A LA META CONFIGURADA, no a un 10%/15% fijos.
+    //
+    // Los umbrales fijos hacían que el informe marcara "Alto" y "FAP Crítico" el 100% de
+    // las veces: el ralentí real de esta flota está entre 37% y 47%, y la meta escrita a
+    // mano era del 10%. Una alarma que nunca se apaga no informa nada. Se conserva la
+    // proporción original del diseño —el umbral alto era 1,5× el medio— pero relativa a la
+    // meta vigente, así el semáforo vuelve a discriminar.
+    const metaPct = metas.pctRalenti;
+    const umbralAlto = metaPct * 1.5;
+    const metaTxt = `${metaPct.toFixed(1)}%`;
+
     let riskLevel: 'Bajo' | 'Medio' | 'Alto' = 'Bajo';
     let riskColor = 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200/50 dark:border-emerald-900/50';
-    let riskDescription = 'Operación eficiente. Ralentí dentro de los parámetros de control establecidos (meta < 10%).';
-    
-    if (pctRalenti > 15) {
+    let riskDescription = `Operación eficiente. El ralentí está dentro de la meta de ${metaTxt}.`;
+
+    if (pctRalenti > umbralAlto) {
       riskLevel = 'Alto';
       riskColor = 'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/20 border-red-200/50 dark:border-red-900/50';
-      riskDescription = 'Peligro en ralentí. Exceso severo de motor encendido estacionario, elevando costos y fallas de filtros.';
-    } else if (pctRalenti >= 10) {
+      riskDescription = `Peligro en ralentí: más de una vez y media la meta de ${metaTxt}. Exceso severo de motor encendido estacionario, que eleva costos y daña filtros.`;
+    } else if (pctRalenti >= metaPct) {
       riskLevel = 'Medio';
       riskColor = 'text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/20 border-amber-200/50 dark:border-amber-900/50';
-      riskDescription = 'Alerta de ralentí. Desviación moderada de la meta del 10%. Se recomienda revisar conductores críticos.';
+      riskDescription = `Alerta de ralentí. Por encima de la meta de ${metaTxt}. Conviene revisar los conductores y vehículos críticos.`;
     }
 
     // FAP/AdBlue filter failure risk
     let fapRisk = 'Bajo';
-    let fapDescription = 'Baja probabilidad de acumulación de hollín. Filtro de partículas opera a temperaturas correctas.';
+    let fapDescription = 'Baja probabilidad de acumulación de hollín. El filtro de partículas opera a temperaturas correctas.';
     let fapProgressColor = 'bg-emerald-500';
     let fapTextColor = 'text-emerald-600 dark:text-emerald-400';
 
-    if (pctRalenti > 15) {
+    if (pctRalenti > umbralAlto) {
       fapRisk = 'Crítico';
-      fapDescription = 'Peligro crítico de taponamiento del FAP por acumulación severa de hollín debido al enfriamiento del motor.';
+      fapDescription = 'Peligro crítico de taponamiento del filtro de partículas por acumulación de hollín: el motor trabaja frío demasiado tiempo.';
       fapProgressColor = 'bg-red-500 animate-pulse';
       fapTextColor = 'text-red-600 dark:text-red-400';
-    } else if (pctRalenti >= 10) {
+    } else if (pctRalenti >= metaPct) {
       fapRisk = 'Moderado';
-      fapDescription = 'Riesgo de saturación a mediano plazo. Las regeneraciones activas podrían ser insuficientes.';
+      fapDescription = 'Riesgo de saturación a mediano plazo. Las regeneraciones automáticas del filtro podrían no ser suficientes.';
       fapProgressColor = 'bg-amber-500';
       fapTextColor = 'text-amber-600 dark:text-amber-400';
     }
 
-    // Deltas / Variations vs goals
-    // Meta Ralentí: 10%
-    const deltaPct = pctRalenti - 10;
-    // Meta Galones: 37 galones por quincena/periodo
-    const deltaGalones = totalGalonesConsumidos - 37;
-    // Meta Costo diario: $28.000 COP
-    const deltaCostoDiario = costAvgDaily - 28000;
+    // Deltas contra las metas vigentes
+    const deltaPct = pctRalenti - metaPct;
+    // Metas NORMALIZADAS por vehículo y día (ver services/metasRalentiService.ts). Las
+    // anteriores eran absolutas de flota —37 galones y $28.000/día para 650 vehículos— y
+    // producían cifras sin sentido en el PDF. Al dividir por vehículos × días, la
+    // comparación significa lo mismo con 300 o con 900 vehículos.
+    const vehiculosEvaluados = summaryMetrics.totalVehiculosEvaluados ?? 0;
+    const vehiculoDias = vehiculosEvaluados * daysInPeriod;
+    const galonesPorVehiculoDia = vehiculoDias > 0 ? totalGalonesConsumidos / vehiculoDias : 0;
+    const costoPorVehiculoDia = vehiculoDias > 0 ? costTotal / vehiculoDias : 0;
+
+    const deltaGalones = galonesPorVehiculoDia - metas.galonesVehiculoDia;
+    const deltaCostoDiario = costoPorVehiculoDia - metas.costoVehiculoDia;
 
     // Previous Period derived calculations
     const prevPctRalenti = prevSummaryMetrics.totalHorasMotorEncendido > 0 
@@ -1182,8 +1206,16 @@ export const RalentiReports: React.FC = () => {
       totalHorasMotorEncendido,
       placaCritica,
       tiempoCriticaSegundos,
+      // Métricas normalizadas y las metas vigentes, para que la UI y el PDF muestren
+      // contra qué se está comparando en vez de un número sin referencia.
+      galonesPorVehiculoDia,
+      costoPorVehiculoDia,
+      metaPctRalenti: metaPct,
+      metaGalonesVehiculoDia: metas.galonesVehiculoDia,
+      metaCostoVehiculoDia: metas.costoVehiculoDia,
+      metasProvisionales: metas.provisional,
     };
-  }, [summaryMetrics, alertEvents, daysInPeriod, prevSummaryMetrics]);
+  }, [summaryMetrics, alertEvents, daysInPeriod, prevSummaryMetrics, metas]);
 
   // Helper to format seconds as hh:mm:ss
   const formatSeconds = (totalSecs: number): string => {
@@ -1655,6 +1687,14 @@ export const RalentiReports: React.FC = () => {
               horasRalentiMas5Min: stats.horasRalentiMas5Min,
               pctRalentiMas5MinDeRalenti: stats.pctRalentiMas5MinDeRalenti,
               pctRalentiMas5MinDeEncendido: stats.pctRalentiMas5MinDeEncendido,
+              // Metas vigentes y métricas por vehículo-día: sin esto el PDF volvería a
+              // comparar el total de la flota contra una meta de un solo vehículo.
+              metaPctRalenti: stats.metaPctRalenti,
+              metaGalonesVehiculoDia: stats.metaGalonesVehiculoDia,
+              metaCostoVehiculoDia: stats.metaCostoVehiculoDia,
+              galonesPorVehiculoDia: stats.galonesPorVehiculoDia,
+              costoPorVehiculoDia: stats.costoPorVehiculoDia,
+              metasProvisionales: stats.metasProvisionales,
             };
             await descargarPDFRalenti(data);
           }}
@@ -1844,8 +1884,8 @@ export const RalentiReports: React.FC = () => {
                 </div>
                 <div className="h-1.5 w-full bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden">
                   <div 
-                    className={`h-full rounded-full transition-all duration-500 ${stats.pctRalenti > 15 ? 'bg-red-500' : stats.pctRalenti >= 10 ? 'bg-orange-500' : 'bg-emerald-500'}`}
-                    style={{ width: `${Math.min(stats.pctRalenti * 4, 100)}%` }}
+                    className={`h-full rounded-full transition-all duration-500 ${stats.pctRalenti > stats.metaPctRalenti * 1.5 ? 'bg-red-500' : stats.pctRalenti >= stats.metaPctRalenti ? 'bg-orange-500' : 'bg-emerald-500'}`}
+                    style={{ width: `${Math.min((stats.pctRalenti / Math.max(stats.metaPctRalenti * 1.5, 1)) * 100, 100)}%` }}
                   />
                 </div>
               </div>
@@ -1867,21 +1907,25 @@ export const RalentiReports: React.FC = () => {
                 </div>
                 <div className="flex items-center gap-1.5 text-[11px]">
                   {stats.deltaGalones > 0 ? (
-                    <span className="text-red-500 font-bold">+{stats.deltaGalones.toFixed(1)} Gal</span>
+                    <span className="text-red-500 font-bold">+{stats.deltaGalones.toFixed(3)}</span>
                   ) : (
-                    <span className="text-emerald-500 font-bold">{stats.deltaGalones.toFixed(1)} Gal</span>
+                    <span className="text-emerald-500 font-bold">{stats.deltaGalones.toFixed(3)}</span>
                   )}
-                  <span className="text-slate-400 dark:text-slate-500">vs meta (37.0 Gal)</span>
+                  <span className="text-slate-400 dark:text-slate-500">
+                    gal/vehículo/día vs meta ({stats.metaGalonesVehiculoDia.toFixed(3)})
+                  </span>
                 </div>
                 <div className="h-1.5 w-full bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden">
-                  <div 
-                    className={`h-full rounded-full transition-all duration-500 ${stats.totalGalonesConsumidos > 50 ? 'bg-red-500' : stats.totalGalonesConsumidos > 37 ? 'bg-orange-500' : 'bg-emerald-500'}`}
-                    style={{ width: `${Math.min((stats.totalGalonesConsumidos / 37) * 100, 100)}%` }}
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${stats.galonesPorVehiculoDia > stats.metaGalonesVehiculoDia * 1.5 ? 'bg-red-500' : stats.galonesPorVehiculoDia > stats.metaGalonesVehiculoDia ? 'bg-orange-500' : 'bg-emerald-500'}`}
+                    style={{ width: `${Math.min((stats.galonesPorVehiculoDia / Math.max(stats.metaGalonesVehiculoDia * 1.5, 0.001)) * 100, 100)}%` }}
                   />
                 </div>
               </div>
               <div className="text-[10px] text-slate-400 dark:text-slate-500 leading-snug border-t border-slate-100 dark:border-slate-800/80 pt-2 font-medium">
-                Cálculo: Tiempo Ralentí × Tasa de consumo estimado (Gal/h). Combustible quemado de forma improductiva.
+                Combustible quemado con el motor encendido y el vehículo detenido. Lo mide el
+                equipo de cada vehículo; no es un estimado. La comparación va por vehículo y
+                por día para que no dependa del tamaño de la flota.
               </div>
             </div>
 
@@ -1898,21 +1942,25 @@ export const RalentiReports: React.FC = () => {
                 </div>
                 <div className="flex items-center gap-1.5 text-[11px]">
                   {stats.deltaCostoDiario > 0 ? (
-                    <span className="text-red-500 font-bold">+$ {stats.deltaCostoDiario.toLocaleString('es-CO', { maximumFractionDigits: 0 })} COP</span>
+                    <span className="text-red-500 font-bold">+$ {stats.deltaCostoDiario.toLocaleString('es-CO', { maximumFractionDigits: 0 })}</span>
                   ) : (
-                    <span className="text-emerald-500 font-bold">-$ {Math.abs(stats.deltaCostoDiario).toLocaleString('es-CO', { maximumFractionDigits: 0 })} COP</span>
+                    <span className="text-emerald-500 font-bold">-$ {Math.abs(stats.deltaCostoDiario).toLocaleString('es-CO', { maximumFractionDigits: 0 })}</span>
                   )}
-                  <span className="text-slate-400 dark:text-slate-500">vs meta ($28k)</span>
+                  <span className="text-slate-400 dark:text-slate-500">
+                    por vehículo y día vs meta (${stats.metaCostoVehiculoDia.toLocaleString('es-CO', { maximumFractionDigits: 0 })})
+                  </span>
                 </div>
                 <div className="h-1.5 w-full bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden">
-                  <div 
-                    className={`h-full rounded-full transition-all duration-500 ${stats.costAvgDaily > 40000 ? 'bg-red-500' : stats.costAvgDaily > 28000 ? 'bg-orange-500' : 'bg-emerald-500'}`}
-                    style={{ width: `${Math.min((stats.costAvgDaily / 28000) * 100, 100)}%` }}
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${stats.costoPorVehiculoDia > stats.metaCostoVehiculoDia * 1.5 ? 'bg-red-500' : stats.costoPorVehiculoDia > stats.metaCostoVehiculoDia ? 'bg-orange-500' : 'bg-emerald-500'}`}
+                    style={{ width: `${Math.min((stats.costoPorVehiculoDia / Math.max(stats.metaCostoVehiculoDia * 1.5, 1)) * 100, 100)}%` }}
                   />
                 </div>
               </div>
               <div className="text-[10px] text-slate-400 dark:text-slate-500 leading-snug border-t border-slate-100 dark:border-slate-800/80 pt-2 font-medium">
-                Cálculo: (Galones por combustible × precio de su tipo) / Días. Diésel $11.200 y gasolina $16.000 COP/Gal. Impacto financiero diario del ralentí.
+                Cada galón se valora al precio de su propio combustible: diésel $11.200 y
+                gasolina $16.000 por galón. La cifra grande es el gasto diario de toda la
+                flota; la comparación con la meta va por vehículo y por día.
               </div>
             </div>
 
