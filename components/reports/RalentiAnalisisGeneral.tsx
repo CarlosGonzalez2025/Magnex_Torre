@@ -118,7 +118,8 @@ interface PeriodoData {
   velocidadMedia: number;        // km/h ponderada = totalKm / horasConduccion
   kmPorHoraRalenti: number;      // eficiencia = totalKm / Ralentí Total
   ralentiHuerfano: number;       // ralentí de filas con encendido=0 (excluido del %, señal de calidad)
-  coberturaMotorPct: number;     // vehiculosConMotor / vehiculosActivos * 100
+  coberturaMotorPct: number;     // vehiculosConMotor / (activos − sin actividad) * 100
+  vehiculosSinActividad: number; // vehículos que no salieron: no son un hueco de datos
   datoInconsistente: boolean;    // bandera de validación cruzada (cobertura/identidad)
   filasRalentiMayorEnc: number;  // filas con ralentí > encendido (violación física)
   pctGalonesRalenti: number | null; // % galones en ralentí vs total (null si no hay total fiable)
@@ -719,6 +720,7 @@ export const RalentiAnalisisGeneral: React.FC<{
         totalKm: m.totalKm, kmPorVehiculoActivo: m.kmPorVehiculoActivo, pctConduccion: m.pctConduccion,
         velocidadMedia: m.velocidadMedia, kmPorHoraRalenti: m.kmPorHoraRalenti,
         ralentiHuerfano: m.ralentiHuerfano, coberturaMotorPct: m.coberturaMotorPct,
+        vehiculosSinActividad: m.vehiculosSinActividad,
         datoInconsistente: m.datoInconsistente, filasRalentiMayorEnc: m.filasRalentiMayorEnc,
         pctGalonesRalenti: null, // total de galones no se persiste hoy (ver ETL) → N/D
         // Una quincena que aún no cierra trae solo los días transcurridos; compararla contra
@@ -1762,7 +1764,7 @@ export const RalentiAnalisisGeneral: React.FC<{
                     </td>
                     <td className="py-3 px-3 text-slate-600 dark:text-slate-400">
                       {p.vehiculosConMotor}
-                      <span className="block text-[9px] text-slate-400 dark:text-slate-500">{p.coberturaMotorPct.toFixed(0)}% de la flota</span>
+                      <span className="block text-[9px] text-slate-400 dark:text-slate-500">{p.coberturaMotorPct.toFixed(0)}% con horas de motor{p.vehiculosSinActividad > 0 ? ` · ${p.vehiculosSinActividad} sin operar` : ''}</span>
                     </td>
                     <td className="py-3 px-3 text-slate-700 dark:text-slate-300">{Math.round(p.totalKm).toLocaleString('es-CO')}</td>
                     <td className="py-3 px-3 text-slate-700 dark:text-slate-300">{p.kmPorVehiculoActivo.toFixed(1)}</td>
@@ -1788,7 +1790,7 @@ export const RalentiAnalisisGeneral: React.FC<{
                       {p.datoInconsistente ? (
                         <span
                           className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400"
-                          title={`Solo el ${p.coberturaMotorPct.toFixed(0)}% de los vehículos reportó horas de motor${p.filasRalentiMayorEnc > 0 ? `, y ${p.filasRalentiMayorEnc} registro(s) marcan más ralentí que motor encendido, lo cual es imposible` : ''}. Las cifras de este período pueden estar incompletas: compárelas con precaución.`}
+                          title={`Solo el ${p.coberturaMotorPct.toFixed(0)}% de los vehículos QUE OPERARON reportó horas de motor (los que no salieron en la quincena no cuentan)${p.filasRalentiMayorEnc > 0 ? `, y ${p.filasRalentiMayorEnc} registro(s) marcan más ralentí que motor encendido, lo cual es imposible` : ''}. Las cifras de este período pueden estar incompletas: compárelas con precaución.`}
                         >
                           <AlertTriangle className="w-3 h-3" /> Revisar
                         </span>

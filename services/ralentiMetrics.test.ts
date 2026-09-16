@@ -97,3 +97,47 @@ test('acepta strings numéricos (defensivo ante datos de Supabase)', () => {
   assert.equal(m.totalHorasEncendido, 100);
   assert.equal(m.totalHorasRalenti, 40);
 });
+
+test('un vehículo que no salió no cuenta contra la cobertura de motor', () => {
+  // Caso real de Q2 de agosto de 2026 en Coltrack, a escala: de 43 filas sin horas de
+  // motor, 38 eran vehículos quietos (todo en cero) y solo 5 tenían ralentí sin motor.
+  // Antes, las 38 hundían la cobertura al 85% y marcaban la quincena como inconsistente.
+  const rows: RalentiPeriodoRow[] = [
+    { vehiculo_id: 'opera', horas_motor_encendido: 100, horas_motor_ralenti: 40, kms_recorridos: 600 },
+    // Vehículo que no salió: todo en cero. No es un hueco de datos.
+    { vehiculo_id: 'quieto1', horas_motor_encendido: 0, horas_motor_ralenti: 0, kms_recorridos: 0 },
+    { vehiculo_id: 'quieto2', horas_motor_encendido: 0, horas_motor_ralenti: 0, kms_recorridos: 0 },
+  ];
+  const m = computeMotorMetrics(rows);
+  assert.equal(m.vehiculosActivos, 3);       // el censo del período no cambia
+  assert.equal(m.vehiculosSinActividad, 2);
+  assert.equal(m.coberturaMotorPct, 100);    // 1 de 1 que sí operó
+  assert.equal(m.datoInconsistente, false);
+});
+
+test('un vehículo con ralentí pero sin horas de motor SÍ rompe la cobertura', () => {
+  // La contrapartida: esto sí es un dato que falta, y la bandera tiene que encenderse.
+  const rows: RalentiPeriodoRow[] = [
+    { vehiculo_id: 'opera', horas_motor_encendido: 100, horas_motor_ralenti: 40, kms_recorridos: 600 },
+    { vehiculo_id: 'quieto', horas_motor_encendido: 0, horas_motor_ralenti: 0, kms_recorridos: 0 },
+    { vehiculo_id: 'roto', horas_motor_encendido: 0, horas_motor_ralenti: 3.81, ralentis_excesivos: 30 },
+  ];
+  const m = computeMotorMetrics(rows);
+  assert.equal(m.vehiculosSinActividad, 1);  // solo el quieto
+  assert.equal(m.coberturaMotorPct, 50);     // 1 con motor de 2 que operaron
+  assert.equal(m.datoInconsistente, true);
+  assert.equal(m.ralentiHuerfano, 3.81);     // sus horas siguen reportándose aparte
+});
+
+test('un vehículo con eventos o galones pero todo lo demás en cero NO es "sin actividad"', () => {
+  // Que solo llegara el semanal de excesos no convierte al vehículo en quieto.
+  const rows: RalentiPeriodoRow[] = [
+    { vehiculo_id: 'a', horas_motor_encendido: 100, horas_motor_ralenti: 20 },
+    { vehiculo_id: 'soloGalones', horas_motor_encendido: 0, horas_motor_ralenti: 0, consumo_combustible: 0.14 },
+    { vehiculo_id: 'soloEventos', horas_motor_encendido: 0, horas_motor_ralenti: 0, ralentis_excesivos: 4 },
+  ];
+  const m = computeMotorMetrics(rows);
+  assert.equal(m.vehiculosSinActividad, 0);
+  assert.ok(m.coberturaMotorPct < 40); // 1 de 3 operaron con motor conocido
+  assert.equal(m.datoInconsistente, true);
+});
