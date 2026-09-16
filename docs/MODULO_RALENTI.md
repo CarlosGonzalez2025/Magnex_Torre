@@ -1,6 +1,10 @@
 # Módulo de Informe de Ralentí — documentación completa
 
-> Estado: 16 de septiembre de 2026. Refleja el código en `main` a esa fecha.
+> Estado: 16 de septiembre de 2026. Refleja el código en `main` a esa fecha, **salvo los
+> galones de ralentí de Geotab (§6.3, decisión 2), que están en el PR #144 y todavía no se
+> han mergeado ni migrado.** Mientras tanto, `consumo_combustible` sigue en 0 para los
+> vehículos cubiertos solo por Geotab.
+>
 > Cuando este documento y el código difieran, manda el código: los archivos y líneas
 > citados son la fuente de verdad.
 
