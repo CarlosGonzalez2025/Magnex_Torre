@@ -3012,6 +3012,17 @@ export interface RalentiPDFData {
   eventosMas30Min: number;
   riskLevel: 'Bajo' | 'Medio' | 'Alto';
   fapRisk: string;
+  // Metas vigentes y métricas normalizadas por vehículo y día. Antes el PDF las tenía
+  // escritas a mano (10 % / 37 gal / $28.000) y eran valores de UN vehículo comparados
+  // contra el TOTAL de la flota: llegaba a imprimir "3.228 gal sobre meta". Opcionales
+  // para no romper a quien todavía construya el objeto sin ellas; si faltan, la línea
+  // de comparación no se dibuja en vez de mostrar una cifra sin sentido.
+  metaPctRalenti?: number;
+  metaGalonesVehiculoDia?: number;
+  metaCostoVehiculoDia?: number;
+  galonesPorVehiculoDia?: number;
+  costoPorVehiculoDia?: number;
+  metasProvisionales?: boolean;
   topByTime: Array<{ name: string; totalTime: number; count: number; maxEvent: number }>;
   topByMax: Array<{ name: string; totalTime: number; count: number; maxEvent: number }>;
   providerCO2: Array<{ name: string; co2Tons: number }>;
@@ -3769,15 +3780,38 @@ function OperationalSummaryTable({ data }: { data: RalentiPDFData }) {
     riskLevel = 'Bajo',
   } = data;
 
-  const deltaPct = pctRalenti - 10;
-  const deltaGalones = totalGalonesConsumidos - 37;
-  const deltaCostoDiario = costAvgDaily - 28000;
+  // Metas vigentes. Vienen de `config_metas_ralenti` a través del informe, normalizadas
+  // por vehículo y día. Las que estaban escritas aquí —10 % / 37 gal / $28.000— eran de
+  // UN vehículo y se comparaban contra el TOTAL de la flota, así que esta misma tabla
+  // llegó a imprimir "3.228 gal sobre meta" y "+$2.400.000 sobre meta".
+  const metaPct = data.metaPctRalenti;
+  const metaGal = data.metaGalonesVehiculoDia;
+  const metaCosto = data.metaCostoVehiculoDia;
+  const galVehDia = data.galonesPorVehiculoDia;
+  const costoVehDia = data.costoPorVehiculoDia;
+
+  const deltaPct = metaPct !== undefined ? pctRalenti - metaPct : null;
+  const deltaGalones = metaGal !== undefined && galVehDia !== undefined ? galVehDia - metaGal : null;
+  const deltaCostoDiario = metaCosto !== undefined && costoVehDia !== undefined ? costoVehDia - metaCosto : null;
+
+  /** Celda de desviación: sin meta declarada no se inventa una comparación. */
+  const celdaDesv = (delta: number | null, fmt: (v: number) => string) =>
+    delta === null
+      ? <Text style={[base.tableCell, { flex: 2.5, textAlign: 'right', paddingRight: 8, fontSize: 6.8, color: COLORS.gris }]}>meta sin definir</Text>
+      : <Text style={[base.tableCell, { flex: 2.5, textAlign: 'right', paddingRight: 8, fontSize: 6.8, fontWeight: 700, color: delta > 0 ? COLORS.rojo : COLORS.verde }]}>
+          {delta > 0 ? `${fmt(delta)} sobre meta` : `${fmt(Math.abs(delta))} bajo meta`}
+        </Text>;
 
   return (
     <View style={{ marginBottom: 5 }} wrap={false}>
       <View style={{ backgroundColor: COLORS.azul, padding: '4 8', marginBottom: 4 }}>
         <Text style={{ fontSize: 7.5, fontWeight: 700, color: COLORS.blanco }}>1. RESUMEN DE DESVIACIONES</Text>
       </View>
+      {data.metasProvisionales && (
+        <Text style={{ fontSize: 6.2, color: COLORS.gris, marginBottom: 3 }}>
+          Las metas mostradas son la línea base medida de la operación, todavía no una meta acordada.
+        </Text>
+      )}
       <View style={{ border: '0.5px solid #cbd5e1', borderRadius: 4, overflow: 'hidden' }}>
         {/* Header */}
         <View style={[base.tableRow, { backgroundColor: COLORS.azul, borderBottomWidth: 0.5, borderBottomColor: '#cbd5e1', paddingVertical: 3.5 }]}>
@@ -3791,30 +3825,28 @@ function OperationalSummaryTable({ data }: { data: RalentiPDFData }) {
         <View style={[base.tableRow, { paddingVertical: 3.5 }]}>
           <Text style={[base.tableCell, { flex: 2, textAlign: 'left', paddingLeft: 8, fontSize: 6.8, fontWeight: 700 }]}>% Tiempo en ralentí (sobre motor encendido)</Text>
           <Text style={[base.tableCell, { flex: 1.2, fontSize: 6.8, fontWeight: 700 }]}>{pctRalenti.toFixed(1)}%</Text>
-          <Text style={[base.tableCell, { flex: 1, fontSize: 6.8 }]}>&lt; 10%</Text>
-          <Text style={[base.tableCell, { flex: 2.5, textAlign: 'right', paddingRight: 8, fontSize: 6.8, fontWeight: 700, color: deltaPct > 0 ? COLORS.rojo : COLORS.verde }]}>
-            {deltaPct > 0 ? `+${deltaPct.toFixed(1)}% sobre meta` : `${deltaPct.toFixed(1)}% bajo meta`}
-          </Text>
+          <Text style={[base.tableCell, { flex: 1, fontSize: 6.8 }]}>{metaPct !== undefined ? `≤ ${metaPct.toFixed(1)}%` : '—'}</Text>
+          {celdaDesv(deltaPct, v => `${v.toFixed(1)}%`)}
         </View>
 
         {/* Row 2 */}
         <View style={[base.tableRow, base.tableRowAlt, { paddingVertical: 3.5 }]}>
-          <Text style={[base.tableCell, { flex: 2, textAlign: 'left', paddingLeft: 8, fontSize: 6.8, fontWeight: 700 }]}>Galones consumidos en ralentí</Text>
-          <Text style={[base.tableCell, { flex: 1.2, fontSize: 6.8, fontWeight: 700 }]}>{totalGalonesConsumidos.toFixed(1)} gal</Text>
-          <Text style={[base.tableCell, { flex: 1, fontSize: 6.8 }]}>&lt; 37 gal</Text>
-          <Text style={[base.tableCell, { flex: 2.5, textAlign: 'right', paddingRight: 8, fontSize: 6.8, fontWeight: 700, color: deltaGalones > 0 ? COLORS.rojo : COLORS.verde }]}>
-            {deltaGalones > 0 ? `${deltaGalones.toFixed(1)} gal sobre meta` : `${Math.abs(deltaGalones).toFixed(1)} gal bajo meta`}
+          <Text style={[base.tableCell, { flex: 2, textAlign: 'left', paddingLeft: 8, fontSize: 6.8, fontWeight: 700 }]}>Galones en ralentí por vehículo y día</Text>
+          <Text style={[base.tableCell, { flex: 1.2, fontSize: 6.8, fontWeight: 700 }]}>
+            {galVehDia !== undefined ? `${galVehDia.toFixed(3)} gal` : `${totalGalonesConsumidos.toFixed(1)} gal`}
           </Text>
+          <Text style={[base.tableCell, { flex: 1, fontSize: 6.8 }]}>{metaGal !== undefined ? `≤ ${metaGal.toFixed(3)}` : '—'}</Text>
+          {celdaDesv(deltaGalones, v => `${v.toFixed(3)} gal`)}
         </View>
 
         {/* Row 3 */}
         <View style={[base.tableRow, { paddingVertical: 3.5 }]}>
-          <Text style={[base.tableCell, { flex: 2, textAlign: 'left', paddingLeft: 8, fontSize: 6.8, fontWeight: 700 }]}>Impacto económico estimado</Text>
-          <Text style={[base.tableCell, { flex: 1.2, fontSize: 6.8, fontWeight: 700 }]}>${costAvgDaily.toLocaleString('es-CO', { maximumFractionDigits: 0 })}/día</Text>
-          <Text style={[base.tableCell, { flex: 1, fontSize: 6.8 }]}>&lt; $28,000</Text>
-          <Text style={[base.tableCell, { flex: 2.5, textAlign: 'right', paddingRight: 8, fontSize: 6.8, fontWeight: 700, color: deltaCostoDiario > 0 ? COLORS.rojo : COLORS.verde }]}>
-            {deltaCostoDiario > 0 ? `$ ${deltaCostoDiario.toLocaleString('es-CO', { maximumFractionDigits: 0 })} sobre meta` : `$ ${Math.abs(deltaCostoDiario).toLocaleString('es-CO', { maximumFractionDigits: 0 })} bajo meta`}
+          <Text style={[base.tableCell, { flex: 2, textAlign: 'left', paddingLeft: 8, fontSize: 6.8, fontWeight: 700 }]}>Costo del ralentí por vehículo y día</Text>
+          <Text style={[base.tableCell, { flex: 1.2, fontSize: 6.8, fontWeight: 700 }]}>
+            ${(costoVehDia ?? costAvgDaily).toLocaleString('es-CO', { maximumFractionDigits: 0 })}
           </Text>
+          <Text style={[base.tableCell, { flex: 1, fontSize: 6.8 }]}>{metaCosto !== undefined ? `≤ $${metaCosto.toLocaleString('es-CO', { maximumFractionDigits: 0 })}` : '—'}</Text>
+          {celdaDesv(deltaCostoDiario, v => `$ ${v.toLocaleString('es-CO', { maximumFractionDigits: 0 })}`)}
         </View>
 
         {/* Row 4 */}
@@ -4047,9 +4079,15 @@ export function InformeRalentiPDF({ data }: { data: RalentiPDFData }) {
   const end = new Date(periodoFin);
   const daysInPeriod = Math.round((end.getTime() - start.getTime()) / (1000 * 3600 * 24)) + 1;
 
-  const deltaPct = pctRalenti - 10;
-  const deltaGalones = totalGalonesConsumidos - 37;
-  const deltaCosto = costAvgDaily - 28000;
+  // Solo deciden el color de dos tarjetas de la portada. Se comparan contra las metas
+  // vigentes por vehículo y día; sin meta declarada no se colorea nada, en vez de teñir
+  // de rojo por comparar contra un número que no significa lo mismo.
+  const metaGalPdf = data.metaGalonesVehiculoDia;
+  const metaCostoPdf = data.metaCostoVehiculoDia;
+  const deltaGalones = metaGalPdf !== undefined && data.galonesPorVehiculoDia !== undefined
+    ? data.galonesPorVehiculoDia - metaGalPdf : 0;
+  const deltaCosto = metaCostoPdf !== undefined && data.costoPorVehiculoDia !== undefined
+    ? data.costoPorVehiculoDia - metaCostoPdf : 0;
 
   return (
     <Document title={`Informe de Ralentí — ${periodoLabel}`}>
