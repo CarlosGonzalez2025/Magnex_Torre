@@ -2789,6 +2789,9 @@ export async function importarDatosPlanosFagor(
   // Se usa SOLO para complementar vehículos NO encontrados en el archivo principal — nunca se suman.
   let fileKmVehRespaldo: File | null = null;
   const filesRalenti: File[] = [];
+  // Fila de cabecera detectada en cada informe de ralentí: el export de Fagor la trae
+  // desplazada y hay que pasársela al parser más abajo.
+  const cabeceraRalentiPorArchivo = new Map<File, number>();
   const filesExcesos: File[] = [];
   const filesFrenadas: File[] = [];
   const filesAceleraciones: File[] = [];
@@ -2818,10 +2821,27 @@ export async function importarDatosPlanosFagor(
       }
     }
 
+    // La cabecera del «Informe de ralentí» NO está en la fila 0: el export de Fagor
+    // antepone dos filas de preámbulo (usuario + rango de fechas, y el título). Mirar
+    // solo `rawRows[0]` hacía que el archivo no se reconociera y la carga muriera con
+    // "No se detectó ningún archivo válido para procesar en Fagor" — con el resultado
+    // de que los eventos de ralentí no entraban nunca, mientras la grilla de telemetría
+    // (que sí escanea las primeras filas, más abajo) se cargaba sin problema. Se escanea
+    // igual que aquella. No hay ambigüedad: la grilla no trae la columna `T. Ralentí`.
+    let idxCabeceraRalenti = -1;
+    for (let i = 0; i < Math.min(rawRows.length, 15); i++) {
+      const rowStr = (rawRows[i] || []).map(c => String(c ?? '').trim());
+      if (rowStr.includes('Matrícula') && rowStr.includes('T. Ralentí')) {
+        idxCabeceraRalenti = i;
+        break;
+      }
+    }
+
     if (rawRows.length > 0 && rawRows[0].includes('Código iButton') && rawRows[0].includes('DNI')) {
       fileConductores = file;
-    } else if (rawRows.length > 0 && rawRows[0].includes('Matrícula') && rawRows[0].includes('T. Ralentí')) {
+    } else if (idxCabeceraRalenti >= 0) {
       filesRalenti.push(file);
+      cabeceraRalentiPorArchivo.set(file, idxCabeceraRalenti);
     } else {
       // Detección dinámica de tipo de archivo detallado de alarmas (Excesos, Frenadas, Aceleraciones)
       let esExcesos = false;
@@ -3250,7 +3270,12 @@ export async function importarDatosPlanosFagor(
       const arrayBuffer = await file.arrayBuffer();
       const wbRal = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
       const sheetRal = wbRal.Sheets[wbRal.SheetNames[0]];
-      const rowsRal = XLSX.utils.sheet_to_json(sheetRal) as any[];
+      // `range` arranca la lectura en la fila de cabecera detectada al clasificar. Sin
+      // esto, sheet_to_json tomaría el preámbulo como nombres de columna y `Matrícula`
+      // llegaría vacío en todas las filas.
+      const rowsRal = XLSX.utils.sheet_to_json(sheetRal, {
+        range: cabeceraRalentiPorArchivo.get(file) ?? 0,
+      }) as any[];
       
       for (const row of rowsRal) {
         const placaOrig = String(row['Matrícula'] ?? '').trim();
