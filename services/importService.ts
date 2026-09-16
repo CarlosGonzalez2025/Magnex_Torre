@@ -3265,6 +3265,37 @@ export async function importarDatosPlanosFagor(
     interface RalentiStats { count: number; horas: number; combustible: number; placaOriginal: string; }
     const ralentiStatsMap = new Map<string, RalentiStats>();
     const detailedEventsFagor: any[] = [];
+
+    // Fila de Fagor ya existente por vehículo para este período, cargada una sola vez y
+    // compartida por los dos caminos de escritura de `ralentis_periodos`.
+    //
+    // Los insumos de Fagor se suben por separado y cada uno aporta campos distintos: la
+    // GRILLA trae motor / ralentí total / km / galones, y el INFORME DE RALENTÍ trae el
+    // conteo de excesivos y el detalle por evento. Sin leer lo que ya hay, la segunda
+    // carga ponía a cero lo que había aportado la primera. Subir el informe de ralentí
+    // sin la grilla dejaba `horas_motor_encendido` en 0 y, como esas horas son el
+    // denominador del % de ralentí, el vehículo entero se caía del cálculo.
+    //
+    // Solo se hereda de una fila que YA sea de Fagor: tomar valores de una fila de Geotab
+    // o Coltrack y publicarlos bajo `fuente='FAGOR'` mezclaría plataformas en una misma
+    // fila, que es justo lo que la clave única quiere evitar.
+    let cacheFilasFagor: Map<string, any> | null = null;
+    const filasFagorExistentes = async (): Promise<Map<string, any>> => {
+      if (cacheFilasFagor) return cacheFilasFagor;
+      const filas = await fetchAllRows(
+        supabase
+          .from('ralentis_periodos')
+          .select('vehiculo_id, fuente, horas_motor_encendido, horas_motor_ralenti, kms_recorridos, consumo_combustible, ralentis_excesivos, encendidos_apagados')
+          .eq('periodo_inicio', periodoInicio)
+          .eq('periodo_fin', periodoFin)
+      );
+      cacheFilasFagor = new Map<string, any>(
+        (filas ?? [])
+          .filter((r: any) => String(r.fuente ?? '') === 'FAGOR')
+          .map((r: any) => [String(r.vehiculo_id), r])
+      );
+      return cacheFilasFagor;
+    };
     
     for (const file of filesRalenti) {
       const arrayBuffer = await file.arrayBuffer();
@@ -3563,6 +3594,9 @@ export async function importarDatosPlanosFagor(
       // (aportan el conteo de excesivos). Un vehículo que solo aparece en la grilla también entra:
       // suma al denominador y mejora la cobertura de motor del período.
       const placasUnion = new Set<string>([...gridVehMap.keys(), ...ralentiStatsMap.keys()]);
+
+      const exFagorMap = await filasFagorExistentes();
+
       const ralentisDirectos: any[] = [];
       for (const placa of placasUnion) {
         const grid = gridVehMap.get(placa);
@@ -3570,18 +3604,25 @@ export async function importarDatosPlanosFagor(
         const placaOriginal = grid?.placaOriginal ?? stats?.placaOriginal ?? placa;
         const foundVeh = await asegurarVehiculoEnMaestro(placaOriginal, vehicPorPlaca, normPlate);
         if (!foundVeh) continue;
+        const ex = exFagorMap.get(String(foundVeh.id));
+        const exNum = (campo: string) => Number(ex?.[campo] ?? 0);
         ralentisDirectos.push({
           vehiculo_id:           foundVeh.id,
           periodo_inicio:        periodoInicio,
           periodo_fin:           periodoFin,
-          ralentis_excesivos:    stats?.count ?? 0,
-          horas_motor_encendido: grid?.horasMotor ?? 0,
+          ralentis_excesivos:    stats ? stats.count : exNum('ralentis_excesivos'),
+          horas_motor_encendido: grid ? grid.horasMotor : exNum('horas_motor_encendido'),
           // Criterio acordado: con grilla presente, el ralentí y los galones salen de ella
-          // (ralentí TOTAL, comparable con Coltrack). Sin grilla se cae al agregado de alarmas.
-          horas_motor_ralenti:   grid ? grid.horasRalenti : (stats?.horas ?? 0),
-          kms_recorridos:        grid?.km ?? 0,
-          consumo_combustible:   grid ? grid.galones : (stats?.combustible ?? 0),
-          encendidos_apagados:   0,
+          // (ralentí TOTAL, comparable con Coltrack). Sin grilla se conserva lo que ya
+          // había —que casi siempre viene de una grilla anterior— y solo si no hay nada
+          // se cae al agregado de alarmas, que mide únicamente el ralentí EXCESIVO y por
+          // tanto subestima el total.
+          horas_motor_ralenti:   grid ? grid.horasRalenti
+                                      : (exNum('horas_motor_ralenti') > 0 ? exNum('horas_motor_ralenti') : (stats?.horas ?? 0)),
+          kms_recorridos:        grid ? grid.km : exNum('kms_recorridos'),
+          consumo_combustible:   grid ? grid.galones
+                                      : (exNum('consumo_combustible') > 0 ? exNum('consumo_combustible') : (stats?.combustible ?? 0)),
+          encendidos_apagados:   exNum('encendidos_apagados'), // Fagor no lo exporta: nunca lo pisa
           fuente:                'FAGOR',
         });
       }
@@ -3616,20 +3657,25 @@ export async function importarDatosPlanosFagor(
       // Vehículos que solo aparecen en la grilla de telemetría y no en el consolidado por
       // vehículo: sin esto quedarían sin horas de motor y su ralentí se descartaría del % .
       const cubiertos = new Set(consolizadosFinal.map((r: any) => String(r.vehiculo_id)));
+      const exFagorComplemento = await filasFagorExistentes();
       const complemento: any[] = [];
       for (const [placa, grid] of gridVehMap.entries()) {
         const foundVeh = await asegurarVehiculoEnMaestro(grid.placaOriginal, vehicPorPlaca, normPlate);
         if (!foundVeh || cubiertos.has(String(foundVeh.id))) continue;
+        const ex = exFagorComplemento.get(String(foundVeh.id));
+        const stats = ralentiStatsMap.get(placa);
         complemento.push({
           vehiculo_id:           foundVeh.id,
           periodo_inicio:        periodoInicio,
           periodo_fin:           periodoFin,
-          ralentis_excesivos:    ralentiStatsMap.get(placa)?.count ?? 0,
+          // Mismo cuidado que arriba, en el otro sentido: una carga de SOLO grilla no
+          // debe borrar el conteo de excesivos que dejó el informe de ralentí.
+          ralentis_excesivos:    stats ? stats.count : Number(ex?.ralentis_excesivos ?? 0),
           horas_motor_encendido: grid.horasMotor,
           horas_motor_ralenti:   grid.horasRalenti,
           kms_recorridos:        grid.km,
           consumo_combustible:   grid.galones,
-          encendidos_apagados:   0,
+          encendidos_apagados:   Number(ex?.encendidos_apagados ?? 0),
           fuente:                'FAGOR',
         });
       }
