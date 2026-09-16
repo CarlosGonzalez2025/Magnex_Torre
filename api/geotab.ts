@@ -496,6 +496,81 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
 
         // Cobertura: cuántos dispositivos publican realmente cada diagnóstico.
+        // Modo exploración: en vez de adivinar qué diagnóstico mirar, se pregunta a unos
+        // pocos vehículos QUÉ publican realmente. Es la única forma concluyente: la base
+        // declara miles de diagnósticos (el catálogo entero de Geotab, no lo que esta
+        // flota reporta), así que probar tres elegidos por nombre no demuestra nada.
+        if (req.body?.explorar) {
+          const cuantos = Math.min(Math.max(Number(req.body?.dispositivos) || 5, 1), 20);
+          const nombrePorDiag: Record<string, string> = {};
+          for (const d of diags as any[]) nombrePorDiag[d.id] = d.name;
+
+          const muestra = (devices as any[]).slice(0, cuantos);
+          const porDiagnostico = new Map<string, { nombre: string; lecturas: number; dispositivos: Set<string> }>();
+          const revisados: any[] = [];
+
+          for (const dev of muestra) {
+            let filas: any[] = [];
+            try {
+              filas = await call('Get', {
+                typeName: 'StatusData',
+                search: { deviceSearch: { id: dev.id }, fromDate, toDate },
+                resultsLimit: 5000,
+              });
+            } catch (err: any) {
+              revisados.push({ deviceId: dev.id, plate: dev.licensePlate || dev.name, error: err.message });
+              continue;
+            }
+            for (const f of filas) {
+              const id = f.diagnostic?.id;
+              if (!id) continue;
+              const e = porDiagnostico.get(id) ?? {
+                nombre: nombrePorDiag[id] ?? id,
+                lecturas: 0,
+                dispositivos: new Set<string>(),
+              };
+              e.lecturas++;
+              e.dispositivos.add(dev.id);
+              porDiagnostico.set(id, e);
+            }
+            revisados.push({
+              deviceId: dev.id,
+              plate: dev.licensePlate || dev.name,
+              lecturas: filas.length,
+              diagnosticosDistintos: new Set(filas.map((f) => f.diagnostic?.id).filter(Boolean)).size,
+            });
+          }
+
+          const publicados = [...porDiagnostico.entries()]
+            .map(([id, e]) => ({
+              id,
+              nombre: e.nombre,
+              lecturas: e.lecturas,
+              dispositivos: e.dispositivos.size,
+              esDeCombustible: /fuel|combustib/i.test(e.nombre),
+            }))
+            .sort((a, b) => b.lecturas - a.lecturas);
+          const deCombustible = publicados.filter((p) => p.esDeCombustible);
+
+          return res.status(200).json({
+            success: true,
+            source: 'geotab',
+            data: {
+              modo: 'explorar',
+              ventana: { fromDate, toDate },
+              dispositivosRevisados: revisados,
+              diagnosticosPublicados: publicados.slice(0, 60),
+              deCombustible,
+              veredicto:
+                deCombustible.length > 0
+                  ? `Las ECU sí publican ${deCombustible.length} diagnóstico(s) de combustible en la muestra. Revisar si alguno es acumulativo para poder restar inicio y fin de cada ralentí.`
+                  : publicados.length === 0
+                    ? 'Los vehículos de la muestra no publican NINGÚN dato de ECU en la ventana: los equipos no están leyendo el motor (o no hay actividad). Sin datos de motor no hay combustible que derivar.'
+                    : `Las ECU publican ${publicados.length} diagnósticos distintos, pero NINGUNO de combustible. Geotab no puede aportar galones de ralentí en esta flota.`,
+            },
+          });
+        }
+
         const candidatos = (fuel.some((f) => f.acumulativo) ? fuel.filter((f) => f.acumulativo) : fuel).slice(0, 3);
         const cobertura: any[] = [];
         for (const d of candidatos) {
