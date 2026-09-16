@@ -16,6 +16,7 @@ export interface RalentiPeriodoRow {
   horas_motor_ralenti?: number | string | null;
   kms_recorridos?: number | string | null;
   consumo_combustible?: number | string | null;
+  ralentis_excesivos?: number | string | null;
 }
 
 export interface MotorMetrics {
@@ -32,7 +33,8 @@ export interface MotorMetrics {
   kmPorVehiculoActivo: number;    // km / vehículos con motor
   vehiculosActivos: number;       // vehículos únicos en el período
   vehiculosConMotor: number;      // vehículos con encendido>0
-  coberturaMotorPct: number;      // conMotor / activos * 100
+  vehiculosSinActividad: number;  // filas con TODO en cero: el vehículo no salió
+  coberturaMotorPct: number;      // conMotor / (activos − sinActividad) * 100
   filasRalentiMayorEnc: number;   // filas con ralentí > encendido*1.02 (violación física)
   datoInconsistente: boolean;     // cobertura<98% o hay violaciones físicas
 }
@@ -54,16 +56,34 @@ export function computeMotorMetrics(pRows: RalentiPeriodoRow[]): MotorMetrics {
     (a, r) => a + (N(r.horas_motor_encendido) === 0 ? N(r.horas_motor_ralenti) : 0), 0);
   const totalKm = motorRows.reduce((a, r) => a + N(r.kms_recorridos), 0);
 
+  // Un vehículo con TODO en cero no es un hueco de datos: es un vehículo que no salió en
+  // la quincena. Antes contaba contra la cobertura igual que uno con ralentí pero sin
+  // horas de motor, y eso encendía la bandera de inconsistencia por la razón equivocada:
+  // en Q2 de agosto de 2026, Coltrack tenía 43 filas sin horas de motor y 38 de ellas eran
+  // vehículos quietos; la cobertura caía al 85% y la quincena quedaba marcada como
+  // sospechosa cuando el dato real solo fallaba en 5 vehículos (7 h de 5.311, un 0,13%).
+  // Una bandera que se enciende siempre deja de mirarse.
+  const sinActividad = (r: RalentiPeriodoRow): boolean =>
+    N(r.horas_motor_encendido) <= 0 &&
+    N(r.horas_motor_ralenti) <= 0 &&
+    N(r.kms_recorridos) <= 0 &&
+    N(r.consumo_combustible) <= 0 &&
+    N(r.ralentis_excesivos) <= 0;
+
   const vehSet = new Set<string>();
   const vehMotorSet = new Set<string>();
+  const vehSinActividadSet = new Set<string>();
   let filasRalentiMayorEnc = 0;
   for (const r of pRows) {
     vehSet.add(String(r.vehiculo_id));
     const enc = N(r.horas_motor_encendido);
     const ral = N(r.horas_motor_ralenti);
     if (enc > 0) vehMotorSet.add(String(r.vehiculo_id));
+    else if (sinActividad(r)) vehSinActividadSet.add(String(r.vehiculo_id));
     if (enc > 0 && ral > enc * 1.02) filasRalentiMayorEnc += 1;
   }
+  // Un vehículo que aparece varias veces y al menos una con motor cuenta como operativo.
+  for (const v of vehMotorSet) vehSinActividadSet.delete(v);
 
   const horasConduccion = Math.max(totalHorasEncendido - totalHorasRalenti, 0);
   const pctRalenti = totalHorasEncendido > 0 ? (totalHorasRalenti / totalHorasEncendido) * 100 : 0;
@@ -71,13 +91,17 @@ export function computeMotorMetrics(pRows: RalentiPeriodoRow[]): MotorMetrics {
   const velocidadMedia = horasConduccion > 0 ? totalKm / horasConduccion : 0;
   const kmPorHoraRalenti = totalHorasRalenti > 0 ? totalKm / totalHorasRalenti : 0;
   const kmPorVehiculoActivo = vehMotorSet.size > 0 ? totalKm / vehMotorSet.size : 0;
-  const coberturaMotorPct = vehSet.size > 0 ? (vehMotorSet.size / vehSet.size) * 100 : 0;
+  // La cobertura mide, de los vehículos que SÍ operaron, cuántos tienen horas de motor.
+  // Los que no salieron quedan fuera del denominador: no son un dato que falte.
+  const universoOperativo = vehSet.size - vehSinActividadSet.size;
+  const coberturaMotorPct = universoOperativo > 0 ? (vehMotorSet.size / universoOperativo) * 100 : 100;
   const datoInconsistente = coberturaMotorPct < COBERTURA_MIN_PCT || filasRalentiMayorEnc > 0;
 
   return {
     totalHorasEncendido, totalHorasRalenti, ralentiHuerfano, totalKm, totalGalones,
     horasConduccion, pctRalenti, pctConduccion, velocidadMedia, kmPorHoraRalenti,
     kmPorVehiculoActivo, vehiculosActivos: vehSet.size, vehiculosConMotor: vehMotorSet.size,
+    vehiculosSinActividad: vehSinActividadSet.size,
     coberturaMotorPct, filasRalentiMayorEnc, datoInconsistente,
   };
 }
