@@ -437,6 +437,7 @@ export const RalentiReports: React.FC = () => {
     galonesPorCombustible: Record<string, number>;
     galonesSinTipo: number;
     vehiculosSinTipo: number;
+    vehiculosSinMedicion: number;
     totalVehiculosEvaluados: number;
   }>({
     totalHorasMotorEncendido: 0,
@@ -446,6 +447,7 @@ export const RalentiReports: React.FC = () => {
     galonesPorCombustible: {},
     galonesSinTipo: 0,
     vehiculosSinTipo: 0,
+    vehiculosSinMedicion: 0,
     totalVehiculosEvaluados: 0,
   });
 
@@ -595,6 +597,7 @@ export const RalentiReports: React.FC = () => {
             galonesPorCombustible: {},
             galonesSinTipo: 0,
             vehiculosSinTipo: 0,
+            vehiculosSinMedicion: 0,
             totalVehiculosEvaluados: 0,
           });
           setEvents([]);
@@ -721,10 +724,19 @@ export const RalentiReports: React.FC = () => {
       // Agrupamos por tipo y, en paralelo, contamos los vehículos/galones cuyo tipo de
       // combustible NO está definido o no se reconoce: esos NO entran al cálculo de CO₂
       // (no se promedia), sino que se reportan aparte como "pendiente por definir".
+      // Se separa además el caso "la plataforma no entregó galones" (NULL) del caso
+      // "entregó cero". Sin esa distinción, un vehículo sin sensor de combustible se
+      // suma al informe como si no hubiera consumido nada, y el total se lee como un
+      // dato de flota cuando en realidad cubre solo una parte.
       const galonesPorCombustible: Record<string, number> = {};
       let galonesSinTipo = 0;
       let vehiculosSinTipo = 0;
+      let vehiculosSinMedicion = 0;
       filteredRepVehs.forEach((r: any) => {
+        if (r.consumo_combustible === null || r.consumo_combustible === undefined) {
+          vehiculosSinMedicion += 1;
+          return;
+        }
         const tipo = vehFuelMap.get(String(r.vehiculo_id)) || '';
         const key = (tipo || 'NO REGISTRA').toUpperCase();
         const gal = Number(r.consumo_combustible) || 0;
@@ -752,6 +764,7 @@ export const RalentiReports: React.FC = () => {
         galonesPorCombustible,
         galonesSinTipo,
         vehiculosSinTipo,
+        vehiculosSinMedicion,
         totalVehiculosEvaluados,
       });
 
@@ -1178,6 +1191,13 @@ export const RalentiReports: React.FC = () => {
       galonesClasificados,
       galonesSinTipo,
       vehiculosSinTipo,
+      vehiculosSinMedicion: summaryMetrics.vehiculosSinMedicion ?? 0,
+      // Vehículos del período cuyo combustible SÍ entró al CO₂ y al costo. Es el número
+      // que dice qué parte de la flota respalda realmente la cifra que se muestra.
+      coberturaCombustiblePct: (summaryMetrics.totalVehiculosEvaluados ?? 0) > 0
+        ? ((summaryMetrics.totalVehiculosEvaluados - (summaryMetrics.vehiculosSinMedicion ?? 0) - vehiculosSinTipo)
+            / summaryMetrics.totalVehiculosEvaluados) * 100
+        : 0,
       mayorEventoSegundos,
       mayorEventoConductor,
       mayorEventoPlaca,
@@ -1922,6 +1942,14 @@ export const RalentiReports: React.FC = () => {
                   />
                 </div>
               </div>
+              {(stats.vehiculosSinMedicion > 0 || stats.vehiculosSinTipo > 0) && (
+                <div className="text-[10px] font-semibold text-amber-600 dark:text-amber-400 leading-snug">
+                  Cifra respaldada por el {stats.coberturaCombustiblePct.toFixed(0)}% de los vehículos.
+                  {stats.vehiculosSinMedicion > 0 && ` ${stats.vehiculosSinMedicion} sin medición de combustible.`}
+                  {stats.vehiculosSinTipo > 0 && ` ${stats.vehiculosSinTipo} sin tipo de combustible definido.`}
+                  {' '}No es que no hayan consumido: no se sabe cuánto.
+                </div>
+              )}
               <div className="text-[10px] text-slate-400 dark:text-slate-500 leading-snug border-t border-slate-100 dark:border-slate-800/80 pt-2 font-medium">
                 Combustible quemado con el motor encendido y el vehículo detenido. Lo mide el
                 equipo de cada vehículo; no es un estimado. La comparación va por vehículo y

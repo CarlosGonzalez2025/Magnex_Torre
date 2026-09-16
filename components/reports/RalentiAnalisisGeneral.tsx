@@ -42,15 +42,22 @@ const PRECIOS_GALON: { test: (t: string) => boolean; precio: number }[] = [
   { test: t => t.includes('gasolina') || t.includes('corriente'), precio: 16000 },
   { test: t => t.includes('electric') || t.includes('eléctric'), precio: 0 },
 ];
-const getCO2Factor = (tipo?: string | null): number => {
+// Devuelven null cuando el tipo de combustible no está definido o no se reconoce.
+//
+// Antes caían a diésel (10,15 kg/gal y $11.200/gal) como valor por defecto, mientras que
+// el Informe por Período EXCLUYE esos galones y los reporta como "pendiente por definir".
+// Con 98 vehículos activos sin `tipo_combustible`, las dos pantallas mostraban CO₂ y costo
+// distintos para la misma quincena. Se unifica hacia el criterio del Informe por Período,
+// que es el que respeta el principio del módulo: lo que no está medido no se estima.
+const getCO2Factor = (tipo?: string | null): number | null => {
   const t = (tipo ?? '').toLowerCase().trim();
-  if (!t) return 10.15;
-  return CO2_FACTORES.find(f => f.test(t))?.factor ?? 10.15;
+  if (!t) return null;
+  return CO2_FACTORES.find(f => f.test(t))?.factor ?? null;
 };
-const getPrecioGalon = (tipo?: string | null): number => {
+const getPrecioGalon = (tipo?: string | null): number | null => {
   const t = (tipo ?? '').toLowerCase().trim();
-  if (!t) return 11200;
-  return PRECIOS_GALON.find(f => f.test(t))?.precio ?? 11200;
+  if (!t) return null;
+  return PRECIOS_GALON.find(f => f.test(t))?.precio ?? null;
 };
 
 // Umbral de "ralentí excesivo" (alerta) por proveedor satelital, en segundos — idéntico
@@ -118,6 +125,13 @@ interface PeriodoData {
   // ── Banderas de completitud (ago-2026) ──
   enCurso: boolean;              // la quincena todavía no termina: cifras parciales por definición
   sinCombustible: boolean;       // hay ralentí pero 0 galones → CO₂/costo NO comparables
+  // ── Cobertura del combustible (sep-2026) ──
+  // Tres situaciones que antes se confundían en un mismo cero. Sin separarlas, un total
+  // bajo de galones se lee como "consumió poco" cuando en realidad es "no se midió".
+  vehiculosSinMedicion: number;  // la plataforma no entregó galones (NULL), no es un cero medido
+  vehiculosSinTipo: number;      // hay galones pero el vehículo no tiene combustible definido
+  galonesSinTipo: number;        // esos galones quedan fuera del CO₂ y del costo
+  coberturaCombustiblePct: number; // vehículos con galones medidos / total del período × 100
 }
 
 /** Fecha de hoy en formato YYYY-MM-DD, hora local. */
@@ -617,14 +631,32 @@ export const RalentiAnalisisGeneral: React.FC<{
       // regresión del bug del % Ralentí. Ver docs/DIAGNOSTICO_RALENTI_Q1_JUNIO_2026.md.
       const m = computeMotorMetrics(pRows);
 
-      // CO₂ y costo se derivan de los galones de ralentí de TODAS las filas (incluye combustible
-      // imputado por cargas de excesos), coherente con el comportamiento previo del módulo.
+      // CO₂ y costo se derivan de los galones de ralentí, cada uno con el factor y el precio
+      // de SU combustible. Los galones cuyo tipo no está definido NO se promedian ni se
+      // imputan: quedan fuera y se cuentan aparte, igual que en el Informe por Período.
+      //
+      // Se distinguen además tres cosas que antes se confundían en un mismo cero:
+      //   sinMedicion  — la plataforma no entregó galones para ese vehículo (NULL)
+      //   sinTipo      — hay galones, pero el vehículo no tiene combustible definido
+      //   medido       — galones con factor y precio conocidos
       let co2Kg = 0; let costoCOP = 0;
+      let galonesSinTipo = 0; let vehiculosSinTipo = 0; let vehiculosSinMedicion = 0;
       pRows.forEach(r => {
+        if (r.consumo_combustible === null || r.consumo_combustible === undefined) {
+          vehiculosSinMedicion++;
+          return;
+        }
         const fuel = vehFuelMap.get(String(r.vehiculo_id)) || '';
         const gal = Number(r.consumo_combustible) || 0;
-        co2Kg += gal * getCO2Factor(fuel);
-        costoCOP += gal * getPrecioGalon(fuel);
+        const factor = getCO2Factor(fuel);
+        const precio = getPrecioGalon(fuel);
+        if (factor === null || precio === null) {
+          galonesSinTipo += gal;
+          if (gal > 0) vehiculosSinTipo++;
+          return;
+        }
+        co2Kg += gal * factor;
+        costoCOP += gal * precio;
       });
 
       const ev = eventAgg.get(key) ?? { alertas: 0, segMas5Min: 0, eventosMas30Min: 0 };
@@ -654,6 +686,12 @@ export const RalentiAnalisisGeneral: React.FC<{
         // no reporta combustible de ralentí).
         enCurso: first.periodo_fin >= hoyISO(),
         sinCombustible: m.totalGalones <= 0 && m.totalHorasRalenti > 0,
+        vehiculosSinMedicion,
+        vehiculosSinTipo,
+        galonesSinTipo,
+        coberturaCombustiblePct: pRows.length > 0
+          ? ((pRows.length - vehiculosSinMedicion - vehiculosSinTipo) / pRows.length) * 100
+          : 0,
       });
     });
 
@@ -1130,6 +1168,12 @@ export const RalentiAnalisisGeneral: React.FC<{
                   <div className="text-[10px] text-slate-400 dark:text-slate-500">
                     Toneladas emitidas en {latest.labelCorto}
                   </div>
+                  {latest.coberturaCombustiblePct < 90 && (
+                    <div className="text-[10px] font-semibold text-amber-600 dark:text-amber-400 leading-snug">
+                      Solo {latest.coberturaCombustiblePct.toFixed(0)}% de los vehículos tiene el
+                      combustible medido. La cifra es el CO₂ de esos vehículos, no el de toda la flota.
+                    </div>
+                  )}
                 </>
               )}
               <TrendSparkline values={periodosCerrados.map(p => p.co2Kg)} color="#10b981" />
@@ -1155,6 +1199,19 @@ export const RalentiAnalisisGeneral: React.FC<{
               <div className="text-[11px] text-slate-400 dark:text-slate-500">
                 {latest.totalGalones.toFixed(1)} galones quemados con el vehículo quieto en {latest.label}
               </div>
+              {(latest.vehiculosSinMedicion > 0 || latest.vehiculosSinTipo > 0) && (
+                <div className="text-[10px] font-semibold text-amber-600 dark:text-amber-400 leading-snug">
+                  Quedan fuera de esta cifra{' '}
+                  {latest.vehiculosSinMedicion > 0 && (
+                    <>{latest.vehiculosSinMedicion} vehículos sin medición de combustible</>
+                  )}
+                  {latest.vehiculosSinMedicion > 0 && latest.vehiculosSinTipo > 0 && ' y '}
+                  {latest.vehiculosSinTipo > 0 && (
+                    <>{latest.vehiculosSinTipo} sin tipo de combustible definido</>
+                  )}
+                  . No es que no hayan consumido: no se sabe cuánto.
+                </div>
+              )}
             </>
           )}
           <TrendSparkline values={periodosCerrados.map(p => p.costoCOP)} color="#f59e0b" />
