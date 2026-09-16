@@ -496,6 +496,106 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
 
         // Cobertura: cuántos dispositivos publican realmente cada diagnóstico.
+        // Modo medición: valida el cálculo que haría el sync. La exploración encontró que
+        // las ECU publican «Combustible total utilizado al ralentí (desde la instalación
+        // del dispositivo telemático)», un contador ACUMULATIVO de por vida. Los galones
+        // de ralentí de un período son entonces la RESTA entre la última y la primera
+        // lectura del período, por vehículo — sin estimar nada.
+        //
+        // Se mide sobre toda la flota en una ventana corta y se contrasta contra las horas
+        // de ralentí de los viajes: el cociente debe caer en un rango físicamente creíble
+        // (del orden de 0,3 a 1,5 gal/h). Si no cae ahí, el contador no es lo que parece.
+        if (req.body?.medir) {
+          const diagnosticoId = String(req.body?.diagnosticoId || '').trim();
+          if (!diagnosticoId) {
+            return res.status(400).json({ error: 'medir requiere diagnosticoId' });
+          }
+          const nombrePorDiag: Record<string, string> = {};
+          for (const d of diags as any[]) nombrePorDiag[d.id] = d.name;
+
+          const filas: any[] = await call('Get', {
+            typeName: 'StatusData',
+            search: { diagnosticSearch: { id: diagnosticoId }, fromDate, toDate },
+            resultsLimit: 50000,
+          });
+          const truncado = filas.length >= 50000;
+
+          // Primera y última lectura por dispositivo dentro de la ventana.
+          const porDispositivo = new Map<string, { primera: any; ultima: any; n: number }>();
+          for (const f of filas) {
+            const id = f.device?.id;
+            if (!id || f.data === null || f.data === undefined) continue;
+            const t = new Date(f.dateTime).getTime();
+            const e = porDispositivo.get(id);
+            if (!e) { porDispositivo.set(id, { primera: { t, v: Number(f.data) }, ultima: { t, v: Number(f.data) }, n: 1 }); continue; }
+            if (t < e.primera.t) e.primera = { t, v: Number(f.data) };
+            if (t > e.ultima.t) e.ultima = { t, v: Number(f.data) };
+            e.n++;
+          }
+
+          // Horas de ralentí del mismo rango, para el contraste.
+          const trips = await getFeedAll('Trip', { fromDate, toDate });
+          const desde = colombiaDate(fromDate);
+          const hasta = colombiaDate(toDate);
+          const ralentiPorDispositivo = new Map<string, number>();
+          for (const t of trips) {
+            const id = t.device?.id;
+            if (!id || !t.start) continue;
+            const fecha = colombiaDate(t.start);
+            if (fecha < desde || fecha > hasta) continue;
+            ralentiPorDispositivo.set(id, (ralentiPorDispositivo.get(id) ?? 0) + durationToHours(t.idlingDuration));
+          }
+
+          const deviceMap = await buildDeviceMap();
+          const vehiculos: any[] = [];
+          let totalLitros = 0;
+          let totalHoras = 0;
+          for (const [id, e] of porDispositivo) {
+            if (e.n < 2) continue;
+            const litros = e.ultima.v - e.primera.v;
+            if (litros < 0) continue; // contador reiniciado: no es una resta válida
+            const horas = ralentiPorDispositivo.get(id) ?? 0;
+            totalLitros += litros;
+            totalHoras += horas;
+            vehiculos.push({
+              plate: deviceMap[id]?.plate ?? id,
+              lecturas: e.n,
+              litros: Number(litros.toFixed(2)),
+              galones: Number((litros * 0.264172).toFixed(3)),
+              horasRalenti: Number(horas.toFixed(2)),
+              galonesPorHora: horas > 0 ? Number((litros * 0.264172 / horas).toFixed(2)) : null,
+            });
+          }
+          vehiculos.sort((a, b) => b.galones - a.galones);
+
+          const conRatio = vehiculos.filter((v) => v.galonesPorHora !== null).map((v) => v.galonesPorHora).sort((a, b) => a - b);
+          const mediana = conRatio.length ? conRatio[Math.floor(conRatio.length / 2)] : null;
+          const galonesTotales = totalLitros * 0.264172;
+
+          return res.status(200).json({
+            success: true,
+            source: 'geotab',
+            data: {
+              modo: 'medir',
+              diagnostico: { id: diagnosticoId, nombre: nombrePorDiag[diagnosticoId] ?? diagnosticoId },
+              ventana: { fromDate, toDate },
+              truncado,
+              cobertura: {
+                vehiculosConDosLecturas: vehiculos.length,
+                vehiculosTotales: (devices as any[]).length,
+                lecturas: filas.length,
+              },
+              totales: {
+                galones: Number(galonesTotales.toFixed(1)),
+                horasRalenti: Number(totalHoras.toFixed(1)),
+                galonesPorHora: totalHoras > 0 ? Number((galonesTotales / totalHoras).toFixed(2)) : null,
+                medianaGalonesPorHora: mediana,
+              },
+              muestra: vehiculos.slice(0, 15),
+            },
+          });
+        }
+
         // Modo exploración: en vez de adivinar qué diagnóstico mirar, se pregunta a unos
         // pocos vehículos QUÉ publican realmente. Es la única forma concluyente: la base
         // declara miles de diagnósticos (el catálogo entero de Geotab, no lo que esta
