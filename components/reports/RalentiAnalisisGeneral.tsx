@@ -539,6 +539,43 @@ export const RalentiAnalisisGeneral: React.FC<{
 
   const hasFilter = selClients.length > 0 || selContracts.length > 0 || selTypes.length > 0;
 
+  const [soloPanelConstante, setSoloPanelConstante] = useState(false);
+
+  /**
+   * Vehículos presentes en TODAS las quincenas cerradas.
+   *
+   * El universo cambia de quincena a quincena según qué archivos se cargaron: de los 742
+   * vehículos que aparecen en alguna quincena, solo 189 están en todas (25%). Comparar el
+   * total de una quincena contra otra es, en buena medida, comparar flotas distintas —una
+   * subida agregada puede ser solo que entraron más vehículos—. Restringir la serie a este
+   * panel da una muestra más pequeña, pero es la única comparación en la que un cambio
+   * significa un cambio de CONDUCTA y no de censo.
+   *
+   * Complementa a `descomponerCambio`, que ya separa el efecto flota del efecto intensidad
+   * sobre el agregado; esto ataca lo mismo por el otro lado, fijando la flota.
+   */
+  const panelConstante = useMemo(() => {
+    const quincenaRows = allRows.filter(r => isQuincenaPeriodo(r.periodo_inicio, r.periodo_fin));
+    const base = hasFilter
+      ? quincenaRows.filter(r => filteredVehIds.has(String(r.vehiculo_id)))
+      : quincenaRows;
+    const hoy = hoyISO();
+    const porQuincena = new Map<string, Set<string>>();
+    for (const r of base) {
+      if (r.periodo_fin >= hoy) continue; // una quincena en curso todavía no tiene su censo
+      const k = `${r.periodo_inicio}_${r.periodo_fin}`;
+      if (!porQuincena.has(k)) porQuincena.set(k, new Set());
+      porQuincena.get(k)!.add(String(r.vehiculo_id));
+    }
+    const quincenas = [...porQuincena.keys()];
+    const out = new Set<string>();
+    if (quincenas.length === 0) return out;
+    for (const v of porQuincena.get(quincenas[0])!) {
+      if (quincenas.every(q => porQuincena.get(q)!.has(v))) out.add(v);
+    }
+    return out;
+  }, [allRows, hasFilter, filteredVehIds]);
+
   // Fetch ALL periods AND events — no date filter, completely independent.
   // Los períodos dan las horas de motor/ralentí y galones; los eventos dan el
   // desglose de excesos (tiempo >5 min, eventos >30 min) con la misma definición
@@ -594,9 +631,13 @@ export const RalentiAnalisisGeneral: React.FC<{
     // Solo períodos quincenales reales (misma lógica que el Informe por Período);
     // se descartan rangos de otra procedencia como los mensuales del informe mensual.
     const quincenaRows = allRows.filter(r => isQuincenaPeriodo(r.periodo_inicio, r.periodo_fin));
-    const rows = hasFilter
+    const conFiltro = hasFilter
       ? quincenaRows.filter(r => filteredVehIds.has(String(r.vehiculo_id)))
       : quincenaRows;
+
+    const rows = soloPanelConstante && panelConstante.size > 0
+      ? conFiltro.filter(r => panelConstante.has(String(r.vehiculo_id)))
+      : conFiltro;
 
     const periodMap = new Map<string, typeof rows>();
     rows.forEach(r => {
@@ -707,7 +748,7 @@ export const RalentiAnalisisGeneral: React.FC<{
       });
     }
     return computed;
-  }, [allRows, allEvents, filteredVehIds, hasFilter, vehFuelMap]);
+  }, [allRows, allEvents, filteredVehIds, hasFilter, vehFuelMap, soloPanelConstante, panelConstante]);
 
   // Auto-insights
   const insights = useMemo(() => {
@@ -1059,9 +1100,37 @@ export const RalentiAnalisisGeneral: React.FC<{
             placeholder="Todos los tipos"
           />
         </div>
+
+        {/* Panel constante: fija la flota para que un cambio signifique conducta, no censo */}
+        {panelConstante.size > 0 && (
+          <div className="mt-3 flex items-start gap-2.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 p-3">
+            <input
+              id="panel-constante"
+              type="checkbox"
+              checked={soloPanelConstante}
+              onChange={e => setSoloPanelConstante(e.target.checked)}
+              className="mt-0.5 h-3.5 w-3.5 accent-emerald-600 cursor-pointer"
+            />
+            <label htmlFor="panel-constante" className="text-[11px] leading-snug cursor-pointer">
+              <span className="font-semibold text-slate-700 dark:text-slate-200">
+                Comparar solo los {panelConstante.size} vehículos que están en todos los períodos
+              </span>
+              <span className="block text-slate-500 dark:text-slate-400">
+                No todos los vehículos aparecen en todas las quincenas: depende de qué archivos se
+                cargaron. Al compararlos todos, parte de la variación es que entraron o salieron
+                vehículos, no que se maneje distinto. Con esta opción la flota queda fija y lo que
+                cambia es el comportamiento.
+              </span>
+            </label>
+          </div>
+        )}
+
         {/* Summary of coverage */}
         <div className="mt-3 flex items-center gap-4 text-[11px] text-slate-400 dark:text-slate-500">
           <span><strong className="text-slate-600 dark:text-slate-300">{periods.length}</strong> períodos</span>
+          {soloPanelConstante && (
+            <span className="text-emerald-600 dark:text-emerald-400 font-semibold">Flota fija</span>
+          )}
           <span><strong className="text-slate-600 dark:text-slate-300">{baseline.labelCorto}</strong> → <strong className="text-slate-600 dark:text-slate-300">{latest.labelCorto}</strong></span>
           <span><strong className="text-slate-600 dark:text-slate-300">{latest.vehiculosActivos}</strong> vehículos en período actual</span>
           {hasFilter && (
